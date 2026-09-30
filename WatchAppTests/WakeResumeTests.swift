@@ -2,10 +2,8 @@
 //  WakeResumeTests.swift
 //  WatchAppTests
 //
-//  R40(e), re-ruled 2026-09-18: a relaunch mid-loan is a STOCK relaunch. The controller saves
-//  the pump manager's raw state while it holds the pod and rebuilds from it at launch — the
-//  phone's own PumpManagerState persistence, on the wrist. Only an ACTIVE loan with saved
-//  state resumes; every other relaunch keeps the data-first drain of spec §3.2.
+//  A relaunch mid-loan rebuilds from saved pump state, as the phone does. Only an active loan
+//  with saved state resumes; anything else drains.
 //
 
 import XCTest
@@ -35,9 +33,7 @@ final class WakeResumeTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: WatchLoopManager.integralRCDefaultsKey)
     }
 
-    /// What a grant leaves on disk: its therapy-settings payload — the stock snapshot (whose raw
-    /// form drops the schedules) plus the supplement carrying the basal schedule, the one thing
-    /// a resume cannot dose without.
+    /// The grant's settings payload on disk, including the supplement's basal schedule.
     private func persistGrantedSettings() {
         let basal = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 1.0)])!
         let raw = try! PropertyListSerialization.data(fromPropertyList: LoopSettings().rawValue, format: .binary, options: 0)
@@ -183,9 +179,7 @@ final class WakeResumeTests: XCTestCase {
     }
 
     func testResumeRestoresEverythingALoanHadInstalled() async {
-        // ONE list, so the next field a grant installs cannot be forgotten silently. Found one at
-        // a time on the bench (settings, hand-back capability, last-loop time, then on 2026-09-19
-        // closed-loop mode and the delivery baseline) — each was loan state living in memory.
+        // One list, so a new grant field cannot be left out of the saved state.
         let live = await makeController()
         live.loopManager.setClosedLoopEnabled(true, reason: "test")
         live.loopManager.setIntegralRetrospectiveCorrection(true)
@@ -226,9 +220,7 @@ final class WakeResumeTests: XCTestCase {
     }
 
     func testAPhoneBolusGivenAfterTheCopyIsBooked() {
-        // The forgotten phone: lunch bolus on the phone, out of the door without it, Start on a copy
-        // that predates the bolus. Without this the watch sees rising glucose, no insulin on
-        // board, and doses on top of six units it has never heard of.
+        // A copy older than a phone bolus: the watch books the unexplained insulin.
         XCTAssertEqual(unexplained(podTotal: 16.2, after: 10), 6.0, accuracy: 0.001)
     }
 
@@ -275,9 +267,7 @@ final class WakeResumeTests: XCTestCase {
     // MARK: the rebuild after a relaunch
 
     func testASavedSessionIsLiveFromLaunchNotFromTheEndOfItsRebuild() async {
-        // 2026-09-20: after a power-up the pump manager took forty seconds to rebuild, and until
-        // it finished nothing on the wrist knew a session was live — the stock pages sat behind
-        // "complete onboarding" and the Sport Mode page was blank.
+        // State shows a live session before the slow pump rebuild finishes (field 2026-09-20).
         persistGrantedSettings()
         defaults.set(PodLoanWatchController.Phase.active.rawValue, forKey: PodLoanWatchController.Keys.phase)
         defaults.set(7, forKey: PodLoanWatchController.Keys.epoch)
@@ -352,9 +342,7 @@ final class WakeResumeTests: XCTestCase {
     }
 
     func testAReleasedWatchNeverResumesByTimer() async throws {
-        // 2026-09-19: the watch gave up 2.4 s after its final offer and resumed dosing; the phone
-        // committed 0.6 s later — two controllers for 7.6 minutes. Once the watch has released,
-        // no timer brings it back: it lets go of the pod and keeps offering its records.
+        // Once released, no timer brings the watch back to dosing (field 2026-09-19).
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         c.isPhoneReachable = { true }
         var sent: [[String: Any]] = []

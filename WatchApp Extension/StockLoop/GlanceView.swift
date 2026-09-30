@@ -2,16 +2,8 @@
 //  GlanceView.swift
 //  WatchApp
 //
-//  The Sport Mode glance — the wrist's landing surface during a loan, and the Start control
-//  outside one. One screen: glucose, the loop ring, insulin and carbs on board, the running
-//  temp, and Start / End.
-//
-//  This file DRAWS. Every decision has already been made in GlanceModel and arrives as a
-//  `GlanceUIState`; nothing here reads the loop, the loan or the pod. Three layers, each picked
-//  by `state.phase`: a status line, a centre block, and a bottom block.
-//
-//  It is a page in a TabView with no shell of its own, so its refresh schedule comes from the
-//  view model — see `startRefreshing` — and not from SwiftUI's lifecycle alone.
+//  The Sport Mode glance: glucose, loop ring, IOB/COB, running temp, Start/End. Draws a
+//  `GlanceUIState` from GlanceModel and decides nothing.
 //
 
 import Foundation
@@ -28,9 +20,7 @@ struct GlanceView: View {
     @State private var confirmingClose = false
     @State private var closeProgress: Double = 0
 
-    /// The enclosing `.app`, walked up from this extension's own bundle. The ring artwork lives
-    /// in the parent WatchApp's asset catalog and the extension's `Bundle.main` cannot see it —
-    /// load the images from `.main` and the ring silently renders nothing.
+    /// The parent `.app`; the ring artwork is in its asset catalog, not the extension's.
     static let watchAppBundle: Bundle = {
         var url = Bundle.main.bundleURL
         while url.pathExtension != "app" && url.pathComponents.count > 1 {
@@ -39,10 +29,7 @@ struct GlanceView: View {
         return Bundle(url: url) ?? .main
     }()
 
-    /// Three bands with the centre free to grow: the status line and the rail stay put as the
-    /// middle changes between phases, so the controls do not move under the user's thumb.
-    /// Black, not a system background — this page is read on a watch face at arm's length, and
-    /// on OLED the unlit background is what makes the glucose number carry.
+    /// Status line and rail stay put while the centre changes, so controls do not move.
     var body: some View {
         VStack(spacing: 0) {
             statusLine
@@ -57,9 +44,7 @@ struct GlanceView: View {
         .onAppear { model.startRefreshing() }
         .onDisappear { model.stopRefreshing() }
 
-        // `.receive(on:)` is load-bearing, not style. The phase notification is posted from the
-        // loan controller's own queue, so a bare `.onReceive` mutates SwiftUI state off-main —
-        // one dropped render leaves the page frozen on a tail state until the user swipes.
+        // Posted from the loan queue, so hop to main before touching view state.
         .onReceive(NotificationCenter.default.publisher(for: .podLoanPhaseDidChange)
             .receive(on: DispatchQueue.main)) { _ in
             model.refreshNow()
@@ -71,9 +56,7 @@ struct GlanceView: View {
         }
     }
 
-    /// Ring on the left, active override in the middle, the session control on the right. The
-    /// override label takes layout priority and scales down rather than truncating: a preset that
-    /// is silently cut off is a therapy change the user cannot see they are running.
+    /// The override label scales down rather than truncating.
     private var statusLine: some View {
         HStack {
             Button(action: onLoopTap) { loopIndicator }
@@ -103,9 +86,7 @@ struct GlanceView: View {
         }
     }
 
-    /// End, or Cancel while a hand-back drains — and nothing at all in any other phase. Before a
-    /// loan is live there is nothing to end, and once the hand-back has left the active state
-    /// there is nothing left to cancel; a chip that cannot act is worse than an empty corner.
+    /// End, or Cancel while a hand-back drains; nothing otherwise.
     @ViewBuilder
     private var statusRight: some View {
         if model.state.phase == .active {
@@ -127,10 +108,7 @@ struct GlanceView: View {
         }
     }
 
-    /// The ring, drawn only while this watch is actually looping. It describes the WATCH's loop,
-    /// so showing it at any other time would make a claim about a loop this device is not
-    /// running; the other non-idle phases put the status words in its place, and idle shows
-    /// nothing, because the phone's own ring is the one that means something then.
+    /// Only while this watch is looping; it describes the watch's loop.
     @ViewBuilder
     private var loopIndicator: some View {
         if model.state.phase == .active {
@@ -146,10 +124,7 @@ struct GlanceView: View {
         }
     }
 
-    /// ONE freshness palette across both devices. The assets render as templates and take these
-    /// colours verbatim, which is deliberate: the stock artwork's own tint for "aging" matches
-    /// nothing on the phone, and a ring that means one thing on the wrist and another in the
-    /// pocket is worse than no ring.
+    /// The phone's freshness palette, so the ring means the same on both devices.
     private var ringColor: Color {
         switch model.state.loopFreshness {
         case .fresh:   return Color(red: 10/255, green: 180/255, blue: 67/255)
@@ -172,9 +147,7 @@ struct GlanceView: View {
         return "loop_\(freshness)_\(model.state.loopClosed ? "closed" : "open")"
     }
 
-    /// Asymmetric on purpose. OPENING the loop is immediate — it is the fail-safe direction, and
-    /// a user who wants automation to stop should not have to complete a ceremony to get it.
-    /// CLOSING hands the pod's dosing to the algorithm, so it costs a deliberate crown turn.
+    /// Opening the loop is immediate; closing takes a crown turn.
     private func onLoopTap() {
         WKInterfaceDevice.current().play(.click)
         if model.state.loopClosed {
@@ -184,10 +157,7 @@ struct GlanceView: View {
         }
     }
 
-    /// Nothing ACTIONABLE is drawn until the first controller snapshot has arrived. `.idle` is
-    /// the default state, so without the gate every launch flashes "Start Sport Mode" — which,
-    /// during a live loan, reads as the loan having vanished. A resume says so instead, and an
-    /// unknown state draws an empty sliver rather than a wrong offer.
+    /// Nothing actionable until the first controller snapshot arrives.
     @ViewBuilder
     private var centerBlock: some View {
         switch model.state.phase {
@@ -202,10 +172,7 @@ struct GlanceView: View {
         }
     }
 
-    /// Start, or — when the phone never answered a request — the confirmation for starting
-    /// without it. The credential's age is SHOWN and never enforced: the decision belongs to the
-    /// user, and what the age actually tells them is how old the settings and history this
-    /// session would run on are. There is no staleness past which the offer is withdrawn.
+    /// Start, or the phoneless-start confirmation with the credential's age (shown, not enforced).
     private var idleCenter: some View {
         VStack(spacing: 12) {
             if model.state.bgText != "—" {
@@ -269,9 +236,7 @@ struct GlanceView: View {
         .padding(.horizontal, 10)
     }
 
-    /// Before the loan is live the glucose is the PHONE's, and is drawn small, dim and with the
-    /// word "iPhone" beside it — the same treatment as the idle page. A number that looked like
-    /// the big live reading would claim this watch is already looping on its own sensor.
+    /// The phone's glucose, drawn small and labelled until the loan is live.
     private var startingCenter: some View {
         VStack(spacing: 10) {
             if model.state.bgText != "—" {
@@ -288,10 +253,8 @@ struct GlanceView: View {
         .padding(.horizontal, 10)
     }
 
-    /// The centre block for every phase that is not idle or starting. Under the number there is
-    /// exactly ONE line: the stale-age explanation if the reading is old, otherwise the eventual.
-    /// Below that, one more slot shared by the bolus bar, the transient note and the
-    /// provenance/countdown line — in that order, so a dose in progress always wins.
+    /// One line under the number (stale age or eventual), then one shared slot: bolus bar, note,
+    /// provenance, in that order.
     private var standardCenter: some View {
         VStack(spacing: 1) {
             HStack(alignment: .top, spacing: 3) {
@@ -333,15 +296,7 @@ struct GlanceView: View {
         }
     }
 
-    /// An ESTIMATE on its own clock — elapsed over the expected duration, on the same contract as
-    /// the phone's dose-progress estimator. The pod is never asked, because asking costs radio
-    /// time during delivery.
-    ///
-    /// It renders NOTHING once its own end time passes: it never shows a completed state. Saying
-    /// "delivered" from a clock would claim something nobody watched happen, and an explicit
-    /// clear would have to come from a rebuild that the bolus itself delays. The units shown are
-    /// floored to whole pod pulses, so the number on screen is one the pod could actually have
-    /// given.
+    /// An estimate on its own clock, like the phone's; renders nothing past its end, floored to pulses.
     @ViewBuilder
     private func bolusDeliveryBlock(_ delivery: (units: Double, startedAt: Date, endsAt: Date)) -> some View {
         TimelineView(.periodic(from: delivery.startedAt, by: 2)) { timeline in
@@ -373,9 +328,7 @@ struct GlanceView: View {
         }
     }
 
-    /// The rail — IOB, COB and the running temp — plus whatever the current state needs said in
-    /// words. Idle and starting get nothing: there is no rail to fill and the centre block is
-    /// already carrying the message.
+    /// The rail plus any words the state needs; none for idle or starting.
     @ViewBuilder
     private var bottomBlock: some View {
         switch model.state.phase {
@@ -402,9 +355,7 @@ struct GlanceView: View {
                     }
                 }
 
-                // The phone coming back during a session the watch started on its own raises a
-                // PROMPT, never an automatic hand-back: reachability is not presence — a phone
-                // can be lost in the house and still on WiFi — so the choice stays the user's.
+                // The phone returning raises a prompt, never an automatic hand-back.
                 if model.state.reunionPrompt {
                     VStack(spacing: 3) {
                         Text(NSLocalizedString("iPhone is back — hand the pod back?", comment: "Glance prompt when the phone returns during a seized loan"))
@@ -436,9 +387,7 @@ struct GlanceView: View {
         case .idle, .starting:
 
             EmptyView()
-        // INDETERMINATE by design. There is deliberately no watch-side reclaim bar: the phone's
-        // half of a hand-back has no clock this device can see, and reclaim progress belongs on
-        // the phone's pump tile, which is watching it.
+        // Indeterminate: the phone's half of a hand-back has no clock visible here.
         case .handingBack, .draining:
             VStack(spacing: 4) {
                 ProgressView()
@@ -454,19 +403,14 @@ struct GlanceView: View {
         }
     }
 
-    /// The bar is paced to the MODE BOUNDARY of the takeover's distribution, not to its median.
-    /// Takeover times are bimodal: a fast mode that ends here, and a slow one that runs several
-    /// times longer. Pacing to the median pins the bar at its 0.95 ceiling for almost every
-    /// takeover, which reads as hung — the opposite of what a progress bar is for.
+    /// The fast mode's boundary of a bimodal distribution; pacing to the median pins the bar.
     private static let podTakeoverExpected: TimeInterval = 17
 
     /// Past this, say so. It sits just beyond the fast mode, so the note appears only once a
     /// takeover has genuinely left the behaviour the bar was drawn for.
     private static let podTakeoverOverrun: TimeInterval = 22
 
-    /// The takeover's progress. This is the ONLY determinate bar on the page, and only because
-    /// the takeover is the one phase with a measured distribution behind it — waiting for the
-    /// phone has none, so that stage gets a spinner.
+    /// The page's only determinate bar; waiting for the phone gets a spinner.
     private var startingBlock: some View {
         VStack(spacing: 4) {
             if let began = model.state.startedAt {
@@ -513,10 +457,7 @@ struct GlanceView: View {
         }
     }
 
-    /// Monospaced digits, because the rail repaints every two seconds: proportional figures make
-    /// the three cells shuffle sideways on every IOB change, which on a glance reads as motion
-    /// worth looking at. Scaling down rather than truncating, for the same reason a temp of
-    /// -1.25 must not become "-1.2".
+    /// Monospaced so the rail does not shuffle; scales rather than truncating.
     private func railCell(_ value: String, _ label: String) -> some View {
         VStack(spacing: 0) {
             Text(value)
@@ -543,10 +484,7 @@ struct GlanceView: View {
     }
 }
 
-/// The page's semantic palette, chosen for a small screen read outdoors at arm's length rather
-/// than taken from the system colours. `glanceWarn` carries everything that wants attention but
-/// is not an emergency — including the "via iPhone" provenance line, which is a warning in the
-/// sense that matters here: this watch is not reading the sensor itself.
+/// `glanceWarn` covers non-emergencies, including "via iPhone".
 extension Color {
     static let glanceInk = Color(white: 0.95)
     static let glanceDim = Color(white: 0.55)
@@ -580,18 +518,13 @@ private struct GlanceActionChip: ViewModifier {
     }
 }
 
-/// The ceremony for CLOSING the loop: a full crown turn, in either direction, with a success
-/// haptic at the end. It is an intentional friction — closing the loop hands dosing decisions to
-/// the algorithm, and that should not be reachable by a stray tap on a wrist. Opening the loop
-/// has no ceremony at all; see `onLoopTap`.
+/// Closing the loop takes a full crown turn.
 private struct LoopCloseCrownConfirmation: View {
     @Binding private var progressStorage: Double
     private let completion: () -> Void
     private let resetProgress = PeriodicPublisher(interval: 0.25)
 
-    /// Either direction counts, and the value latches at full so a crown that keeps turning past
-    /// the end cannot fire the completion twice. Pausing resets it — the turn has to be one
-    /// deliberate motion, not an accumulation of accidental nudges.
+    /// Either direction; latches at full and resets on pause.
     private var progress: Binding<Double> {
         Binding(
             get: { self.progressStorage.clamped(to: -1...1) },
@@ -637,9 +570,7 @@ private struct LoopCloseCrownConfirmation: View {
     }
 }
 
-// The previews and the demo gallery below drive the REAL view through the same `GlanceUIState`
-// the app builds, so a layout that breaks under a long override label or a three-digit glucose
-// breaks here too. Keep them that way: a preview with its own view is a preview of nothing.
+// Previews drive the real view through the app's own `GlanceUIState`.
 #if DEBUG
 private func previewState(_ build: (inout GlanceUIState) -> Void) -> GlanceUIState {
     var s = GlanceUIState(); build(&s); return s
@@ -647,13 +578,8 @@ private func previewState(_ build: (inout GlanceUIState) -> Void) -> GlanceUISta
 
 #if GLANCE_DEMO
 
-/// A gallery for stepping the live page through its states on a real wrist — the only way to
-/// judge legibility outdoors, in motion, at a glance.
-///
-/// Reachable ONLY through the diagnostics page's `GLANCE_DEMO`-gated link, not through DEBUG.
-/// Every number in here is invented, and a Debug build is something people who have no way to
-/// know that will run: a screenful of fictional pod and insulin state must not be one tap from
-/// the page they trust.
+/// Steps the live page through invented states on a real wrist. Reachable only via the
+/// `GLANCE_DEMO`-gated diagnostics link.
 struct GlanceDemoView: View {
     @StateObject private var model = GlanceViewModel(preview: GlanceDemoView.states[0].state)
 

@@ -2,13 +2,7 @@
 //  HandbackWedgeTests.swift
 //  WatchAppTests
 //
-//  The hand-back wedge discriminator's full truth table. This shipped with no tests, and it
-//  decides which of two OPPOSITE instructions the user gets when a hand-back hangs: force-quit
-//  the watch app, or wait a minute. Getting it backwards sends them to the wrong device.
-//
-//  Testable because the decision is now a pure function. Before that it was two separate
-//  if/else-if chains inside handbackTimedOut() — evaluated twice, so the log line and the alert
-//  could disagree — behind a path that needs a live pump manager.
+//  The hand-back wedge classifier's truth table: force-quit the watch app, or wait.
 //
 
 import XCTest
@@ -29,9 +23,7 @@ final class HandbackWedgeTests: XCTestCase {
             .oneWay)
     }
 
-    /// Variant B: same picture, except the sends ERRORED. That is a session tearing down and
-    /// re-establishing, and the queued fallback delivers when it returns — so the advice is
-    /// "wait", not "force-quit".
+    /// Errored sends mean a re-establishing session: wait.
     func testErroringSendsAreTheReestablishingSessionNotTheWedge() {
         XCTAssertEqual(
             HandbackWedge.classify(resendCount: 3, sawUnreachable: false, reachableNow: true, sendsErrored: true),
@@ -39,10 +31,7 @@ final class HandbackWedgeTests: XCTestCase {
     }
 
     // MARK: - Everything that must NOT be called a wedge
-    //
-    // These matter more than the positives. A false wedge tells the user to force-quit the
-    // watch app during a hand-back — the most disruptive advice the app can give — for what is
-    // usually an ordinary phone-out-of-range hang that would have healed on its own.
+    // A false wedge gives the most disruptive advice for an ordinary out-of-range hang.
 
     /// Under three offers there is not enough evidence yet, whatever else is true.
     func testTooFewOffersIsNeverAWedge() {
@@ -56,9 +45,7 @@ final class HandbackWedgeTests: XCTestCase {
         }
     }
 
-    /// A phone that went away even ONCE explains the hang innocently. This is the sticky flag:
-    /// it must veto the wedge even though the phone is reachable again right now, which is the
-    /// common case by the time the timeout fires.
+    /// The sticky flag vetoes a wedge even when the phone is reachable again.
     func testAPhoneThatWasEverUnreachableVetoesTheWedge() {
         XCTAssertEqual(
             HandbackWedge.classify(resendCount: 9, sawUnreachable: true, reachableNow: true, sendsErrored: false),
@@ -87,9 +74,7 @@ final class HandbackWedgeTests: XCTestCase {
             .oneWay)
     }
 
-    /// Exhaustive over the whole input space that matters, so no combination is unspecified.
-    /// A wedge requires ALL THREE of: enough offers, never unreachable, reachable now — and
-    /// only then does `sendsErrored` choose between the variants.
+    /// A wedge needs enough offers, never unreachable, and reachable now; `sendsErrored` picks the variant.
     func testFullTruthTable() {
         for count in [0, 2, 3, 10] {
             for sawUnreachable in [false, true] {
@@ -116,14 +101,8 @@ final class HandbackWedgeTests: XCTestCase {
 
 // MARK: - The counter that fed it
 
-/// The wedge verdict and the drain's give-up rule both read `handbackResendCount`, and it used to
-/// be reset in exactly one place: `beginHandback`. A drain reaches the give-up path without ever
-/// running through that, so the count survived the session that earned it.
-///
-/// The consequence is the detector switching itself off: the next drain starts already at the
-/// ceiling, gives up after a single offer, and its wedge verdict describes a session that ended.
-/// The two flags feeding `classify` had the same lifetime problem, and the seize marker left
-/// standing makes the next ordinary loan look like one grown from the standing copy.
+/// Drain state (resend count, classifier flags, seize marker) resets per session, so the next
+/// drain does not start at the ceiling.
 final class HandbackDrainStateTests: XCTestCase {
 
     private var defaults: UserDefaults!

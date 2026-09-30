@@ -12,12 +12,7 @@ import LoopAlgorithm
 
 // MARK: - The lean reacquisition path's one piece of persisted state
 
-/// Discovery is name resolution: it turns a pod id we already know into a CoreBluetooth
-/// handle THIS device can use. Handles are per-device, so the one in a grant is the phone's
-/// and useless here — but ours is reusable for every later loan with the same pod.
-///
-/// These cover the decision logic only. Whether a cached handle is still VALID is a question
-/// only the radio can answer, which is why the caller keeps a discovery fallback.
+/// The per-pod BLE handle cache's decisions; whether a handle is still valid only the radio knows.
 final class PodLoanBleIdentifierCacheTests: XCTestCase {
 
     private let podA: UInt32 = 0x177E6B7E
@@ -42,9 +37,7 @@ final class PodLoanBleIdentifierCacheTests: XCTestCase {
         XCTAssertEqual(PodLoanBleIdentifierCache.identifier(forPodAddress: podA), "UUID-A")
     }
 
-    /// The key must be the POD, not "the last pod we saw". A pod change every three days
-    /// would otherwise hand the new pod the old pod's handle — a bare connect() has no
-    /// timeout, so that would hang rather than fail.
+    /// Keyed per pod: a stale handle would hang a bare connect().
     func testHandlesAreKeyedPerPodAndDoNotBleed() {
         PodLoanBleIdentifierCache.store("UUID-A", forPodAddress: podA)
         PodLoanBleIdentifierCache.store("UUID-B", forPodAddress: podB)
@@ -61,25 +54,14 @@ final class PodLoanBleIdentifierCacheTests: XCTestCase {
     }
 
 
-    /// THE REGRESSION THIS SUITE MISSED (field 2026-08-20, epochs 150-152).
-    ///
-    /// `PodState` decodes the LTK and the BLE handle in a SINGLE `if let`, so removing
-    /// `bleIdentifier` from a grant's raw state silently removes the pod's ENCRYPTION KEY with
-    /// it. The takeover then connects normally and the pod hangs up ~100 ms after the first
-    /// command — which looks nothing like "a key is missing", and cost three grants to spot.
-    ///
-    /// Every cache test below passed while that shipped, because the bug was never in the
-    /// cache: it was in what the CALLER does on a cache MISS. This pins the coupling so nobody
-    /// "tidies up" the foreign identifier again.
+    /// `PodState` decodes the LTK and BLE handle in one `if let`, so dropping the handle drops
+    /// the key (field 2026-08-20).
     func testLtkAndHandleAreCoupledInPodStateDecoding() throws {
         let podStatePath = #filePath
             .replacingOccurrences(of: "Loop/WatchAppTests/PodLoanEpochScopingTests.swift",
                                   with: "OmnipodKit/OmnipodKit/PumpManager/PodState.swift")
         let source = try String(contentsOfFile: podStatePath, encoding: .utf8)
-        // The property that matters is whether ltk's `if let` is a STANDALONE condition or a
-        // COMPOUND one. Textual proximity cannot tell those apart — the two branches sit next to
-        // each other by design — so read the ltk line itself: a compound condition continues with
-        // a comma, a standalone one opens its brace.
+        // Read the ltk line itself: a compound condition continues with a comma.
         guard let ltkLine = source
             .split(separator: "\n", omittingEmptySubsequences: false)
             .first(where: { $0.contains("let ltkString = rawValue[\"ltk\"]") })
@@ -105,15 +87,8 @@ final class PodLoanBleIdentifierCacheTests: XCTestCase {
 
 // MARK: - Stranded sensor identity (#104's blind spot)
 
-/// #104 keeps a persisted sensor identity when stock reports nil, which is right on a watch —
-/// that signal fires after nearly every loan. What it swallows is a REAL sensor change, and the
-/// manager cannot rescue itself: it learns a new sensor's ID only by talking to it, and it is
-/// busy failing authentication against the old one.
-///
-/// These cover the DECISION, not the radio: the age predicate that both the persist filter and
-/// the launch restore now share, since the escape living only on the write path is what let a
-/// dead identity be restored 19 hours past its own expiry (pure/SportMode field case, three days
-/// of auth failures, zero direct readings).
+/// The age predicate shared by the persist filter and the launch restore, which lets a real
+/// sensor change through.
 final class StrandedSensorIdentityTests: XCTestCase {
 
     /// With no reported session length the bound is the longest G7 session.
@@ -160,9 +135,7 @@ final class StrandedSensorIdentityTests: XCTestCase {
         XCTAssertFalse(WatchLoopManager.persistedSensorIsPastLife(nil))
     }
 
-    /// The field case that motivated the read-path fix: an identity restored PAST its own expiry.
-    /// Before the fix this predicate was never consulted at launch, so this returned true and
-    /// nothing asked.
+    /// An identity restored past its expiry is discardable.
     func testTheFieldCaseNineteenHoursPastExpiryIsDiscardable() {
         let now = Date()
         let activated = now.addingTimeInterval(-(lifeBound + .hours(19)))
@@ -173,13 +146,7 @@ final class StrandedSensorIdentityTests: XCTestCase {
 
 // MARK: - Sport Mode start gate
 
-/// The gate refuses a loan that would run on relayed BG alone. The argument: the phone reads the
-/// sensor over BLE and the sensor is on the body, so a phone close enough to relay is close enough
-/// to drive the pod itself — a relay-only loan is redundant or degraded, never useful.
-///
-/// This branch's departure from pure's: the range argument holds only for a REAL BLE sensor, not
-/// for a CGM Simulator or cloud source. So the gate keys on whether THIS WATCH has an enrolled,
-/// still-living sensor that has gone quiet — no protocol field, and bench setups stay unblocked.
+/// The Start gate keys on whether this watch has an enrolled, living sensor that has gone quiet.
 final class SportModeStartGateTests: XCTestCase {
 
     private func verdict(_ sensorName: String?, _ activatedAt: Date?, _ lastDirect: Date?, _ now: Date) -> WatchLoopManager.StartGateVerdict {
@@ -187,9 +154,7 @@ final class SportModeStartGateTests: XCTestCase {
                                           lastDirectG7At: lastDirect, now: now)
     }
 
-    /// No enrolled sensor WARNS rather than blocks. A bench rig and a brand-new user are
-    /// indistinguishable from the watch, and refusing would cost the no-sensor bench workflow —
-    /// so the verdict is its own case, and the caller proceeds after saying so.
+    /// No enrolled sensor warns rather than blocks.
     func testNoEnrolledSensorWarnsButDoesNotBlock() {
         let now = Date()
         XCTAssertEqual(verdict(nil, nil, nil, now), .noSensorEverEnrolled)
@@ -233,11 +198,8 @@ final class SportModeStartGateTests: XCTestCase {
 
 // MARK: - The BLE-wedge signature (PodLoanConnectClock.isWedge)
 
-/// A takeover failure carries the WEDGE signature when a CBError#11 landed during the attempt,
-/// or when no connect EVER landed against a pod the phone released seconds earlier. The verdict
-/// changes the user-facing remedy — a wedge means "toggle watch Bluetooth", because retrying
-/// feeds it (system-level pending connects survive force-quit and accumulate) — so both false
-/// positives and false negatives put the WRONG instruction on the wrist.
+/// The wedge signature (CBError 11, or no connect at all) decides the user's remedy, so both
+/// false positives and negatives give the wrong instruction.
 final class BleWedgeSignatureTests: XCTestCase {
 
     private let start = Date(timeIntervalSinceReferenceDate: 1_000_000)

@@ -4,9 +4,8 @@
 //
 //  Copyright © 2026 LoopKit Authors. All rights reserved.
 //
-//  Assembles the watch's own loop: three LoopKit stores, one override history, the G7 CGM
-//  manager, and the WatchLoopManager that joins them. Nothing here doses; the pump appears
-//  only with a loan. The CGM runs whether or not a loan exists.
+//  Assembles the watch's stores, override history, G7 manager and WatchLoopManager. The pump
+//  appears only with a loan.
 //
 
 import Foundation
