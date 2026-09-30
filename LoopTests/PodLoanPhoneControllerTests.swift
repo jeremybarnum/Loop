@@ -2592,6 +2592,30 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(refreshes.count, 2, "the throttled ping sends nothing; the install edge sends one")
     }
 
+    /// The watch's standing copy follows the book: a bolus or a carb entry refreshes it without
+    /// waiting for the 30-minute floor, and a burst collapses to one (ported from next-dev).
+    func testTheStandingCopyFollowsTheBook() {
+        UserDefaults.standard.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
+        defer { UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.watchSupportsSeize") }
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        func copies() -> Int {
+            lock.lock(); defer { lock.unlock() }
+            return sent.filter { if case .dormantGrant = $0 { return true }; return false }.count
+        }
+        controller.considerDormantRefresh()
+        waitUntil(timeout: 5, "first copy") { copies() == 1 }
+
+        clock = clock.addingTimeInterval(.minutes(2))          // far inside the 30-minute floor
+        controller.considerDormantRefresh()
+        settle()
+        XCTAssertEqual(copies(), 1, "nothing changed — the periodic floor still holds")
+
+        for _ in 0..<5 { controller.considerDormantRefresh(bookChanged: true) }   // carbs, then the bolus, in a burst
+        waitUntil(timeout: 5, "the book changed") { copies() == 2 }
+        usleep(400_000)
+        XCTAssertEqual(copies(), 2, "one burst, one copy")
+    }
+
     // MARK: - PHONE MIRROR (R40(a), the minimum-deviation paradigm)
 
     private func seizeCredentialOutstanding() -> UUID {

@@ -2055,6 +2055,10 @@ final class PodLoanPhoneController {
     /// Periodic floor between refreshes with unchanged settings. A settings change
     /// refreshes immediately regardless. Tunable.
     private static let dormantRefreshInterval: TimeInterval = .minutes(30)
+    /// Floor on refreshes triggered by the book changing (a bolus, carbs), which can come several
+    /// to a minute. One trailing refresh is scheduled instead, so the last change still lands.
+    private static let bookRefreshFloor: TimeInterval = 30
+    private var trailingDormantRefreshPending = false
 
     /// A coarse fingerprint of everything therapy-relevant the grant snapshot freezes —
     /// when it changes, the dormant grant refreshes immediately (the R40(d) analysis:
@@ -2087,8 +2091,12 @@ final class PodLoanPhoneController {
     /// updates); all gating and throttling lives here. Refreshes only while this phone
     /// OWNS the pod, only to a watch that advertised supportsSeize, and only when the
     /// settings fingerprint changed or the periodic floor elapsed.
-    func considerDormantRefresh() {
-        queue.async { [weak self] in self?.queue_considerDormantRefresh() }
+    ///
+    /// `bookChanged`: insulin or carbs moved. The book matters as much as the settings — carbs or
+    /// a bolus entered minutes before an offline start, and absent from the copy, leave the wrist
+    /// dosing against food and insulin it does not know (ported from next-dev, 09-20).
+    func considerDormantRefresh(bookChanged: Bool = false) {
+        queue.async { [weak self] in self?.queue_considerDormantRefresh(bookChanged: bookChanged) }
     }
 
     /// The watch app has just appeared (fresh install or reinstall), so its stores are empty:
@@ -2106,7 +2114,7 @@ final class PodLoanPhoneController {
         }
     }
 
-    private func queue_considerDormantRefresh() {
+    private func queue_considerDormantRefresh(bookChanged: Bool = false) {
         guard state == .owner else { return }
         guard UserDefaults.standard.bool(forKey: Keys.watchSupportsSeize) else { return }
         guard let pump = deps.pumpManager(),
@@ -2125,7 +2133,20 @@ final class PodLoanPhoneController {
         // four identical rejects until the 30-min floor refresh).
         let fingerprint = Self.settingsFingerprint(settings) + "|e\(epoch)"
         let periodicDue = lastDormantRefreshAt.map { deps.now().timeIntervalSince($0) >= Self.dormantRefreshInterval } ?? true
-        guard periodicDue || fingerprint != lastDormantSettingsFingerprint else { return }
+        let settingsChanged = fingerprint != lastDormantSettingsFingerprint
+        guard periodicDue || settingsChanged || bookChanged else { return }
+        if !periodicDue, !settingsChanged, let last = lastDormantRefreshAt {
+            let wait = Self.bookRefreshFloor - deps.now().timeIntervalSince(last)
+            if wait > 0 {
+                guard !trailingDormantRefreshPending else { return }
+                trailingDormantRefreshPending = true
+                queue.asyncAfter(deadline: .now() + wait) { [weak self] in
+                    self?.trailingDormantRefreshPending = false
+                    self?.queue_considerDormantRefresh(bookChanged: true)
+                }
+                return
+            }
+        }
 
         var loanSettings = settings
         loanSettings.automaticDosingStrategy = .tempBasalOnly   // same override as a live grant
