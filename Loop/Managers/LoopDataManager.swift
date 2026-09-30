@@ -108,11 +108,8 @@ final class LoopDataManager: ObservableObject {
 
     @Published private(set) var lastLoopCompleted: Date?
 
-    /// Ring ruling 2026-08-23: loop recency is a property of the SYSTEM, not the device. At
-    /// reclaim commit the wrist's final cycle seeds this display clock so the hand-back does
-    /// not paint a red ring over a system that looped seconds ago (the watch's temp is still
-    /// running until this phone cancels it, R33). Forward-only, display-only: dosing decisions
-    /// never read this, and the phone's own next cycle keeps or loses the freshness honestly.
+    /// Display only: at reclaim the watch's last cycle seeds the phone's loop-recency clock.
+    /// Forward-only; dosing never reads it.
     func seedLastLoopCompleted(fromWatch date: Date) {
         guard (lastLoopCompleted ?? .distantPast) < date else { return }
         lastLoopCompleted = date
@@ -642,9 +639,7 @@ final class LoopDataManager: ObservableObject {
     func cancelActiveTempBasal(for reason: CancelActiveTempBasalReason) async throws {
         guard case .tempBasal(let dose) = deliveryDelegate?.basalDeliveryState, (dose.automatic ?? true) else { return }
 
-        // PODLOAN (ruled 2026-08-29): never issue a pod command while we do not hold the
-        // pod. Covers every cancel trigger firing mid-loan (unreliable CGM, max-basal
-        // change) — the R33 boundary cancel runs AFTER reclaim, when the pod is ours again.
+        // Never command a pod lent to the watch; the boundary cancel runs after reclaim.
         guard !isPumpConnectionReleased() else {
             logger.default("Temp-basal cancel SKIPPED (%{public}@) — pod connection is released (loaned out); the watch owns the program until reclaim", String(describing: reason))
             return
@@ -766,8 +761,7 @@ final class LoopDataManager: ObservableObject {
 
                 dosingDecision.updateFrom(input: input, output: output)
 
-                // PODLOAN: while the pod is lent to the watch the phone computes but never enacts;
-                // the user's dosingEnabled is untouched, so nothing has to be restored at reclaim.
+                // While the pod is lent, compute but never enact; dosingEnabled is untouched.
                 if self.settingsProvider.dosingEnabled, !isPumpConnectionReleased() {
                     if deliveryDelegate.basalDeliveryState == .pumpInoperable {
                         throw LoopError.pumpInoperable
