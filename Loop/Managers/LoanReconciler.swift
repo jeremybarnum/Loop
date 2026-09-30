@@ -152,10 +152,8 @@ enum LoanReconciler {
         return event.record.syncIdentifier ?? "loanv2-\(event.id.uuidString)"
     }
 
-    /// Insulin the records say the pod delivered between two instants.
-    /// - Parameter schedule: fills gaps between rate records; nil counts journaled insulin only.
-    /// - Parameter includingBolusesAtEnd: false at an interior checkpoint, whose boundary bolus
-    ///   belongs to the next window.
+    /// Insulin the records say the pod delivered between two instants. `schedule` fills gaps (nil:
+    /// journaled only); `includingBolusesAtEnd` is false at an interior checkpoint.
     static func expectedInsulin(events: [LoanEvent], schedule: BasalRateSchedule?, from start: Date, to end: Date,
                                 includingBolusesAtEnd: Bool = true) -> Double {
         guard end > start else { return 0 }
