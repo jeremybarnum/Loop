@@ -41,10 +41,7 @@ public final class WatchContext: RawRepresentable {
 
     public var predictedGlucose: WatchPredictedGlucose?
 
-    /// True only for a context the WATCH built for itself during a loan. Deliberately NOT
-    /// encoded into rawValue — a context decoded from the phone always reads false, which is
-    /// exactly the discrimination needed to stop a relayed copy of the wrist's own reading
-    /// from outranking the original.
+    /// True only for a context the watch built during a loan; not encoded, so a relayed copy reads false.
     public var isWatchAuthored: Bool = false
     public var eventualGlucose: LoopQuantity? {
         return predictedGlucose?.values.last?.quantity
