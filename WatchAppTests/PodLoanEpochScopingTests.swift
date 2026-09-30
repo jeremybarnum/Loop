@@ -199,7 +199,7 @@ final class SportModeStartGateTests: XCTestCase {
     /// its way out, or a dead sensor would lock the wearer out of Sport Mode entirely.
     func testExpiredSensorAllowsStart() {
         let now = Date()
-        XCTAssertEqual(verdict("DXCMqL", now.addingTimeInterval(-.hours(10 * 24 + 13)), nil, now), .allowed)
+        XCTAssertEqual(verdict("DXCMqL", now.addingTimeInterval(-(WatchLoopManager.longestSessionWithGrace + .hours(1))), nil, now), .allowed)
     }
 
     /// Enrolled, alive, delivering: the healthy case must not be refused.
