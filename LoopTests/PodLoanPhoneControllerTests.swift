@@ -2749,12 +2749,10 @@ extension PodLoanPhoneControllerTests {
     }
 
 
-    // MARK: - Dosing strategy is overridden for the loan, never on the phone
+    // MARK: - The grant carries the phone's own dosing strategy
 
-    /// The watch doses by temp basal only. Before this, a phone on automaticBolus made the wrist
-    /// refuse EVERY cycle — field-confirmed on the first live run: the watch held the pod and never
-    /// dosed at all, for a user whose therapy is a continuous stream of small automatic boluses.
-    func testGrantCarriesTempBasalOnlyWhenThePhoneRunsAutomaticBolus() {
+    /// The watch now runs automatic bolus itself, so the grant passes the phone's strategy through.
+    func testGrantCarriesThePhonesAutomaticBolusStrategy() {
         settings.automaticDosingStrategy = .automaticBolus
         let controller = makeController()
         let grant = establishLoan(controller)
@@ -2763,15 +2761,12 @@ extension PodLoanPhoneControllerTests {
                 from: grant.therapySettingsRaw, options: [], format: nil) as! LoopSettings.RawValue) else {
             return XCTFail("grant's therapy settings did not decode")
         }
-        XCTAssertEqual(carried.automaticDosingStrategy, .tempBasalOnly,
-                       "the wrist must receive temps-only, or it refuses every cycle and doses nothing")
+        XCTAssertEqual(carried.automaticDosingStrategy, .automaticBolus,
+                       "the wrist runs the phone's strategy, automatic bolus included")
     }
 
-    /// The whole reason the override lives in the SNAPSHOT rather than in the phone's stored
-    /// setting: there is nothing to restore, so no failed restore can strand her on temps forever.
-    /// A relaunch mid-loan, a force reclaim, a dead watch or a killed app would each have skipped a
-    /// restore step — and that would be a lasting therapy change from a bookkeeping miss.
-    func testOverridingForTheLoanDoesNotTouchThePhonesOwnSetting() {
+    /// A loan never writes the phone's own dosing strategy.
+    func testTheLoanDoesNotTouchThePhonesOwnSetting() {
         settings.automaticDosingStrategy = .automaticBolus
         let controller = makeController()
         establishLoan(controller)
