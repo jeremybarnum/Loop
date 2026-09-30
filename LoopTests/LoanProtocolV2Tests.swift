@@ -552,4 +552,19 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertNil(LoanMessage.peekKind(transport: ["name": "WatchContext"]), "foreign payloads peek as nil")
         XCTAssertNil(LoanMessage.peekKind(transport: [:]))
     }
+
+    /// The refusal text for the no-handover-while-bolusing rule: nothing when no bolus runs, the
+    /// time left (rounded up) while one does, "in a moment" at the edges.
+    func testLoanDeliveryWait() {
+        let now = Date()
+        XCTAssertNil(PumpManagerStatus.BolusState.noBolus.loanDeliveryWait(now: now))
+        let running = DoseEntry(type: .bolus, startDate: now.addingTimeInterval(-30),
+                                endDate: now.addingTimeInterval(95), value: 2.0, unit: .units)
+        XCTAssertEqual(PumpManagerStatus.BolusState.inProgress(running).loanDeliveryWait(now: now), "in about 2 min")
+        let ending = DoseEntry(type: .bolus, startDate: now.addingTimeInterval(-80),
+                               endDate: now.addingTimeInterval(-1), value: 2.0, unit: .units)
+        XCTAssertEqual(PumpManagerStatus.BolusState.inProgress(ending).loanDeliveryWait(now: now), "in a moment")
+        XCTAssertEqual(PumpManagerStatus.BolusState.initiating.loanDeliveryWait(now: now), "in a moment")
+        XCTAssertEqual(PumpManagerStatus.BolusState.canceling.loanDeliveryWait(now: now), "in a moment")
+    }
 }

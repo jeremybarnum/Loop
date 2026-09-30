@@ -400,6 +400,7 @@ final class WatchDataManager: NSObject {
                     self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
                 }
             },
+            latestGlucoseDate: { [weak self] in self?.deviceManager.glucoseStore.latestGlucose?.startDate },
             issueUrgentNotice: { [weak self] title, body in
                 // The urgent channel's distinction is TIME-SENSITIVE interruption: it breaks
                 // through Focus modes and gets lock-screen prominence, for messages where the
@@ -610,6 +611,8 @@ final class WatchDataManager: NSObject {
         // state, watch capability, settings fingerprint, 30-min floor) lives inside it,
         // so this is one enqueued no-op almost always.
         podLoanController.considerDormantRefresh()
+        // Same pulse: has the watch gone quiet mid-loan? (warns only; never takes the pod)
+        podLoanController.considerHoldLapse()
 
         // Any update context should trigger a watch update
         sendWatchContextIfNeeded()
