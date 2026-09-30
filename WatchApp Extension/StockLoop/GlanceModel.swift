@@ -95,9 +95,7 @@ struct GlanceUIState {
 
     var startingStageText: String? = nil
 
-    /// First contact with a new pod: the takeover must FIND the pod, which works only with the
-    /// screen on. The Start page says so above the button; the takeover page says when the wrist
-    /// can come down (`takeoverHintDone`).
+    /// First contact with a new pod needs the screen on: the Start note, then the takeover hint.
     var firstContactNote: String? = nil
     var takeoverHint: String? = nil
     var takeoverHintDone: Bool = false

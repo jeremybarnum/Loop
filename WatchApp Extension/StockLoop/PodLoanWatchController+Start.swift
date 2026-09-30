@@ -312,37 +312,30 @@ extension PodLoanWatchController {
         }
     }
 
-    /// The offline offer answers ONE unanswered request. A grant accepted after it, or a new
-    /// Start, makes it stale; left set, it hides under the loan and comes back on the idle screen
-    /// when the loan ends (production-line bench 2026-09-26: the timeout fired 2 s after the
-    /// phone granted, and the queued grant landed 0.1 s after the offer). Caller is on `queue`.
+    /// The offer answers one unanswered request; a later grant or Start makes it stale. On `queue`.
     private func withdrawSeizeOffer(reason: String) {
         guard seizeOffer != nil else { return }
         seizeOffer = nil
         SportLog.event("seize", "offline offer WITHDRAWN — \(reason) [seize]")
     }
 
-    /// The grant's `podAddress` field is always 0 — the phone never fills it. The address rides the
-    /// pump snapshot, under the keys the pod driver's own rebuild reads.
+    /// The grant's `podAddress` is always 0 on the wire; the address is in the pump snapshot.
     static func podAddress(in grant: LoanGrant) -> UInt32? {
         let envelope = (try? PropertyListSerialization.propertyList(from: grant.pumpManagerRawState, options: [], format: nil)) as? [String: Any]
         return ((envelope?["state"] as? [String: Any])?["podState"] as? [String: Any])?["address"] as? UInt32
     }
 
-    /// Resting only: the current pod is known and this watch holds no handle for it, so the next
-    /// Start has to find the pod with the screen on.
+    /// Resting, with a known pod this watch holds no handle for: the next Start must find it.
     func podFirstContactExpected() -> Bool {
-        guard phase == .idle || phase == .recoveredDrain,
-              let saved = defaults.object(forKey: DormantKeys.podAddress) as? Int, saved != 0 else { return false }
-        return PodLoanBleIdentifierCache.identifier(forPodAddress: UInt32(truncatingIfNeeded: saved)) == nil
+        guard phase == .idle || phase == .recoveredDrain, let address = currentPodAddress, address != 0 else { return false }
+        return PodLoanBleIdentifierCache.identifier(forPodAddress: address) == nil
     }
 
     static let firstContactStartNote = NSLocalizedString(
         "New pod — keep your wrist up after Start",
         comment: "Glance note above Start when this watch has never connected to the current pod")
 
-    /// The hint under the takeover bar. Only a first contact says anything: it needs the screen
-    /// on until the pod is reached, and then the wrist can come down.
+    /// The hint under the takeover bar; only a first contact needs one.
     static func takeoverHint(firstContact: Bool, podReached: Bool, nudged: Bool) -> String? {
         guard firstContact else { return nil }
         if podReached {
@@ -354,8 +347,7 @@ extension PodLoanWatchController {
         return NSLocalizedString("First Sport Mode on this pod — keep your wrist up until the pod is found.", comment: "Glance: first takeover of a pod")
     }
 
-    /// Tap the wrist only when it can help: the pod is not yet reached, the screen is off (with it
-    /// on, the scan is already active), and at most twice per takeover.
+    /// Tap the wrist only while the pod is unreached and the screen is off, at most twice.
     static func shouldNudgeTakeover(podReached: Bool, appActive: Bool, nudgesSoFar: Int) -> Bool {
         !podReached && !appActive && nudgesSoFar < 2
     }
@@ -632,7 +624,7 @@ extension PodLoanWatchController {
         var cachedHandle: String?
         if var podRaw = rawState["podState"] as? [String: Any],
            let address = podRaw["address"] as? UInt32 {
-            defaults.set(Int(address), forKey: DormantKeys.podAddress)
+            currentPodAddress = address
             cachedHandle = PodLoanBleIdentifierCache.identifier(forPodAddress: address)
             if let cachedHandle {
                 takeoverCachedHandle = (address, cachedHandle)
@@ -683,8 +675,7 @@ extension PodLoanWatchController {
         takeoverFirstContact = discover
         takeoverPodReached = false
         takeoverNudges = 0
-        // Only a takeover that has to find its pod needs the screen, so only it asks for the wrist,
-        // and only it taps the wrist when it sits unfound with the screen off. Twice at most.
+        // Only a first contact needs the screen, so only it asks for the wrist and taps it.
         if discover {
             SportLog.event("loan", "takeover: FIRST CONTACT with this pod — finding it needs the watch screen on; the glance asks for the wrist up")
             for delay in [8.0, 30.0] {
