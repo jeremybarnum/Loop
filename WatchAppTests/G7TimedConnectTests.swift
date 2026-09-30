@@ -150,11 +150,3 @@ final class G7WatchAcquisitionTests: XCTestCase {
         XCTAssertEqual(G7WatchAcquisition.missedBursts(since: nil, now: anchor), 0, "nothing on record: nothing missed")
     }
 }
-
-final class LoanWorkoutTests: XCTestCase {
-    // The whole-loan workout session is opt-in: the 2026-09-15 no-keepalive loan passed.
-    func testTheLoanWorkoutSessionStaysOff() {
-        UserDefaults.standard.removeObject(forKey: StockLoopSession.loanWorkoutKey)
-        XCTAssertFalse(StockLoopSession.loanWorkout)
-    }
-}

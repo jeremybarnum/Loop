@@ -7,10 +7,8 @@
 // down. Riding the Dexcom watch app's authenticated session buys us DATA, not RUNTIME:
 // entitlements are not inheritable by a co-resident app.
 //
-// More than one subsystem can want the keepalive at once, so holds are REFCOUNTED BY REASON —
-// "loanWorkout" for the duration of a loan, plus "takeover" and "handback" for the two bounded windows
-// that need runtime of their own. Releasing one can never stop a session another still wants.
-// Owned by StockLoopSession, which drives all three.
+// Holds are refcounted by reason ("takeover", "handback"), so releasing one never stops a session
+// another still wants. Owned by StockLoopSession.
 //
 import Foundation
 import HealthKit

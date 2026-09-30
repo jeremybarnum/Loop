@@ -24,28 +24,12 @@ import os.log
 final class StockLoopSession {
     let stack: StockLoopStack.Stack
 
+    /// Held only across takeover and hand-back; a loan itself runs without a workout session, so
+    /// timers scheduled across a wrist-down stretch fire late.
     private let keepalive = WorkoutKeepalive()
 
-    /// Whether a workout session is held for the WHOLE loan. OFF by default: a loan without one
-    /// was field-proven, and the app sleeping between bursts is the normal posture. Takeover and
-    /// hand-back still take their own runtime holds, which is where the runtime actually matters.
-    ///
-    /// The consequence to keep in mind when reading timer code: with this off, dispatch timers do
-    /// not run while the app is suspended, so anything scheduled across a wrist-down stretch
-    /// fires late and says so.
-    static let loanWorkoutKey = "G7Lab.loan.workout"
-    static var loanWorkout: Bool { UserDefaults.standard.bool(forKey: loanWorkoutKey) }
-
-    /// The keepalive tracks a SET of named holders, so `reason` must be stable per caller: the
-    /// takeover, hand-back and whole-loan holds overlap, and the session ends only when the last
-    /// one lets go. Only the whole-loan holder is gated, and its release runs even when the
-    /// setting is off, so flipping the setting mid-loan cannot strand a hold.
+    /// Holds are refcounted by `reason`, which must be stable per caller.
     private func setKeepalive(_ holding: Bool, reason: String) {
-        if reason == "loanWorkout", !Self.loanWorkout {
-            SportLog.event("keepalive", "loan workout holder \(holding ? "not held" : "release ignored") — no workout session during loans (Diagnostics ▸ Pod loan); the app sleeps between bursts")
-            keepalive.release(reason)
-            return
-        }
         holding ? keepalive.acquire(reason) : keepalive.release(reason)
     }
 
@@ -178,8 +162,6 @@ final class StockLoopSession {
             if active {
                 os_log("Loan active: starting G7 transport", log: self.log, type: .default)
 
-                self.setKeepalive(true, reason: "loanWorkout")
-
                 LoopStallWatchdog.refresh()
                 SportLog.event("deadman", "ladder ARMED — 20/40m timeSensitive + 1/2h critical rungs [deadman]")
 
@@ -190,7 +172,6 @@ final class StockLoopSession {
                 RuntimeStateLog.startHeartbeat()
             } else {
                 os_log("Loan ended: stopping G7 transport", log: self.log, type: .default)
-                self.setKeepalive(false, reason: "loanWorkout")
                 LoopStallWatchdog.disarm()
                 SportLog.event("deadman", "ladder CLEARED — loan ended, coverage transfers to the phone [deadman]")
                 self.stopLogPulse()
