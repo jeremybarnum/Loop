@@ -561,10 +561,7 @@ extension WatchDataManager: WCSessionDelegate {
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
         Task { @MainActor in
             self.log.default("Received message: %{public}@", message)
-            // The loan's interactive handshake — request, hand-back offer, acks — rides this
-            // channel so a backgrounded watch app is woken now rather than whenever iOS decides
-            // to drain the queue. Answer it before the stock message handling, which knows
-            // nothing about these kinds.
+            // Loan handshake messages, handled before the stock message handling.
             if (try? LoanMessage.decode(fromTransport: message)) != nil {
                 lockedLastWatchContact.value = Date()
                 podLoanController.handleIncoming(userInfo: message)

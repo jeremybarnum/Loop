@@ -129,13 +129,7 @@ class LoopAppManager: NSObject {
         self.state = state.next
     }
 
-    /// True once BGTaskScheduler registration has happened this process. launch() is
-    /// RE-ENTERED at first unlock when a pre-first-unlock boot launch deferred
-    /// (AppDelegate.applicationProtectedDataDidBecomeAvailable → launch()), and
-    /// BGTaskScheduler throws NSInternalInconsistencyException on a second registration
-    /// of the same identifier — the crash BEHIND the resetLoopManager IUO crash: once
-    /// that was fixed and the deferred launch survived to unlock (TF 143, 2026-08-29,
-    /// +31 s, wasUnlockedSinceBoot=1), the resume registered again and aborted.
+    /// launch() re-enters at first unlock; registering BGTasks twice throws.
     private var hasRegisteredBackgroundTasks = false
 
     func registerBackgroundTasks() {
@@ -435,8 +429,7 @@ class LoopAppManager: NSObject {
             healthStore: healthStore
         )
 
-        // The pump tile needs to know whether the pod is on the watch, and to offer the reclaim.
-        // Weak, because the app manager owns the watch manager and this is only a lookup path.
+        // Weak lookup for the pump tile.
         deviceDataManager.watchManager = watchManager
 
         self.mealDetectionManager = MealDetectionManager(
@@ -936,22 +929,8 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
              LoopNotificationCategory.requiredUpdate.rawValue:
             completionHandler([.badge, .sound, .list, .banner])
         default:
-            // POD LOAN alerts banner in the foreground. The identifiers are minted per-notice
-            // ("podloan.urgent.<uuid>", "podloan.notice.<uuid>", "podloan.t1"), so they cannot be
-            // enumerated in the switch above and fell to the deny-by-default arm.
-            //
-            // These are the messages for which the phone is the only device that can reach the
-            // user — a dead-watch reclaim verdict, an opened loop, a rewritten IOB — and the
-            // urgent channel already marks them .timeSensitive so they break through Focus.
-            // Denying them a foreground banner meant the one case where you are holding the
-            // phone, looking at Loop, was the case where the alert was quietest: it went to the
-            // list and the lock screen and never to the top of the screen. Field 2026-08-18.
-            //
-            // The comment in WatchDataManager.issueUrgentNotice already assumed this ("foreground
-            // banners are no longer this channel's job — LoopAppManager banners every
-            // notification in-app now"), which is true of the daily-driver branches and was not
-            // true here: the port inherited next-dev's restrictive allow-list. Code and comment
-            // now agree.
+            // Foreground banners for the loan's notices, whose identifiers are minted per notice;
+            // the phone may be the only device that can reach the user.
             if notification.request.identifier.hasPrefix("podloan.") {
                 completionHandler([.badge, .sound, .list, .banner])
             } else {
@@ -1032,14 +1011,7 @@ extension LoopAppManager: TemporaryScheduleOverrideHistoryDelegate {
 
 extension LoopAppManager: ResetLoopManagerDelegate {
     func askUserToConfirmLoopReset() {
-        // nil until launchManagers() runs. resumeLaunch() calls this unconditionally,
-        // including pre-first-unlock launches where checkProtectedDataAvailable()
-        // defers the launch — force-unwrapping there crashed every boot-time background
-        // relaunch (upstream Loop bug; hit 100% here because the watch app's
-        // WatchConnectivity traffic relaunches the phone app at boot; reproduced on
-        // demand 2026-08-28 by powering the phone off mid-loan). Same fix as the
-        // g7-build-next line's e4e347f2 (2026-07-17). The deferred launch resumes
-        // after first unlock and asks then.
+        // nil before launchManagers() on a deferred pre-unlock launch.
         resetLoopManager?.askUserToConfirmLoopReset()
     }
     
