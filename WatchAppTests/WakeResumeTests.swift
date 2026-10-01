@@ -26,11 +26,6 @@ final class WakeResumeTests: XCTestCase {
         journalDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: journalDir, withIntermediateDirectories: true)
         defaults = UserDefaults(suiteName: "WakeResumeTests-\(UUID().uuidString)")!
-        // The loop manager persists its last-loop time in the STANDARD defaults, process-wide,
-        // and seeds forward-only: an earlier test's cycle would otherwise outrank this test's seed.
-        UserDefaults.standard.removeObject(forKey: "WatchLoopManager.lastLoopCompleted")
-        UserDefaults.standard.removeObject(forKey: WatchLoopManager.closedLoopDefaultsKey)
-        UserDefaults.standard.removeObject(forKey: WatchLoopManager.integralRCDefaultsKey)
     }
 
     /// The grant's settings payload on disk, including the supplement's basal schedule.
@@ -58,10 +53,11 @@ final class WakeResumeTests: XCTestCase {
                                               cacheLength: .hours(4), provenanceIdentifier: "WakeResumeTests")
         let carbStore = CarbStore(healthKitSampleStore: nil, cacheStore: cacheStore,
                                   cacheLength: .hours(24), provenanceIdentifier: "WakeResumeTests")
-        let manager = WatchLoopManager(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore)
+        let manager = WatchLoopManager(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore,
+                                       defaults: defaults, stateDirectory: journalDir)
         return PodLoanWatchController(loopManager: manager,
                                       journal: LoanEventJournal(directory: journalDir),
-                                      defaults: defaults)
+                                      defaults: defaults, stateDirectory: journalDir)
     }
 
     /// The smallest raw state `OmniPumpManager(rawState:)` accepts: a basal schedule, and a

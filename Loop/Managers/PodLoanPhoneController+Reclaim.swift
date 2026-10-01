@@ -327,8 +327,8 @@ extension PodLoanPhoneController {
         let anchor: (units: Double, asOf: Date)?
         if let base = auditBase {
             anchor = (base.units, base.asOf)
-        } else if let units = (UserDefaults.standard.object(forKey: Keys.deliveredAtTakeover) as? Double)
-                            ?? (UserDefaults.standard.object(forKey: Keys.deliveredAtGrant) as? Double) {
+        } else if let units = (deps.defaults.object(forKey: Keys.deliveredAtTakeover) as? Double)
+                            ?? (deps.defaults.object(forKey: Keys.deliveredAtGrant) as? Double) {
             anchor = (units, start)
         } else {
             anchor = nil
@@ -345,7 +345,7 @@ extension PodLoanPhoneController {
                                                       from: anchor.asOf, to: deps.now())
 
         // Whole-loan figure for the drift check only.
-        let takeoverUnits = UserDefaults.standard.object(forKey: Keys.deliveredAtTakeover) as? Double
+        let takeoverUnits = deps.defaults.object(forKey: Keys.deliveredAtTakeover) as? Double
         let wholeLoanExpected = takeoverUnits.map {
             _ in LoanReconciler.expectedInsulin(events: allEvents, schedule: schedule, from: start, to: deps.now())
         }

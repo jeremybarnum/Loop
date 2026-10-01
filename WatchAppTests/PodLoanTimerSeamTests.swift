@@ -56,10 +56,11 @@ final class PodLoanTimerSeamTests: XCTestCase {
             cacheLength: .hours(24),
             provenanceIdentifier: "PodLoanTimerSeamTests"
         )
-        let manager = WatchLoopManager(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore)
+        let manager = WatchLoopManager(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore,
+                                       defaults: defaults, stateDirectory: journalDir)
         return PodLoanWatchController(loopManager: manager,
                                       journal: LoanEventJournal(directory: journalDir),
-                                      defaults: defaults)
+                                      defaults: defaults, stateDirectory: journalDir)
     }
 
     /// The 60 s request timeout crosses the seam.

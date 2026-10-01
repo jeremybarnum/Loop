@@ -57,10 +57,11 @@ final class SeizeActivationTests: XCTestCase {
             cacheLength: .hours(24),
             provenanceIdentifier: "SeizeActivationTests"
         )
-        let manager = WatchLoopManager(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore)
+        let manager = WatchLoopManager(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore,
+                                       defaults: defaults, stateDirectory: journalDir)
         return PodLoanWatchController(loopManager: manager,
                                       journal: LoanEventJournal(directory: journalDir),
-                                      defaults: defaults)
+                                      defaults: defaults, stateDirectory: journalDir)
     }
 
     /// A dormant credential as the phone builds it (expiresAt == issuedAt). `completeSettings` gets

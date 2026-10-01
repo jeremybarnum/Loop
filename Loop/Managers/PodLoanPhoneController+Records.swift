@@ -27,7 +27,7 @@ extension PodLoanPhoneController {
 
             // A future epoch means the watch is running a loan this phone never granted.
             if state == .owner, batch.epoch > epoch,
-               UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) != nil {
+               deps.defaults.string(forKey: Keys.dormantSeizeToken) != nil {
                 engageInferredLoanYield(evidence: "future-epoch batch e\(batch.epoch) at .owner (live seized loan streaming)")
             }
 
@@ -73,7 +73,7 @@ extension PodLoanPhoneController {
         // Retro-acknowledge a loan the watch started alone: needs the token and a higher epoch,
         // and never over a grant in flight or a live loan.
         if let token = offer.seizeToken, state == .owner || state == .reclaimPending, offer.epoch > epoch,
-           token.uuidString == UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) {
+           token.uuidString == deps.defaults.string(forKey: Keys.dormantSeizeToken) {
             if state == .reclaimPending {
                 cancelReclaimLadder()
                 handbackDiag(offer.epoch, "[seize] retro-ack arrived MID-RECLAIM — ladder stood down; the aimed revoke got its drain")
@@ -89,13 +89,13 @@ extension PodLoanPhoneController {
             auditBase = nil
             checkpointsThisLoan = 0
             worstWindowThisLoan = 0
-            UserDefaults.standard.removeObject(forKey: Keys.deliveredAtTakeover)
+            deps.defaults.removeObject(forKey: Keys.deliveredAtTakeover)
 
             // Anchor the adopted loan at its earliest record, at most six hours back.
             let anchor = max(offer.events.map(\.record.startDate).min() ?? offer.handedBackAt,
                              deps.now().addingTimeInterval(-.hours(6)))
             loanStartedAt = anchor
-            UserDefaults.standard.set(anchor, forKey: Keys.loanStartedAt)
+            deps.defaults.set(anchor, forKey: Keys.loanStartedAt)
         }
 
         // An offer ahead of this phone's epoch cannot be committed.
@@ -441,7 +441,7 @@ extension PodLoanPhoneController {
         stagedTombstones = []
         persistStaged()
 
-        UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
+        deps.defaults.removeObject(forKey: Keys.deliveredAtGrant)
     }
 
 }

@@ -15,7 +15,7 @@ import os.log
 
 extension PodLoanPhoneController {
     var stagedFileURL: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let base = deps.stateDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return base.appendingPathComponent("PodLoanStagedRecordsV2.json")
     }
 
@@ -45,6 +45,6 @@ extension PodLoanPhoneController {
 
     /// The exactly-once record (dedup is by event ID), so it must survive a relaunch.
     func persistCommittedIDs() {
-        UserDefaults.standard.set(committedIDs.map(\.uuidString), forKey: Keys.committedIDs)
+        deps.defaults.set(committedIDs.map(\.uuidString), forKey: Keys.committedIDs)
     }
 }

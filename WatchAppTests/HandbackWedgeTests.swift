@@ -131,10 +131,11 @@ final class HandbackDrainStateTests: XCTestCase {
                                               cacheLength: .hours(4), provenanceIdentifier: "HandbackDrainStateTests")
         let carbStore = CarbStore(healthKitSampleStore: nil, cacheStore: cacheStore,
                                   cacheLength: .hours(24), provenanceIdentifier: "HandbackDrainStateTests")
-        let manager = WatchLoopManager(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore)
+        let manager = WatchLoopManager(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore,
+                                       defaults: defaults, stateDirectory: journalDir)
         return PodLoanWatchController(loopManager: manager,
                                       journal: LoanEventJournal(directory: journalDir),
-                                      defaults: defaults)
+                                      defaults: defaults, stateDirectory: journalDir)
     }
 
     /// A drain that gives up must leave nothing behind for the next session to inherit.

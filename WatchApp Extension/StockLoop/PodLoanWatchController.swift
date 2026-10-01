@@ -103,6 +103,9 @@ final class PodLoanWatchController {
 
     var defaults: UserDefaults = .standard
 
+    /// Where state files live; nil in the app (Documents).
+    let stateDirectory: URL?
+
     /// Sets the request timeout and refuses to queue a live offer; never gates a start.
     var isPhoneReachable: () -> Bool = { true }
 
@@ -271,10 +274,11 @@ final class PodLoanWatchController {
 
     /// From persisted state alone: resume (rebuilt later in `resumeIfNeeded`), drain, or idle.
     init(loopManager: WatchLoopManager, journal: LoanEventJournal = LoanEventJournal(),
-         defaults: UserDefaults = .standard) {
+         defaults: UserDefaults = .standard, stateDirectory: URL? = nil) {
         self.loopManager = loopManager
         self.journal = journal
         self.defaults = defaults
+        self.stateDirectory = stateDirectory
         self.phase = Phase(rawValue: defaults.string(forKey: Keys.phase) ?? "") ?? .idle
         self.epoch = defaults.object(forKey: Keys.epoch) as? Int
 
