@@ -50,20 +50,20 @@ extension LoopDataManager {
     }
 
     /// Non-nil only while the wrist is dosing.
-    var loanDosingManagerIfActive: WatchLoopManager? {
+    var loanControllerIfActive: PodLoanWatchController? {
         guard let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession,
               session.loanController.isLoanActiveNonBlocking else { return nil }
-        return session.stack.loopManager
+        return session.loanController
     }
 
-    /// Applies an override to the wrist's dosing during a loan, then the UI, then (best-effort)
-    /// the phone, which is often off during a loan.
-    func applyOverrideDuringLoan(_ manager: WatchLoopManager,
-                                         _ override: TemporaryScheduleOverride?,
-                                         _ watchInfoUpdate: LoopSettingsUserInfo,
-                                         presetId: String?,
-                                         alertIdentifier: String?) async {
-        manager.applyWristOverride(override)
+    /// Applies an override to the wrist's dosing and the loan's records during a loan, then the
+    /// UI, then (best-effort) the phone, which is often off during a loan.
+    func applyOverrideDuringLoan(_ loan: PodLoanWatchController,
+                                 _ override: TemporaryScheduleOverride?,
+                                 _ watchInfoUpdate: LoopSettingsUserInfo,
+                                 presetId: String?,
+                                 alertIdentifier: String?) async {
+        loan.applyWristOverride(override)
         watchInfo = watchInfoUpdate
         do {
             try await WCSession.default.sendSetPreset(presetIdentifier: presetId, alertIdentifier: alertIdentifier)

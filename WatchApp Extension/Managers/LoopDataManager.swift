@@ -275,8 +275,8 @@ extension LoopDataManager {
     func clearOverride() async throws {
         var watchInfoUpdate = self.watchInfo
         watchInfoUpdate.scheduleOverride = nil
-        if let manager = loanDosingManagerIfActive {
-            return await applyOverrideDuringLoan(manager, TemporaryScheduleOverride?.none, watchInfoUpdate,
+        if let loan = loanControllerIfActive {
+            return await applyOverrideDuringLoan(loan, TemporaryScheduleOverride?.none, watchInfoUpdate,
                                                  presetId: String?.none, alertIdentifier: String?.none)
         }
         try await WCSession.default.sendSetPreset(presetIdentifier: nil, alertIdentifier: nil)
@@ -286,8 +286,8 @@ extension LoopDataManager {
     func activateOverride(_ override: TemporaryScheduleOverride, alertIdentifierToAcknowledge: String? = nil) async throws {
         var watchInfoUpdate = self.watchInfo
         watchInfoUpdate.scheduleOverride = override
-        if let manager = loanDosingManagerIfActive {
-            return await applyOverrideDuringLoan(manager, override, watchInfoUpdate,
+        if let loan = loanControllerIfActive {
+            return await applyOverrideDuringLoan(loan, override, watchInfoUpdate,
                                                  presetId: override.presetId,
                                                  alertIdentifier: alertIdentifierToAcknowledge)
         }

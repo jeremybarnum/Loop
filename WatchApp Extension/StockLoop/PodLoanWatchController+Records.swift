@@ -134,6 +134,12 @@ extension PodLoanWatchController {
         }
     }
 
+    /// A wrist override: the loan's dosing first, then the journal, which carries it to the phone.
+    func applyWristOverride(_ override: TemporaryScheduleOverride?) {
+        loopManager.applyWristOverride(override)
+        loanDidRecordOverride(override)
+    }
+
     /// Journaled only when the phone understands override records; otherwise it stays local and
     /// the log says so.
     func loanDidRecordOverride(_ override: TemporaryScheduleOverride?) {
