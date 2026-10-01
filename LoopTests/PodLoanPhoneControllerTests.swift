@@ -77,42 +77,31 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     var holdPumpEventWrites = false
     var heldPumpEventWrite: ((Error?) -> Void)?
     private let lock = NSLock()
+    var suiteName: String!
+    var defaults: UserDefaults!
+    var stateDir: URL!
+
+    override func tearDown() {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: stateDir)
+        super.tearDown()
+    }
 
     override func setUp() {
         super.setUp()
-        // The controller persists via UserDefaults.standard + a staging file; every
-        // test starts from a clean slate.
-        for key in ["PodLoanPhoneController.state", "PodLoanPhoneController.epoch",
-                    "PodLoanPhoneController.cursor", "PodLoanPhoneController.pendingRevoke",
-                    "PodLoanPhoneController.committedIDs", "PodLoanPhoneController.loanStartedAt",
-                    "PodLoanPhoneController.deliveredAtTakeover", "PodLoanPhoneController.gapBooking",
-                    "PodLoanPhoneController.pendingForceAudit", "PodLoanPhoneController.deliveredAtGrant",
-                    "PodLoanPhoneController.auditBase", "PodLoanPhoneController.windowResidualWorst",
-                    // Only a grant clears these, so reset them or the audit inherits the last test's values.
-                    "PodLoanPhoneController.expectedUnits", "PodLoanPhoneController.watchAuditRan"] {
-            UserDefaults.standard.removeObject(forKey: key)
-        }
+        // Every test gets fresh storage: its own defaults suite and state folder.
+        suiteName = "PodLoanPhoneControllerTests-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)!
+        stateDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         MockPumpManager.testForcedReadCount = 0
         MockPumpManager.testForeignSessionAt = nil
-        // PHONE MIRROR keys: a leaked yield flag would re-pause dosing at the next
-        // test's controller init (the flag folds into podIsOnLoan).
-        for key in ["PodLoanPhoneController.yieldingToInferredLoan",
-                    "PodLoanPhoneController.lastHandledForeignSessionAt",
-                    "PodLoanPhoneController.dormantSeizeToken",
-                    "PodLoanPhoneController.watchSupportsSeize",
-                    "PodLoanPhoneController.rebidAt",
-                    "PodLoanPhoneController.firstContactSinceRebid"] {
-            UserDefaults.standard.removeObject(forKey: key)
-        }
         backgroundTaskBegins = 0
         backgroundTaskEnds = 0
         urgentNotices = []
         bookedGapDoses = []
         deletedGapSyncs = []
         gapDeleteSucceeds = true
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        try? FileManager.default.removeItem(at: base.appendingPathComponent("PodLoanStagedRecordsV2.json"))
-
         sent = []
         sentExpectations = []
         addedDoses = []
@@ -130,14 +119,6 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         MockPumpManager.testConnectionReleased = false
         MockPumpManager.testOdometer = nil
         MockPumpManager.testEscalations = 0
-        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.deliveredAuthoritative")
-        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.holdRenewedAt")
-        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.holdLapseNoticedAt")
-        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.watchSilenceWarningsIssued")
-        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.residualHistory")
-        // The residual-bank purge is one-shot per install, so its flag has to be cleared per test
-        // or whichever test happens to construct the first controller consumes it for the rest.
-        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.residualHistoryPurged.2026-08-13")
 
         let timeZone = TimeZone(identifier: "GMT")!
         settings = LoopSettings(
@@ -238,7 +219,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             isBluetoothPoweredOff: bluetoothPoweredOff,
             lastWatchContactAt: lastWatchContact,
             latestGlucoseDate: latestGlucose ?? { now() },   // by default the phone is beside the body: a reading just now
-            now: now
+            now: now,
+            defaults: defaults,
+            stateDirectory: stateDir
         ))
     }
 
@@ -770,7 +753,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                       "delivered must be phone-read latest (10.900) minus the watch's start (10.000) — got: \(line)")
         XCTAssertTrue(line.contains("vs watch endpoint +0.500"),
                       "the line must state how much delivery the watch's stale endpoint missed — got: \(line)")
-        let persisted = UserDefaults.standard.object(forKey: "PodLoanPhoneController.deliveredAuthoritative") as? Double
+        let persisted = defaults.object(forKey: "PodLoanPhoneController.deliveredAuthoritative") as? Double
         XCTAssertEqual(persisted ?? .nan, 0.900, accuracy: 0.0001)
     }
 
@@ -1013,8 +996,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
     /// Residuals are banked as diagnostics, with the worst-window series.
     func testResidualsAreBankedAsDiagnosticsWithTheWorstWindowSeries() throws {
-        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.residualHistory")
-        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.windowResidualWorst")
+        defaults.removeObject(forKey: "PodLoanPhoneController.residualHistory")
+        defaults.removeObject(forKey: "PodLoanPhoneController.windowResidualWorst")
         let controller = makeController()
         try runLoanToAudit(controller, deliveredDuringLoan: 0.10)
 
@@ -1024,24 +1007,24 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertTrue(bank!.contains("window-worst"), "the worst-window series is the review data now: \(bank!)")
         XCTAssertTrue(bank!.contains("R32 closed"), "the line states the ruling, not a demand for one: \(bank!)")
         XCTAssertFalse(bank!.contains("RE-REVIEW DUE"), "the review happened — no nag: \(bank!)")
-        XCTAssertEqual((UserDefaults.standard.array(forKey: "PodLoanPhoneController.residualHistory") as? [Double])?.count, 1)
-        XCTAssertEqual((UserDefaults.standard.array(forKey: "PodLoanPhoneController.windowResidualWorst") as? [Double])?.count, 1)
+        XCTAssertEqual((defaults.array(forKey: "PodLoanPhoneController.residualHistory") as? [Double])?.count, 1)
+        XCTAssertEqual((defaults.array(forKey: "PodLoanPhoneController.windowResidualWorst") as? [Double])?.count, 1)
     }
 
     /// Force-reclaim residuals banked before scoping are purged once at launch (> +0.5 U).
     func testContaminatedResidualsArePurgedOnceAtLaunch() {
-        UserDefaults.standard.set([-0.200, -0.150, 0.800, 0.850, -0.050],
+        defaults.set([-0.200, -0.150, 0.800, 0.850, -0.050],
                                   forKey: "PodLoanPhoneController.residualHistory")
         _ = makeController()
-        XCTAssertEqual(UserDefaults.standard.array(forKey: "PodLoanPhoneController.residualHistory") as? [Double],
+        XCTAssertEqual(defaults.array(forKey: "PodLoanPhoneController.residualHistory") as? [Double],
                        [-0.200, -0.150, -0.050],
                        "the two force-reclaim residuals go; every clean sample survives, order intact")
 
         // ONE SHOT, not a standing rule: a hand-back genuinely above +0.5 U is a loud open-loop event
         // whose residual is still authentic calibration data.
-        UserDefaults.standard.set([0.900], forKey: "PodLoanPhoneController.residualHistory")
+        defaults.set([0.900], forKey: "PodLoanPhoneController.residualHistory")
         _ = makeController()
-        XCTAssertEqual(UserDefaults.standard.array(forKey: "PodLoanPhoneController.residualHistory") as? [Double],
+        XCTAssertEqual(defaults.array(forKey: "PodLoanPhoneController.residualHistory") as? [Double],
                        [0.900], "the flag is already set — a later launch must not purge again")
     }
 
@@ -1561,7 +1544,7 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(deleted, ["PODLOAN-ODOGAP-e\(grant.epoch)"], "the placeholder retires by its deterministic identity")
         XCTAssertTrue(recovered, "the user is told their numbers changed, and why")
         waitUntil(timeout: 5, "state cleared") {
-            UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking") == nil
+            self.defaults.dictionary(forKey: "PodLoanPhoneController.gapBooking") == nil
         }
     }
 
@@ -1590,13 +1573,13 @@ extension PodLoanPhoneControllerTests {
 
         lock.lock(); let deleted = deletedGapSyncs; lock.unlock()
         XCTAssertTrue(deleted.isEmpty, "an offer that commits no NEW doses explains nothing — the placeholder must stand")
-        XCTAssertNotNil(UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking"))
+        XCTAssertNotNil(defaults.dictionary(forKey: "PodLoanPhoneController.gapBooking"))
     }
 
     /// A launch retries the placeholder delete only when it failed after the watch's records
     /// committed (`deleteFailedAfterRecords`).
     func testPersistedGapDeleteRetriesOnFreshLaunch() throws {
-        UserDefaults.standard.set(["epoch": 7, "units": 1.75, "bookedAt": Date().timeIntervalSince1970,
+        defaults.set(["epoch": 7, "units": 1.75, "bookedAt": Date().timeIntervalSince1970,
                                    "deleteFailedAfterRecords": true],
                                   forKey: "PodLoanPhoneController.gapBooking")
 
@@ -1606,7 +1589,7 @@ extension PodLoanPhoneControllerTests {
         _ = controller
 
         waitUntil(timeout: 5, "launch retry succeeds") {
-            UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking") == nil
+            self.defaults.dictionary(forKey: "PodLoanPhoneController.gapBooking") == nil
         }
         lock.lock()
         let deleted = deletedGapSyncs
@@ -1616,7 +1599,7 @@ extension PodLoanPhoneControllerTests {
 
     /// Launch-time store work waits for protected data (reboot before first unlock).
     func testLaunchStoreWorkWaitsForProtectedData() throws {
-        UserDefaults.standard.set(["epoch": 9, "units": 1.0, "bookedAt": Date().timeIntervalSince1970,
+        defaults.set(["epoch": 9, "units": 1.0, "bookedAt": Date().timeIntervalSince1970,
                                    "deleteFailedAfterRecords": true],
                                   forKey: "PodLoanPhoneController.gapBooking")
         var unlock: (() -> Void)?
@@ -1627,7 +1610,7 @@ extension PodLoanPhoneControllerTests {
         Thread.sleep(forTimeInterval: 0.3)
         lock.lock(); let attemptsWhileLocked = deletedGapSyncs.count; lock.unlock()
         XCTAssertEqual(attemptsWhileLocked, 0, "store work ran during the pre-first-unlock window")
-        XCTAssertNotNil(UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking"))
+        XCTAssertNotNil(defaults.dictionary(forKey: "PodLoanPhoneController.gapBooking"))
 
         // First unlock: the deferred work runs and the retry completes.
         unlock?()
@@ -1639,7 +1622,7 @@ extension PodLoanPhoneControllerTests {
     /// The failure side of the same path: launch retry fails again, state must survive for yet
     /// another attempt rather than being dropped or silently swallowed.
     func testPersistedGapDeleteThatFailsAgainAtLaunchKeepsState() throws {
-        UserDefaults.standard.set(["epoch": 3, "units": 0.9, "bookedAt": Date().timeIntervalSince1970,
+        defaults.set(["epoch": 3, "units": 0.9, "bookedAt": Date().timeIntervalSince1970,
                                    "deleteFailedAfterRecords": true],
                                   forKey: "PodLoanPhoneController.gapBooking")
         lock.lock(); gapDeleteSucceeds = false; lock.unlock()
@@ -1648,13 +1631,13 @@ extension PodLoanPhoneControllerTests {
         _ = controller
 
         waitUntil(timeout: 5, "launch retry attempted") { self.lock.lock(); defer { self.lock.unlock() }; return !self.deletedGapSyncs.isEmpty }
-        XCTAssertNotNil(UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking"),
+        XCTAssertNotNil(defaults.dictionary(forKey: "PodLoanPhoneController.gapBooking"),
                         "still failing — state must survive for the NEXT launch or offer, not vanish")
     }
 
     /// A placeholder nothing explained survives launch: the insulin is still in the body.
     func testPersistedGapWithoutRecordsSurvivesLaunch() throws {
-        UserDefaults.standard.set(["epoch": 11, "units": 0.85, "bookedAt": Date().timeIntervalSince1970],
+        defaults.set(["epoch": 11, "units": 0.85, "bookedAt": Date().timeIntervalSince1970],
                                   forKey: "PodLoanPhoneController.gapBooking")
 
         let controller = makeController()   // the next app launch
@@ -1668,7 +1651,7 @@ extension PodLoanPhoneControllerTests {
 
         lock.lock(); let deleted = deletedGapSyncs; lock.unlock()
         XCTAssertTrue(deleted.isEmpty, "an unexplained placeholder must NOT be deleted at launch — the insulin is still real")
-        XCTAssertNotNil(UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking"),
+        XCTAssertNotNil(defaults.dictionary(forKey: "PodLoanPhoneController.gapBooking"),
                         "the booking must persist so it keeps standing until the watch returns or it decays out")
     }
 
@@ -1691,7 +1674,7 @@ extension PodLoanPhoneControllerTests {
                           events: [realTail], tombstones: [], recovered: true)).transportDictionary())
 
         waitUntil(timeout: 5, "failure logged") { self.diagMatching("gap DELETE FAILED") != nil }
-        XCTAssertNotNil(UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking"),
+        XCTAssertNotNil(defaults.dictionary(forKey: "PodLoanPhoneController.gapBooking"),
                         "state survives a failed delete, so the next offer retries it")
     }
 
@@ -2060,8 +2043,8 @@ extension PodLoanPhoneControllerTests {
 
     /// The refresh throttle stamps at enqueue, so a burst yields one refresh.
     func testDormantRefreshBurstYieldsOneRefresh() {
-        UserDefaults.standard.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
-        defer { UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.watchSupportsSeize") }
+        defaults.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
+        defer { defaults.removeObject(forKey: "PodLoanPhoneController.watchSupportsSeize") }
         let controller = makeController()
 
         let firstRefresh = expectSend()
@@ -2080,8 +2063,8 @@ extension PodLoanPhoneControllerTests {
 
     private func seizeCredentialOutstanding() -> UUID {
         let token = UUID()
-        UserDefaults.standard.set(token.uuidString, forKey: "PodLoanPhoneController.dormantSeizeToken")
-        UserDefaults.standard.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
+        defaults.set(token.uuidString, forKey: "PodLoanPhoneController.dormantSeizeToken")
+        defaults.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
         return token
     }
 
@@ -2196,7 +2179,7 @@ extension PodLoanPhoneControllerTests {
     /// Every epoch advance re-issues the dormant credential.
     func testEpochAdvanceRefreshesTheDormantCredential() throws {
         let token = seizeCredentialOutstanding()
-        UserDefaults.standard.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
+        defaults.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
         let controller = makeController()
 
         let first = expectSend()
@@ -2238,7 +2221,7 @@ extension PodLoanPhoneControllerTests {
                           seizeToken: token)).transportDictionary())
         waitUntil(timeout: 5, "adopted") { controller.state == .loaned }
 
-        let anchor = UserDefaults.standard.object(forKey: "PodLoanPhoneController.loanStartedAt") as? Date
+        let anchor = defaults.object(forKey: "PodLoanPhoneController.loanStartedAt") as? Date
         XCTAssertNotNil(anchor, "the window anchor is SET, never nil-to-default")
         XCTAssertEqual(anchor.map { abs($0.timeIntervalSince(eventStart)) < 1 }, true,
                        "…at the offer's earliest event")
@@ -2626,8 +2609,8 @@ extension PodLoanPhoneControllerTests {
 
     /// The standing copy refreshes on a bolus or carb, collapses bursts, and loses nothing.
     func testTheStandingCopyFollowsTheBook() {
-        UserDefaults.standard.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
-        defer { UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.watchSupportsSeize") }
+        defaults.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
+        defer { defaults.removeObject(forKey: "PodLoanPhoneController.watchSupportsSeize") }
         let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
         func copies() -> Int {
             lock.lock(); defer { lock.unlock() }

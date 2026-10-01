@@ -172,7 +172,7 @@ extension PodLoanPhoneController {
             guard let self = self else { return }
             self.queue.async {
                 if ok {
-                    UserDefaults.standard.set(["epoch": epoch, "units": units,
+                    self.deps.defaults.set(["epoch": epoch, "units": units,
                                                "bookedAt": now.timeIntervalSince1970],
                                               forKey: Keys.gapBooking)
 
@@ -190,7 +190,7 @@ extension PodLoanPhoneController {
 
     /// Launch-time retry for a placeholder whose delete failed AFTER the real records landed.
     func retryPersistedGapDeleteIfAny() {
-        guard let gap = UserDefaults.standard.dictionary(forKey: Keys.gapBooking),
+        guard let gap = deps.defaults.dictionary(forKey: Keys.gapBooking),
               let gapEpoch = gap["epoch"] as? Int, let booked = gap["units"] as? Double else { return }
 
         // Retry only after a failed delete; a standing placeholder stays.
@@ -204,7 +204,7 @@ extension PodLoanPhoneController {
             guard let self = self else { return }
             self.queue.async {
                 if ok {
-                    UserDefaults.standard.removeObject(forKey: Keys.gapBooking)
+                    self.deps.defaults.removeObject(forKey: Keys.gapBooking)
 
                     if let bookedAt = (gap["bookedAt"] as? TimeInterval).map(Date.init(timeIntervalSince1970:)) {
                         self.deps.insulinHistoryRewritten(bookedAt)
@@ -220,7 +220,7 @@ extension PodLoanPhoneController {
 
     /// Removes the placeholder after the real records are written, never before.
     func retireGapBookingIfExplained(offerEpoch: Int, dosesJustCommitted: [DoseEntry], carbsJustCommitted: Int) {
-        guard let gap = UserDefaults.standard.dictionary(forKey: Keys.gapBooking),
+        guard let gap = deps.defaults.dictionary(forKey: Keys.gapBooking),
               let gapEpoch = gap["epoch"] as? Int, gapEpoch == offerEpoch,
               let booked = gap["units"] as? Double else { return }
         // An empty drain proves nothing.
@@ -235,7 +235,7 @@ extension PodLoanPhoneController {
             guard let self = self else { return }
             self.queue.async {
                 if ok {
-                    UserDefaults.standard.removeObject(forKey: Keys.gapBooking)
+                    self.deps.defaults.removeObject(forKey: Keys.gapBooking)
 
                     if let bookedAt = (gap["bookedAt"] as? TimeInterval).map(Date.init(timeIntervalSince1970:)) {
                         self.deps.insulinHistoryRewritten(bookedAt)
@@ -251,7 +251,7 @@ extension PodLoanPhoneController {
                 } else {
                     var marked = gap
                     marked["deleteFailedAfterRecords"] = true
-                    UserDefaults.standard.set(marked, forKey: Keys.gapBooking)
+                    self.deps.defaults.set(marked, forKey: Keys.gapBooking)
                     self.handbackDiag(gapEpoch, String(format:
                         "** R37 gap DELETE FAILED — the %.2f U placeholder AND the real records are both booked; IOB is over-counted until this retries **", booked))
                 }
@@ -262,15 +262,15 @@ extension PodLoanPhoneController {
     /// Diagnostic series of clean hand-back residuals; nothing reads it back.
     func bankResidual(_ residual: Double, worstWindow: Double, epoch: Int) {
         // Bounded to recent loans.
-        var history = (UserDefaults.standard.array(forKey: Keys.residualHistory) as? [Double]) ?? []
+        var history = (deps.defaults.array(forKey: Keys.residualHistory) as? [Double]) ?? []
         history.append(residual)
         if history.count > 40 { history.removeFirst(history.count - 40) }
-        UserDefaults.standard.set(history, forKey: Keys.residualHistory)
+        deps.defaults.set(history, forKey: Keys.residualHistory)
 
-        var windows = (UserDefaults.standard.array(forKey: Keys.windowWorstHistory) as? [Double]) ?? []
+        var windows = (deps.defaults.array(forKey: Keys.windowWorstHistory) as? [Double]) ?? []
         windows.append(worstWindow)
         if windows.count > 40 { windows.removeFirst(windows.count - 40) }
-        UserDefaults.standard.set(windows, forKey: Keys.windowWorstHistory)
+        deps.defaults.set(windows, forKey: Keys.windowWorstHistory)
 
         let mean = history.reduce(0, +) / Double(history.count)
         let worst = history.map(abs).max() ?? 0

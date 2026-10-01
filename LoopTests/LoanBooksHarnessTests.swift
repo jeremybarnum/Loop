@@ -1376,20 +1376,16 @@ private final class PhoneOverrideHarness {
 
     private let lock = NSLock()
     private var controller: PodLoanPhoneController!
-    private static let defaultsKeys = ["PodLoanPhoneController.state", "PodLoanPhoneController.epoch",
-                                       "PodLoanPhoneController.cursor", "PodLoanPhoneController.pendingRevoke",
-                                       "PodLoanPhoneController.committedIDs", "PodLoanPhoneController.loanStartedAt"]
-    private static var stagedFileURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("PodLoanStagedRecordsV2.json")
-    }
+    private let suiteName = "LoanBooksHarness-\(UUID().uuidString)"
+    private lazy var defaults = UserDefaults(suiteName: suiteName)!
+    private let stateDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
 
     init(epoch: Int = 1) {
-        Self.wipePersistedState()
+        try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         // Persisted-state derivation is how this controller boots: write LOANED at `epoch` and
         // it comes up mid-loan, ready to receive the hand-back offer.
-        UserDefaults.standard.set("loaned", forKey: "PodLoanPhoneController.state")
-        UserDefaults.standard.set(epoch, forKey: "PodLoanPhoneController.epoch")
+        defaults.set("loaned", forKey: "PodLoanPhoneController.state")
+        defaults.set(epoch, forKey: "PodLoanPhoneController.epoch")
 
         var settings = LoopSettings()
         settings.basalRateSchedule = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 1.0)])!
@@ -1411,7 +1407,9 @@ private final class PhoneOverrideHarness {
                 self.lock.unlock()
             },
             doseHistory: { _, completion in completion([]) },
-            issueNotice: { _, _ in }))
+            issueNotice: { _, _ in },
+            defaults: defaults,
+            stateDirectory: stateDir))
     }
 
     /// Delivers a final offer and waits deterministically via `queue.sync` round-trips.
@@ -1424,11 +1422,7 @@ private final class PhoneOverrideHarness {
 
     func tearDown() {
         controller = nil
-        Self.wipePersistedState()
-    }
-
-    private static func wipePersistedState() {
-        for key in defaultsKeys { UserDefaults.standard.removeObject(forKey: key) }
-        try? FileManager.default.removeItem(at: stagedFileURL)
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: stateDir)
     }
 }

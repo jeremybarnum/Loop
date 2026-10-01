@@ -35,7 +35,7 @@ extension PodLoanPhoneController {
             checkpointsThisLoan = 0
             auditBase = AuditBase(units: units, asOf: asOf)
             loanStartedAt = asOf
-            UserDefaults.standard.set(asOf, forKey: Keys.loanStartedAt)
+            deps.defaults.set(asOf, forKey: Keys.loanStartedAt)
         }
         deps.setAutomaticDosingPaused(true)
 
@@ -126,7 +126,7 @@ extension PodLoanPhoneController {
         cancelNotification(id: NotificationID.t1)
 
         if let atTakeover = complete.firstPodStatus.deliveredUnits {
-            UserDefaults.standard.set(atTakeover, forKey: Keys.deliveredAtTakeover)
+            deps.defaults.set(atTakeover, forKey: Keys.deliveredAtTakeover)
 
             auditBase = AuditBase(units: atTakeover, asOf: complete.firstPodStatus.timestamp)
         }
@@ -152,7 +152,7 @@ extension PodLoanPhoneController {
                 newestForeignLoanEvidence = (report.epoch, deps.now())
             }
             // Only a watch holding this phone's seize credential could have started a session.
-            let hasCredential = UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) != nil
+            let hasCredential = deps.defaults.string(forKey: Keys.dormantSeizeToken) != nil
             switch state {
             case .owner where hasCredential:
                 engageInferredLoanYield(evidence: "statusReport — watch holds the pod on e\(report.epoch)")

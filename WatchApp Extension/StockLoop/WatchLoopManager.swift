@@ -245,7 +245,7 @@ final class WatchLoopManager {
 
     /// Per session, so the next grant's mode is not mistaken for a transition.
     func resetClosedLoopForSessionEnd() {
-        UserDefaults.standard.set(false, forKey: Self.closedLoopDefaultsKey)
+        defaults.set(false, forKey: Self.closedLoopDefaultsKey)
         closedLoopMirrorLock.lock()
         _closedLoopMirror = false
         closedLoopMirrorLock.unlock()
@@ -257,7 +257,7 @@ final class WatchLoopManager {
     /// Mirror written synchronously so an immediate hand-back carries the new value. Opening the
     /// loop cancels the running temp, only on a real closed-to-open transition.
     func setClosedLoopEnabled(_ enabled: Bool, reason: String = "by user") {
-        UserDefaults.standard.set(enabled, forKey: Self.closedLoopDefaultsKey)
+        defaults.set(enabled, forKey: Self.closedLoopDefaultsKey)
 
         closedLoopMirrorLock.lock()
         let wasEnabled = _closedLoopMirror
@@ -403,22 +403,28 @@ final class WatchLoopManager {
 
     var defaults: UserDefaults = .standard
 
+    /// Where state files live; nil in the app (Documents).
+    let stateDirectory: URL?
+
     /// Restores the last cycle, loop mode and correction model, and subscribes to phone context
     /// (except in the simulator, which has its own ingest).
     init(doseStore: DoseStore, glucoseStore: GlucoseStore, carbStore: CarbStore,
          overrideHistory: TemporaryScheduleOverrideHistory = TemporaryScheduleOverrideHistory(),
-         settings: LoopSettings = LoopSettings()) {
+         settings: LoopSettings = LoopSettings(),
+         defaults: UserDefaults = .standard, stateDirectory: URL? = nil) {
+        self.defaults = defaults
+        self.stateDirectory = stateDirectory
         self.doseStore = doseStore
         self.glucoseStore = glucoseStore
         self.carbStore = carbStore
         self.settingsProvider = WatchSettingsProvider(settings: settings)
         self.overrideHistory = overrideHistory
         self.settings = settings
-        self.lastLoopCompleted = UserDefaults.standard.object(forKey: Self.lastLoopCompletedKey) as? Date
-        let closed = UserDefaults.standard.bool(forKey: Self.closedLoopDefaultsKey)
+        self.lastLoopCompleted = defaults.object(forKey: Self.lastLoopCompletedKey) as? Date
+        let closed = defaults.bool(forKey: Self.closedLoopDefaultsKey)
         self._closedLoopEnabled = closed
         self._closedLoopMirror = closed
-        self.integralRetrospectiveCorrectionEnabled = UserDefaults.standard.bool(forKey: Self.integralRCDefaultsKey)
+        self.integralRetrospectiveCorrectionEnabled = defaults.bool(forKey: Self.integralRCDefaultsKey)
 
         // The store asks us for the scheduled basal it nets doses against; see the
         // `DoseStoreDelegate` conformance.
@@ -560,7 +566,7 @@ final class WatchLoopManager {
 
     /// Applied on `dataAccessQueue`, ahead of the first prediction.
     func setIntegralRetrospectiveCorrection(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: Self.integralRCDefaultsKey)
+        defaults.set(enabled, forKey: Self.integralRCDefaultsKey)
         dataAccessQueue.async {
             self.integralRetrospectiveCorrectionEnabled = enabled
             SportLog.event("loan", "retrospective correction: \(enabled ? "INTEGRAL" : "standard") (from grant)")
@@ -607,7 +613,7 @@ final class WatchLoopManager {
     /// a relaunch mid-loan that came back with no value opened the ring grey for a cycle.
     private static let lastLoopCompletedKey = "WatchLoopManager.lastLoopCompleted"
     var lastLoopCompleted: Date? {
-        didSet { UserDefaults.standard.set(lastLoopCompleted, forKey: Self.lastLoopCompletedKey) }
+        didSet { defaults.set(lastLoopCompleted, forKey: Self.lastLoopCompletedKey) }
     }
 
     /// Adopts the phone's completion time at grant; only ever moves forward.

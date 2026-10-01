@@ -111,11 +111,12 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
             cacheLength: .hours(24),
             provenanceIdentifier: "TimerCharacterization"
         )
-        let manager = WatchLoopManager(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore)
+        let manager = WatchLoopManager(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore,
+                                       defaults: defaults, stateDirectory: journalDir)
         loopManager = manager
         return PodLoanWatchController(loopManager: manager,
                                       journal: LoanEventJournal(directory: journalDir),
-                                      defaults: defaults)
+                                      defaults: defaults, stateDirectory: journalDir)
     }
 
     /// Waits for armings; `drain` alone races the controller's queue on a loaded machine.

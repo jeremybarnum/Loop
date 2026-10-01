@@ -40,7 +40,7 @@ extension PodLoanPhoneController {
         }
 
         if let seize = request.supportsSeize {
-            UserDefaults.standard.set(seize, forKey: Keys.watchSupportsSeize)
+            deps.defaults.set(seize, forKey: Keys.watchSupportsSeize)
         }
         // Version skew ends here with a nack; the apps install separately.
         guard request.supportedVersions.contains(LoanProtocol.version) else {
@@ -149,17 +149,17 @@ extension PodLoanPhoneController {
 
         // This loan's origin; the previous loan's takeover reading is cleared with it.
         if let delivered = lendable.lentDeviceInsulinDelivered {
-            UserDefaults.standard.set(delivered, forKey: Keys.deliveredAtGrant)
+            deps.defaults.set(delivered, forKey: Keys.deliveredAtGrant)
 
             auditBase = AuditBase(units: delivered, asOf: handedOverAt)
         } else {
-            UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
+            deps.defaults.removeObject(forKey: Keys.deliveredAtGrant)
             auditBase = nil
         }
         checkpointsThisLoan = 0
         worstWindowThisLoan = 0
 
-        UserDefaults.standard.removeObject(forKey: Keys.deliveredAtTakeover)
+        deps.defaults.removeObject(forKey: Keys.deliveredAtTakeover)
 
         let releaseEpoch = epoch + 1
         handbackDiag(releaseEpoch, "GRANT — releasing pod BLE (wasReleased=\(lendable.isConnectionReleased))")
@@ -188,7 +188,7 @@ extension PodLoanPhoneController {
         stagedTombstones = []
         persistStaged()
         loanStartedAt = handedOverAt
-        UserDefaults.standard.set(handedOverAt, forKey: Keys.loanStartedAt)
+        deps.defaults.set(handedOverAt, forKey: Keys.loanStartedAt)
         holdRenewedAt = handedOverAt
         holdLapseNoticedAt = nil
 
@@ -318,12 +318,12 @@ extension PodLoanPhoneController {
 
     /// Minted once; echoed back by a watch that started alone.
     func dormantSeizeToken() -> UUID {
-        if let raw = UserDefaults.standard.string(forKey: Keys.dormantSeizeToken),
+        if let raw = deps.defaults.string(forKey: Keys.dormantSeizeToken),
            let token = UUID(uuidString: raw) {
             return token
         }
         let token = UUID()
-        UserDefaults.standard.set(token.uuidString, forKey: Keys.dormantSeizeToken)
+        deps.defaults.set(token.uuidString, forKey: Keys.dormantSeizeToken)
         return token
     }
 
@@ -335,7 +335,7 @@ extension PodLoanPhoneController {
     private func queue_considerDormantRefresh(bookChanged: Bool = false) {
         // Only while this phone holds the pod, and only to a watch that said it can use this.
         guard state == .owner else { return }
-        guard UserDefaults.standard.bool(forKey: Keys.watchSupportsSeize) else { return }
+        guard deps.defaults.bool(forKey: Keys.watchSupportsSeize) else { return }
         guard let pump = deps.pumpManager(),
               let lendable = pump as? PumpConnectionLendable,
               !lendable.isConnectionReleased else { return }

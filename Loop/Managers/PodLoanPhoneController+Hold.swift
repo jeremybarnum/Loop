@@ -30,23 +30,23 @@ extension PodLoanPhoneController {
 
     /// When the watch last reported a cycle. Persisted, so a relaunch is not read as silence.
     var holdRenewedAt: Date? {
-        get { UserDefaults.standard.object(forKey: HoldKeys.renewedAt) as? Date }
-        set { UserDefaults.standard.set(newValue, forKey: HoldKeys.renewedAt) }
+        get { deps.defaults.object(forKey: HoldKeys.renewedAt) as? Date }
+        set { deps.defaults.set(newValue, forKey: HoldKeys.renewedAt) }
     }
 
     /// When the silence was noticed; clearing it also resets the warning count.
     var holdLapseNoticedAt: Date? {
-        get { UserDefaults.standard.object(forKey: HoldKeys.noticedAt) as? Date }
+        get { deps.defaults.object(forKey: HoldKeys.noticedAt) as? Date }
         set {
-            UserDefaults.standard.set(newValue, forKey: HoldKeys.noticedAt)
-            if newValue == nil { UserDefaults.standard.removeObject(forKey: HoldKeys.warningsIssued) }
+            deps.defaults.set(newValue, forKey: HoldKeys.noticedAt)
+            if newValue == nil { deps.defaults.removeObject(forKey: HoldKeys.warningsIssued) }
         }
     }
 
     /// How many of the warnings have gone out for this stretch of silence.
     private var watchSilenceWarningsIssued: Int {
-        get { UserDefaults.standard.integer(forKey: HoldKeys.warningsIssued) }
-        set { UserDefaults.standard.set(newValue, forKey: HoldKeys.warningsIssued) }
+        get { deps.defaults.integer(forKey: HoldKeys.warningsIssued) }
+        set { deps.defaults.set(newValue, forKey: HoldKeys.warningsIssued) }
     }
 
     /// An audit describes one loan, so every path that ends a loan clears its anchors.
@@ -54,9 +54,9 @@ extension PodLoanPhoneController {
         checkpointsThisLoan = 0
         auditBase = nil
         loanStartedAt = nil
-        UserDefaults.standard.removeObject(forKey: Keys.loanStartedAt)
-        UserDefaults.standard.removeObject(forKey: Keys.deliveredAtTakeover)
-        UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
+        deps.defaults.removeObject(forKey: Keys.loanStartedAt)
+        deps.defaults.removeObject(forKey: Keys.deliveredAtTakeover)
+        deps.defaults.removeObject(forKey: Keys.deliveredAtGrant)
     }
 
     /// Judged by send time: a batch that sat in a queue renews nothing.

@@ -129,6 +129,10 @@ final class PodLoanPhoneController {
         /// Proxy for the phone being near the user.
         var latestGlucoseDate: () -> Date? = { nil }
         var now: () -> Date = { Date() }
+
+        /// Storage seams for tests. A nil directory keeps each file in its app location.
+        var defaults: UserDefaults = .standard
+        var stateDirectory: URL? = nil
     }
 
     /// Book a placeholder bolus for unexplained insulin after a force reclaim.
@@ -234,14 +238,14 @@ final class PodLoanPhoneController {
     /// Restores the loan and re-arms what was owed; a loaned state pauses dosing at once.
     init(dependencies: Dependencies) {
         self.deps = dependencies
-        self.state = State(rawValue: UserDefaults.standard.string(forKey: Keys.state) ?? "") ?? .owner
-        self.epoch = UserDefaults.standard.object(forKey: Keys.epoch) as? Int ?? 0
+        self.state = State(rawValue: dependencies.defaults.string(forKey: Keys.state) ?? "") ?? .owner
+        self.epoch = dependencies.defaults.object(forKey: Keys.epoch) as? Int ?? 0
 
-        self.yieldingToInferredLoan = UserDefaults.standard.bool(forKey: Keys.yieldingToInferredLoan)
-        self.committedCursor = UserDefaults.standard.object(forKey: Keys.cursor) as? Int ?? 0
-        self.pendingRevoke = UserDefaults.standard.bool(forKey: Keys.pendingRevoke)
-        self.loanStartedAt = UserDefaults.standard.object(forKey: Keys.loanStartedAt) as? Date
-        if let raw = UserDefaults.standard.array(forKey: Keys.committedIDs) as? [String] {
+        self.yieldingToInferredLoan = dependencies.defaults.bool(forKey: Keys.yieldingToInferredLoan)
+        self.committedCursor = dependencies.defaults.object(forKey: Keys.cursor) as? Int ?? 0
+        self.pendingRevoke = dependencies.defaults.bool(forKey: Keys.pendingRevoke)
+        self.loanStartedAt = dependencies.defaults.object(forKey: Keys.loanStartedAt) as? Date
+        if let raw = dependencies.defaults.array(forKey: Keys.committedIDs) as? [String] {
             self.committedIDs = Set(raw.compactMap(UUID.init(uuidString:)))
         } else {
             self.committedIDs = []
@@ -249,7 +253,7 @@ final class PodLoanPhoneController {
         loadStaged()
 
         // Only a base from this epoch.
-        if let d = UserDefaults.standard.dictionary(forKey: Keys.auditBase),
+        if let d = dependencies.defaults.dictionary(forKey: Keys.auditBase),
            let units = d["units"] as? Double, let asOf = d["asOf"] as? Date,
            (d["epoch"] as? Int) == self.epoch {
             self.auditBase = AuditBase(units: units, asOf: asOf)
@@ -258,19 +262,19 @@ final class PodLoanPhoneController {
         installPodLinkCensus()
 
         // One-time purge of force-reclaim residuals from the diagnostic series.
-        if !UserDefaults.standard.bool(forKey: Keys.residualHistoryPurged) {
-            if var history = UserDefaults.standard.array(forKey: Keys.residualHistory) as? [Double] {
+        if !dependencies.defaults.bool(forKey: Keys.residualHistoryPurged) {
+            if var history = dependencies.defaults.array(forKey: Keys.residualHistory) as? [Double] {
                 let before = history.count
                 history.removeAll { $0 > 0.5 }
                 if history.count != before {
-                    UserDefaults.standard.set(history, forKey: Keys.residualHistory)
+                    dependencies.defaults.set(history, forKey: Keys.residualHistory)
                 }
             }
-            UserDefaults.standard.set(true, forKey: Keys.residualHistoryPurged)
+            dependencies.defaults.set(true, forKey: Keys.residualHistoryPurged)
         }
 
         // Re-arm an unruled force-reclaim audit.
-        if let saved = UserDefaults.standard.dictionary(forKey: Keys.pendingForceAudit),
+        if let saved = dependencies.defaults.dictionary(forKey: Keys.pendingForceAudit),
            let e = saved["epoch"] as? Int, let atStart = saved["atStart"] as? Double,
            let expected = saved["expected"] as? Double, let loanMinutes = saved["loanMinutes"] as? Double {
             pendingHandbackAudit = PendingHandbackAudit(
@@ -378,13 +382,13 @@ final class PodLoanPhoneController {
 
     /// Persisted: the blackout it answers can include a phone reboot.
     var yieldingToInferredLoan: Bool {
-        didSet { UserDefaults.standard.set(yieldingToInferredLoan, forKey: Keys.yieldingToInferredLoan) }
+        didSet { deps.defaults.set(yieldingToInferredLoan, forKey: Keys.yieldingToInferredLoan) }
     }
 
     /// Persisted; every route back to `.owner` opens the settle window before observers hear of it.
     var state: State {
         didSet {
-            UserDefaults.standard.set(state.rawValue, forKey: Keys.state)
+            deps.defaults.set(state.rawValue, forKey: Keys.state)
 
             if oldValue != state {
                 if oldValue != .owner, state == .owner {
@@ -399,23 +403,23 @@ final class PodLoanPhoneController {
 
     /// Monotonic; the watch rejects any epoch it has already seen.
     var epoch: Int {
-        didSet { UserDefaults.standard.set(epoch, forKey: Keys.epoch) }
+        didSet { deps.defaults.set(epoch, forKey: Keys.epoch) }
     }
 
     /// Reported to the watch; never the dedup test here.
     var committedCursor: Int {
-        didSet { UserDefaults.standard.set(committedCursor, forKey: Keys.cursor) }
+        didSet { deps.defaults.set(committedCursor, forKey: Keys.cursor) }
     }
 
     /// Persisted WITH the epoch that owns it, so a base can never be adopted by another loan.
     var auditBase: AuditBase? {
         didSet {
             if let b = auditBase {
-                UserDefaults.standard.set(["units": b.units, "asOf": b.asOf, "epoch": epoch,
+                deps.defaults.set(["units": b.units, "asOf": b.asOf, "epoch": epoch,
                                            "count": checkpointsThisLoan],
                                           forKey: Keys.auditBase)
             } else {
-                UserDefaults.standard.removeObject(forKey: Keys.auditBase)
+                deps.defaults.removeObject(forKey: Keys.auditBase)
             }
         }
     }
@@ -424,17 +428,17 @@ final class PodLoanPhoneController {
     var pendingHandbackAudit: PendingHandbackAudit? {
         didSet {
             if let p = pendingHandbackAudit, p.flavor == .forceReclaim {
-                UserDefaults.standard.set(["epoch": p.epoch, "atStart": p.deliveredAtStart,
+                deps.defaults.set(["epoch": p.epoch, "atStart": p.deliveredAtStart,
                                            "expected": p.expected, "loanMinutes": p.loanMinutes],
                                           forKey: Keys.pendingForceAudit)
             } else if oldValue?.flavor == .forceReclaim {
-                UserDefaults.standard.removeObject(forKey: Keys.pendingForceAudit)
+                deps.defaults.removeObject(forKey: Keys.pendingForceAudit)
             }
         }
     }
 
     /// Persisted so a relaunch re-sends the revoke.
     var pendingRevoke: Bool {
-        didSet { UserDefaults.standard.set(pendingRevoke, forKey: Keys.pendingRevoke) }
+        didSet { deps.defaults.set(pendingRevoke, forKey: Keys.pendingRevoke) }
     }
 }
