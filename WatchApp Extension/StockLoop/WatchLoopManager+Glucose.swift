@@ -259,7 +259,7 @@ extension WatchLoopManager: CGMManagerDelegate {
                 }
                 return
             }
-            SportLog.event("cgm", "G7 state: sensor \(storedID) is past its 10-day life — honouring the clear")
+            SportLog.event("cgm", "G7 state: sensor \(storedID) is past its session end — honouring the clear")
         }
 
         defaults.set(raw, forKey: Self.cgmStateDefaultsKey)
