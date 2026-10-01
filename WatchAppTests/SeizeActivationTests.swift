@@ -153,6 +153,27 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertEqual(second.storedDormantGrant()?.seizeToken, token, "the file wins over a re-seeded legacy key")
     }
 
+    /// A seized loan's phase and reunion token are saved together: a kill right after the phase
+    /// lands can no longer leave an active seized loan the phone cannot retro-acknowledge.
+    func testTheReunionTokenIsSavedWithTheActivePhase() async {
+        let controller = await makeController()
+        let token = UUID()
+        controller.pendingSeizeToken = token
+        let dir = journalDir!
+        var savedAtActive: PodLoanWatchState?
+        let observer = NotificationCenter.default.addObserver(forName: .podLoanPhaseDidChange, object: nil, queue: nil) { _ in
+            let file = PersistedProperty<[String: Any]>(key: "PodLoanWatchState", directory: dir)
+            if let state = file.wrappedValue.flatMap(PodLoanWatchState.init(rawValue:)), state.phase == .active, savedAtActive == nil {
+                savedAtActive = state
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        controller.queue.sync { controller.recordTakeoverActive(delivered: 10) }
+        XCTAssertEqual(savedAtActive?.seizeToken, token, "the first save that reads active already holds the token")
+        XCTAssertEqual(savedAtActive?.deliveredAtTakeover, 10)
+        XCTAssertNil(controller.pendingSeizeToken)
+    }
+
     /// No credential stored: the timeout keeps its pre-seize behavior (idle note, no offer).
     /// With a stored credential: the offer appears. R40(b): offered, never auto-taken.
     func testTimedOutRequestOffersOfflineStartOnlyWithACredential() async {
