@@ -2035,6 +2035,8 @@ extension PodLoanPhoneControllerTests {
                           events: [], tombstones: [], recovered: false)).transportDictionary())
         wait(for: [ackSent], timeout: 5)
         waitForState(controller, .owner)
+        // The phase is visible before its observer stamps the settle start; let that land first.
+        controller.queue.sync {}
 
         clock = clock.addingTimeInterval(9.5)       // 0.95 of the 10 s promise
         let capped = try XCTUnwrap(controller.reclaimProgress)
