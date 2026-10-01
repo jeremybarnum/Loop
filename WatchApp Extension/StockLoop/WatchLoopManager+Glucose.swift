@@ -236,8 +236,7 @@ extension WatchLoopManager: CGMManagerDelegate {
         log.default("CGM manager requested deletion (ignored on watch)")
     }
 
-    /// Also read by `StockLoopStack.assemble` at launch to rebuild the manager from the last
-    /// known sensor. One key, two readers — the age escape has to be applied on both paths.
+    /// Retired: the state now lives in `cgmManagerState`, migrated once at launch.
     static let cgmStateDefaultsKey = "g7.cgmManagerRawState"
 
     /// Persists the G7 state as stock does, but a nil `sensorID` means unknown, not forget, until
@@ -248,7 +247,7 @@ extension WatchLoopManager: CGMManagerDelegate {
         let sensorID = raw["sensorID"] as? String
 
         if sensorID == nil,
-           let stored = defaults.dictionary(forKey: Self.cgmStateDefaultsKey),
+           let stored = cgmManagerState.wrappedValue,
            let storedID = stored["sensorID"] as? String {
             let activated = stored["activatedAt"] as? Date
             let expired = Self.persistedSensorIsPastLife(activated, reportedEnd: Self.reportedEnd(of: G7CGMManager(rawState: stored)), now: now())
@@ -262,7 +261,7 @@ extension WatchLoopManager: CGMManagerDelegate {
             SportLog.event("cgm", "G7 state: sensor \(storedID) is past its session end — honouring the clear")
         }
 
-        defaults.set(raw, forKey: Self.cgmStateDefaultsKey)
+        cgmManagerState.wrappedValue = raw
         if sensorID != lastPersistedSensorID {
             lastPersistedSensorID = sensorID
             SportLog.event("cgm", "G7 state persisted — sensor \(sensorID ?? "none") (survives relaunch/update)")
