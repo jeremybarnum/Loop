@@ -92,7 +92,7 @@ extension PodLoanWatchController {
                     return
                 }
                 self.reunionPromptActive = true
-                SportLog.event("seize", "phone is back — REUNION PROMPT raised (R40(f): the hand-back stays the user's deliberate act) [seize]")
+                SportLog.event("seize", "phone is back — REUNION PROMPT raised (the hand-back stays the user's deliberate act) [seize]")
                 self.notifyUI()
                 self.issueReunionPromptAlert()
 

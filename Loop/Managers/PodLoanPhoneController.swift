@@ -270,7 +270,7 @@ final class PodLoanPhoneController {
                 watchLatest: nil, watchFreshened: false, flavor: .forceReclaim)
             queue.async { [weak self] in
                 guard let self = self else { return }
-                self.handbackDiag(e, "R37 audit RE-ARMED after relaunch — verdict still owed")
+                self.handbackDiag(e, "force-reclaim audit RE-ARMED after relaunch — verdict still owed")
                 self.beginReclaimSettleWindow()
             }
         }

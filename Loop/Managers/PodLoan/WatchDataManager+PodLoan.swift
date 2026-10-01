@@ -13,7 +13,7 @@ import LoopAlgorithm
 import LoopKit
 import LoopCore
 
-// MARK: - Loan protocol v2 (M5)
+// MARK: - Loan protocol v2
 
 extension WatchDataManager {
 

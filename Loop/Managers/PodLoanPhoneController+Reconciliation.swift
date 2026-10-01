@@ -111,7 +111,7 @@ extension PodLoanPhoneController {
     func applyReconciliationVerdict(residual: Double, epoch: Int) {
         if residual > Self.openLoopPositiveResidual {
             handbackDiag(epoch, String(format:
-                "** R32 OPEN LOOP — residual %+.3f U exceeds +%.2f: the pod delivered insulin our records do not contain. Automatic dosing STOPPED. **",
+                "** OPEN LOOP — residual %+.3f U exceeds +%.2f: the pod delivered insulin our records do not contain. Automatic dosing STOPPED. **",
                 residual, Self.openLoopPositiveResidual))
             deps.openLoopForUncertainReconciliation()
             armOpenLoopReminder()
@@ -120,7 +120,7 @@ extension PodLoanPhoneController {
                              String(format: "The pod delivered %.2f U more than the watch session's records account for. Automatic dosing is off until you turn it back on. Check your insulin on board before dosing.", residual))
         } else if residual < -Self.warnNegativeResidual {
             handbackDiag(epoch, String(format:
-                "** R32 WARN — residual %+.3f U beyond -%.2f: records claim more delivery than the pod made (phantom IOB). Still looping — this direction under-doses and decays out. **",
+                "** WARN — residual %+.3f U beyond -%.2f: records claim more delivery than the pod made (phantom IOB). Still looping — this direction under-doses and decays out. **",
                 residual, Self.warnNegativeResidual))
 
             deps.issueUrgentNotice("Insulin On Board May Be Overstated",
@@ -133,7 +133,7 @@ extension PodLoanPhoneController {
         deps.setAutomaticDosingPaused(false)
         if residual > Self.openLoopPositiveResidual {
             handbackDiag(epoch, String(format:
-                "** R37 OPEN LOOP — force-reclaim residual %+.3f U exceeds +%.2f: the pod delivered insulin the records cannot explain (watch died mid-session?). Automatic dosing STOPPED. **",
+                "** OPEN LOOP — force-reclaim residual %+.3f U exceeds +%.2f: the pod delivered insulin the records cannot explain (watch died mid-session?). Automatic dosing STOPPED. **",
                 residual, Self.openLoopPositiveResidual))
             deps.openLoopForUncertainReconciliation()
             armOpenLoopReminder()
@@ -149,14 +149,14 @@ extension PodLoanPhoneController {
             deps.issueUrgentNotice("Loop Open — Unverified Insulin", body)
         } else if residual < -Self.warnNegativeResidual {
             handbackDiag(epoch, String(format:
-                "** R37 WARN — force-reclaim residual %+.3f U beyond -%.2f: records claim more than the pod delivered (phantom IOB). Looping resumes — this direction under-doses and decays out. **",
+                "** WARN — force-reclaim residual %+.3f U beyond -%.2f: records claim more than the pod delivered (phantom IOB). Looping resumes — this direction under-doses and decays out. **",
                 residual, Self.warnNegativeResidual))
 
             deps.issueUrgentNotice("Insulin On Board May Be Overstated",
                              String(format: "After the watch session ended abruptly, records account for %.2f U more than the pod delivered. Automatic dosing resumes; expect it to run cautious until this clears.", -residual))
         } else {
             handbackDiag(epoch, String(format:
-                "R37 audit CLEAN — residual %+.3f U within ±%.2f; automatic dosing resumes", residual, Self.openLoopPositiveResidual))
+                "force-reclaim audit CLEAN — residual %+.3f U within ±%.2f; automatic dosing resumes", residual, Self.openLoopPositiveResidual))
         }
     }
 
@@ -175,9 +175,9 @@ extension PodLoanPhoneController {
                     self.updateState { $0.gapBooking = .init(epoch: epoch, units: units, bookedAt: now) }
 
                     self.armPlaceholderReminders(units: units, bookedAt: now)
-                    self.handbackDiag(epoch, String(format: "R37 gap BOOKED — %.2f U bolus @ reclaim (sync %@); retired if the watch returns", units, sync))
+                    self.handbackDiag(epoch, String(format: "force-reclaim gap BOOKED — %.2f U bolus @ reclaim (sync %@); retired if the watch returns", units, sync))
                 } else {
-                    self.handbackDiag(epoch, String(format: "** R37 gap booking FAILED to save — %.2f U is NOT in the books. Loop is open; dose by hand with that in mind. **", units))
+                    self.handbackDiag(epoch, String(format: "** force-reclaim gap booking FAILED to save — %.2f U is NOT in the books. Loop is open; dose by hand with that in mind. **", units))
                 }
             }
         }
@@ -193,11 +193,11 @@ extension PodLoanPhoneController {
 
         // Retry only after a failed delete; a standing placeholder stays.
         guard gap.deleteFailedAfterRecords else {
-            handbackDiag(gapEpoch, String(format: "R37 gap placeholder STANDS — %.2f U still unexplained; the watch never returned, so the booking is left in place", booked))
+            handbackDiag(gapEpoch, String(format: "force-reclaim gap placeholder STANDS — %.2f U still unexplained; the watch never returned, so the booking is left in place", booked))
             return
         }
         let sync = Self.gapSyncIdentifier(epoch: gapEpoch)
-        handbackDiag(gapEpoch, String(format: "R37 gap DELETE retrying at launch — %.2f U placeholder (sync %@) was unretired last session", booked, sync))
+        handbackDiag(gapEpoch, String(format: "force-reclaim gap DELETE retrying at launch — %.2f U placeholder (sync %@) was unretired last session", booked, sync))
         deps.deleteGapDose(sync) { [weak self] ok in
             guard let self = self else { return }
             self.queue.async {
@@ -205,9 +205,9 @@ extension PodLoanPhoneController {
                     self.updateState { $0.gapBooking = nil }
                     if let bookedAt = gap.bookedAt { self.deps.insulinHistoryRewritten(bookedAt) }
                     self.cancelPlaceholderReminders()
-                    self.handbackDiag(gapEpoch, String(format: "R37 gap RETIRED on launch retry — %.2f U placeholder cleared", booked))
+                    self.handbackDiag(gapEpoch, String(format: "force-reclaim gap RETIRED on launch retry — %.2f U placeholder cleared", booked))
                 } else {
-                    self.handbackDiag(gapEpoch, String(format: "** R37 gap DELETE FAILED AGAIN at launch — %.2f U placeholder still stands; will retry next launch or the next matching offer **", booked))
+                    self.handbackDiag(gapEpoch, String(format: "** force-reclaim gap DELETE FAILED AGAIN at launch — %.2f U placeholder still stands; will retry next launch or the next matching offer **", booked))
                 }
             }
         }
@@ -232,7 +232,7 @@ extension PodLoanPhoneController {
                     self.updateState { $0.gapBooking = nil }
                     if let bookedAt = gap.bookedAt { self.deps.insulinHistoryRewritten(bookedAt) }
                     self.handbackDiag(gapEpoch, String(format:
-                        "R37 gap RETIRED — the watch returned with %d real dose(s): %.2f U bolus + %d rate record(s) (%.2f U gross programmed, pre-truncation) and %d carb(s); the %.2f U estimate is replaced by actual timing",
+                        "force-reclaim gap RETIRED — the watch returned with %d real dose(s): %.2f U bolus + %d rate record(s) (%.2f U gross programmed, pre-truncation) and %d carb(s); the %.2f U estimate is replaced by actual timing",
                         dosesJustCommitted.count, bolusUnits, rateCount, rateGross, carbsJustCommitted, booked))
 
                     self.cancelPlaceholderReminders()
@@ -242,7 +242,7 @@ extension PodLoanPhoneController {
                 } else {
                     self.updateState { $0.gapBooking?.deleteFailedAfterRecords = true }
                     self.handbackDiag(gapEpoch, String(format:
-                        "** R37 gap DELETE FAILED — the %.2f U placeholder AND the real records are both booked; IOB is over-counted until this retries **", booked))
+                        "** force-reclaim gap DELETE FAILED — the %.2f U placeholder AND the real records are both booked; IOB is over-counted until this retries **", booked))
                 }
             }
         }

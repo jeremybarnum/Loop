@@ -3,7 +3,7 @@
 //  WatchAppTests
 //
 //  Does delivered insulin reach the algorithm's input? Drives the one book through its seed and
-//  the pump manager's report (field 2026-08-18: three boluses, dosing IOB stayed 0.00).
+//  the pump manager's report (the defect pinned: three boluses, dosing IOB stayed 0.00).
 //
 
 import XCTest
@@ -174,7 +174,7 @@ final class InsulinBookTests: XCTestCase {
             return XCTFail("the second recommendation must compute")
         }
         XCTAssertLessThan(nextAmount, firstAmount - 0.1,
-                          "taking \(firstAmount) U must reduce the next recommendation; an unchanged figure is the stacking path the wrist showed in the field")
+                          "taking \(firstAmount) U must reduce the next recommendation; an unchanged figure is the stacking path")
     }
 
     /// The displayed and dosing IOB are the same number.
@@ -192,7 +192,7 @@ final class InsulinBookTests: XCTestCase {
             return XCTFail("both IOB figures must exist before they can be compared")
         }
         XCTAssertEqual(shown, dosed, accuracy: 0.05,
-                       "the glance showed \(shown) U and the algorithm dosed on \(dosed) U — that is the 2026-08-18 defect exactly")
+                       "the glance showed \(shown) U and the algorithm dosed on \(dosed) U — the defect this file pins")
     }
 
     /// A running temp is a future-ending row; untrimmed, LoopAlgorithm throws `futureBasalNotAllowed`

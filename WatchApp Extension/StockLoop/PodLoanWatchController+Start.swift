@@ -29,7 +29,7 @@ extension PodLoanWatchController {
         let epoch = grant.epoch
         let grossImpliedSum = entries.reduce(0.0) { $0 + $1.programmedUnits }
         let liveNote = liveDoses.isEmpty ? "" :
-            String(format: "; %d live — delivery tracked from pod state (#72), latest ends +%.0fm",
+            String(format: "; %d live — delivery tracked from pod state, latest ends +%.0fm",
                    liveDoses.count, (liveDoses.map { $0.endDate }.max()!.timeIntervalSince(seedReconciliation)) / 60)
 
         let gate = DispatchSemaphore(value: 0)
@@ -246,7 +246,7 @@ extension PodLoanWatchController {
                 }
 
                 if self.isPhoneReachable() {
-                    SportLog.event("loan", "REQUEST TIMED OUT with phone REACHABLE — one-way wedge signature (#113)")
+                    SportLog.event("loan", "REQUEST TIMED OUT with phone REACHABLE — one-way wedge signature")
                 }
                 self.lastIdleNote = NSLocalizedString("No response from iPhone — check the phone (loan refused, or busy) and try again.", comment: "Glance: loan request timed out")
                 SportLog.event("loan", "REQUEST TIMED OUT — no grant in \(Int(timeout))s (phone refused / busy / unreachable)")

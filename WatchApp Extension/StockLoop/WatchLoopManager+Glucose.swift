@@ -189,7 +189,7 @@ extension WatchLoopManager: CGMManagerDelegate {
                 return false
             }
             if !dropped.isEmpty {
-                SportLog.event("glucose", "#83 dedup: dropped \(dropped.count) already-filed reading(s) [\(dropped.joined(separator: ", "))] — same sensor stamp, different device name tag")
+                SportLog.event("glucose", "dedup: dropped \(dropped.count) already-filed reading(s) [\(dropped.joined(separator: ", "))] — same sensor stamp, different device name tag")
             }
             completion(kept)
         }

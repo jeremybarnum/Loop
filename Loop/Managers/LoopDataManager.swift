@@ -632,7 +632,7 @@ final class LoopDataManager: ObservableObject {
         LoopAlgorithm.run(input: input)
     }
 
-    /// PODLOAN: true while the pod's BLE connection is loaned out (or being released); injected at wiring — see `LoopDataManager+PodLoan.swift`.
+    /// True while the pod's BLE connection is loaned out (or being released); injected at wiring — see `LoopDataManager+PodLoan.swift`.
     var isPumpConnectionReleased: () -> Bool = { false }
 
     /// Cancel the active temp basal if it was automatically issued
@@ -1304,7 +1304,7 @@ extension ManualBolusRecommendationWithDate {
     }
 }
 
-// PODLOAN: internal, not private — LoopDataManager+PodLoan.swift builds the same dosing decision.
+// Internal, not private — LoopDataManager+PodLoan.swift builds the same dosing decision.
 extension StoredDosingDecision.Settings {
     init?(_ settings: StoredSettings?) {
         guard let settings = settings else {

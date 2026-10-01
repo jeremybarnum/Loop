@@ -83,9 +83,9 @@ extension PodLoanWatchController {
         let wedgeSuffix: String
         switch wedge {
         case .sessionReestablishing:
-            wedgeSuffix = " · ** \(handbackResendCount) offers, phone reachable, zero acks — but the sends themselves ERRORED: session re-establishing (#113 variant B), usually self-heals in 1-2 min **"
+            wedgeSuffix = " · ** \(handbackResendCount) offers, phone reachable, zero acks — but the sends themselves ERRORED: session re-establishing, usually self-heals in 1-2 min **"
         case .oneWay:
-            wedgeSuffix = " · ** \(handbackResendCount) offers, phone REACHABLE throughout, zero acks — transport wedge (#113 variant A); restarting the WATCH app is the known recovery **"
+            wedgeSuffix = " · ** \(handbackResendCount) offers, phone REACHABLE throughout, zero acks — transport wedge; restarting the WATCH app is the known recovery **"
         case .none:
             wedgeSuffix = ""
         }
@@ -149,7 +149,7 @@ extension PodLoanWatchController {
         loopManager.pumpManager = nil
 
         if runningTemp != nil {
-            SportLog.event("loan", String(format: "hand-back: our temp (%.2f U/hr until %@) stays live until the phone cancels it on reclaim (R33, phone-enforced)",
+            SportLog.event("loan", String(format: "hand-back: our temp (%.2f U/hr until %@) stays live until the phone cancels it on reclaim (phone-enforced)",
                                           runningTemp?.unitsPerHour ?? 0,
                                           runningTemp.map { ISO8601DateFormatter().string(from: $0.endDate) } ?? "—"))
         }
@@ -382,7 +382,7 @@ extension PodLoanWatchController {
         guard let current = epoch, query.epoch == current else {
             if phase != .active, (epoch ?? Int.min) < query.epoch {
                 // An explicit no lets the phone give up early.
-                SportLog.event("loan", "status query for epoch \(query.epoch) — we have \(epoch.map(String.init) ?? "none") and hold no pod: the grant never reached us (#108)")
+                SportLog.event("loan", "status query for epoch \(query.epoch) — we have \(epoch.map(String.init) ?? "none") and hold no pod: the grant never reached us")
                 sendMessage(.statusReport(StatusReport(
                     epoch: query.epoch,
                     mode: currentMode(),

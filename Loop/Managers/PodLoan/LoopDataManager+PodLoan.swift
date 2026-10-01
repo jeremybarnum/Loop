@@ -20,7 +20,7 @@ extension LoopDataManager {
 
     /// A temp cancel outside loop() at a loan boundary, as stock's cancelActiveTempBasal does.
     func cancelTempBasalForPodLoan(reason: CancelActiveTempBasalReason) async throws {
-        logger.default("PODLOAN: cancelling temp at the loan boundary (%{public}@; cached basalDeliveryState was %{public}@)",
+        logger.default("Cancelling temp at the pod-loan boundary (%{public}@; cached basalDeliveryState was %{public}@)",
                        reason.rawValue, String(describing: deliveryDelegate?.basalDeliveryState))
 
         let recommendation = AutomaticDoseRecommendation(basalAdjustment: .cancel, direction: .decrease)
@@ -44,7 +44,7 @@ extension LoopDataManager {
 
     /// The loan's insulin rewrote history from `date`; the next cycle reads it, so just refresh.
     func insulinHistoryRewritten(startingAt date: Date) {
-        logger.default("PODLOAN: insulin history rewritten from %{public}@", String(describing: date))
+        logger.default("Pod loan rewrote insulin history from %{public}@", String(describing: date))
         Task { await updateDisplayState() }
     }
 }

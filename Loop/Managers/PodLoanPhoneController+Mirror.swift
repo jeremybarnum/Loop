@@ -54,7 +54,7 @@ extension PodLoanPhoneController {
         deps.issueNotice(
             NSLocalizedString("Pod Looks Controlled by the Watch", comment: "Phone notice title when the phone yields to an inferred watch loan"),
             NSLocalizedString("This phone has paused automatic dosing because the pod appears to be in use by the watch. Tap the pod tile to take it back.", comment: "Phone notice body when the phone yields to an inferred watch loan"))
-        PhoneLog.event("mirror", "YIELDING to an inferred loan — \(evidence); pill=Pod on Watch, dosing paused, pod BLE released, exits: pill tap / watch revival / R40(f) prompt (R40(a): on conflict the phone yields) [mirror]")
+        PhoneLog.event("mirror", "YIELDING to an inferred loan — \(evidence); pill=Pod on Watch, dosing paused, pod BLE released, exits: pill tap / watch revival / reunion prompt; on conflict the phone yields [mirror]")
     }
 
     /// Take the radio back; every route back to ownership must call it.
@@ -85,7 +85,7 @@ extension PodLoanPhoneController {
     private func armGrantLostProbe(for grantEpoch: Int) {
         queue.asyncAfter(deadline: .now() + Self.grantLostProbeDelay) { [weak self] in
             guard let self = self, self.state == .grantOffered, self.epoch == grantEpoch else { return }
-            self.handbackDiag(grantEpoch, String(format: "grant unconfirmed after %.0fs — asking the watch whether it arrived (#108)", Self.grantLostProbeDelay))
+            self.handbackDiag(grantEpoch, String(format: "grant unconfirmed after %.0fs — asking the watch whether it arrived", Self.grantLostProbeDelay))
 
             if !self.deps.watchAppInstalled() {
                 self.handbackDiag(grantEpoch, "grant unconfirmed AND isWatchAppInstalled=false — one-way wedge signature")
@@ -194,7 +194,7 @@ extension PodLoanPhoneController {
         }
         // The watch does not know this grant: no need to wait out the dead-man.
         if state == .grantOffered, report.knowsGrant == false, !report.holdsPod {
-            handbackDiag(report.epoch, "grant CONFIRMED LOST by the watch — reclaiming now instead of waiting out the 5-minute timer (#108)")
+            handbackDiag(report.epoch, "grant CONFIRMED LOST by the watch — reclaiming now instead of waiting out the 5-minute timer")
             t1WorkItem?.cancel()
             cancelNotification(id: NotificationID.t1)
 

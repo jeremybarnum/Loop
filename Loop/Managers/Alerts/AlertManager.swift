@@ -181,7 +181,7 @@ public final class AlertManager {
 
     // MARK: - Loop Not Running alerts
 
-    /// PODLOAN: true while a pod loan is active; set by WatchDataManager at wiring time — see `AlertManager+PodLoan.swift`.
+    /// True while a pod loan is active; set by WatchDataManager at wiring time — see `AlertManager+PodLoan.swift`.
     var loopNotRunningSuppressionGate: (() -> Bool)?
 
     func loopDidComplete(_ lastLoopDate: Date? = nil) async {

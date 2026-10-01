@@ -54,7 +54,7 @@ class MealDetectionManager {
 
     private lazy var cancellables = Set<AnyCancellable>()
 
-    /// PODLOAN: true while the watch holds the pod; its carbs reach the store only at hand-back.
+    /// True while the watch holds the pod on loan; its carbs reach the store only at hand-back.
     var loanSuppressionGate: (() -> Bool)?
 
     // For testing only

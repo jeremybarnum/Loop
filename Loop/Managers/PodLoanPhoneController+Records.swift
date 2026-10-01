@@ -115,7 +115,7 @@ extension PodLoanPhoneController {
             if !(storedIsFinal && offer.released != true) {
                 coalescedOffers[offer.epoch] = offer
             }
-            handbackDiag(offer.epoch, "offer COALESCED behind the in-flight write (#118) — \(coalescedOffers.count) waiting")
+            handbackDiag(offer.epoch, "offer COALESCED behind the in-flight write — \(coalescedOffers.count) waiting")
             return
         }
 
@@ -338,11 +338,11 @@ extension PodLoanPhoneController {
                     backfillOutcome.doses.filter { $0.endDate >= $0.startDate }))
                 if isStale || backfill.isEmpty {
                     if isStale {
-                        self.handbackDiag(offer.epoch, "backfill SKIPPED — a stale offer speaks only for its own records (#102)")
+                        self.handbackDiag(offer.epoch, "backfill SKIPPED — a stale offer speaks only for its own records")
                     }
                     finishCommit(nil)
                 } else {
-                    self.handbackDiag(offer.epoch, "backfill \(backfill.count) loan-window dose(s) by store identity (e44 boundary)")
+                    self.handbackDiag(offer.epoch, "backfill \(backfill.count) loan-window dose(s) by store identity (past the store's basal boundary)")
                     backfillEarliestStart = backfill.map(\.startDate).min()
                     self.deps.backfillDoses(backfill, finishCommit)
                 }

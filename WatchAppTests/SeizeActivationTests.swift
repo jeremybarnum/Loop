@@ -113,8 +113,8 @@ final class SeizeActivationTests: XCTestCase {
 
     // MARK: - The root-cause pin
 
-    /// The rebuild mints both the fresh epoch and the live lease (field 2026-08-30: the lease
-    /// guard killed the takeover at read 1).
+    /// The rebuild mints both the fresh epoch and the live lease (without the lease,
+    /// the lease guard kills the takeover at its first read).
     func testActivationRebuildMintsTheEpochAndTheLiveLease() {
         let issuedAt = Date().addingTimeInterval(-3600)   // an hour-old credential, routine for seize
         let dormant = fixtureDormant(issuedAt: issuedAt, epoch: 3)
@@ -176,7 +176,7 @@ final class SeizeActivationTests: XCTestCase {
         snap = controller.debugSnapshot()
         XCTAssertNotNil(snap.seizeOfferIssuedAt, "credential stored → the timeout offers the offline start")
         XCTAssertEqual(snap.seizeOfferIssuedAt.map { abs($0.timeIntervalSince(issuedAt)) < 1 }, true,
-                       "the offer carries the credential's issue stamp (R40(d): age shown)")
+                       "the offer carries the credential's issue stamp, so its age can be shown")
         XCTAssertNil(snap.lastIdleNote, "the offer replaces the failure note")
     }
 
@@ -224,7 +224,7 @@ final class SeizeActivationTests: XCTestCase {
                      "no .active, no persisted token — a failed activation must leave nothing to echo")
     }
 
-    // MARK: - Re-entry over a parked drain (field 2026-08-30)
+    // MARK: - Re-entry over a parked drain
 
     /// The journal fold: adoptEpoch re-tags the epoch and keeps every event, seq, cursor,
     /// and tombstone — the one sanctioned way past begin()'s refuse-to-clobber.
@@ -321,7 +321,7 @@ final class SeizeActivationTests: XCTestCase {
         pendingDebounce[0].perform()                                // 30 s later, phone still reachable
         var snap = controller.debugSnapshot()
         XCTAssertTrue(snap.reunionPromptVisible, "the fire raises the PROMPT")
-        XCTAssertEqual(snap.phase, .active, "…and the loan continues — never auto-ended (R40(f))")
+        XCTAssertEqual(snap.phase, .active, "…and the loan continues — never auto-ended")
 
         // KEEP dismisses; a fresh reachability transition may prompt again later.
         controller.dismissReunionPrompt()
@@ -383,7 +383,7 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertEqual(snap.phase, .active, "and must not touch the loan")
     }
 
-    /// A seize epoch clears the high-water mark and the recorded revoke (field 2026-08-31).
+    /// A seize epoch clears the high-water mark and the recorded revoke.
     func testSeizeEpochClearsHighWaterAndRevokeMarks() async throws {
         defaults.set(5, forKey: "PodLoanWatchController.highWaterEpoch")
         let controller = await makeController()
@@ -494,17 +494,17 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertEqual(live.phase, .active, "precondition: a live loan")
         guard let ours = live.epoch else { return XCTFail("active loan has no epoch") }
 
-        // A ghost-grant probe for an older epoch — the tape's 21:21:31 silence.
+        // A ghost-grant probe for an older epoch — once left unanswered.
         controller.handleIncoming(userInfo: try LoanMessage.statusQuery(StatusQuery(epoch: ours - 1)).transportDictionary(), channel: .queued)
         _ = controller.debugSnapshot()
         XCTAssertEqual(holdsPodEpochs, [ours], "the stale query is answered with the loan we hold")
 
-        // A stale revoke — the tape's 21:24 'RECORDED' twice while the phone heard nothing.
+        // A stale revoke — once 'RECORDED' twice while the phone heard nothing.
         controller.handleIncoming(userInfo: try LoanMessage.revoke(Revoke(epoch: ours - 1)).transportDictionary(), channel: .queued)
         _ = controller.debugSnapshot()
         XCTAssertEqual(holdsPodEpochs, [ours, ours], "the refused revoke says what it refused FOR")
 
-        // The ghost grant itself — the tape's 21:21:13 'grant ignored — wrong phase'.
+        // The ghost grant itself — once 'grant ignored — wrong phase' with no reply.
         let ghost = fixtureDormant(issuedAt: Date(), epoch: max(ours - 1, 1), completeSettings: true).grant
             .withEpoch(max(ours - 1, 1), leaseUntil: Date().addingTimeInterval(300))
         controller.handleIncoming(userInfo: try LoanMessage.grant(ghost).transportDictionary(), channel: .queued)
@@ -537,7 +537,7 @@ final class SeizeActivationTests: XCTestCase {
 
     // MARK: - The offer answers one unanswered request
 
-    /// With the phone reachable at confirm, an ordinary request goes out (field 2026-09-24).
+    /// With the phone reachable at confirm, an ordinary request goes out.
     func testConfirmWithThePhoneBackSendsAnOrdinaryRequest() async {
         let controller = await makeController()
         controller.isPhoneReachable = { false }
@@ -566,7 +566,7 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertNil(controller.persisted.seizeToken)
     }
 
-    /// An accepted grant withdraws the offline offer (bench 2026-09-26).
+    /// An accepted grant withdraws the offline offer.
     func testALateGrantWithdrawsTheOfflineOffer() async throws {
         let controller = await makeController()
         controller.isPhoneReachable = { false }

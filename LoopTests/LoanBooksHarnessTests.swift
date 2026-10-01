@@ -179,18 +179,18 @@ private final class LoanBooksDriver {
     // MARK: Low-level primitives (for scripting broken shapes)
 
     /// A finished/truncated row straight into the STORE only — test 1(b)'s known-wrong
-    /// dead-re-arm shape (C5 record seeded, pod never re-reported).
+    /// dead-re-arm shape (handover truncation record seeded, pod never re-reported).
     func storeFinished(_ dose: DoseEntry, raw: Data, lastReconciliation: Date) {
         addToStore([NewPumpEvent(date: dose.startDate, dose: dose, raw: raw, title: "Temp Basal")],
                    lastReconciliation: lastReconciliation, replacePendingEvents: false)
     }
 
-    /// e44: a raw batch, scripted event by event for the force-reclaim seam.
+    /// A raw batch, scripted event by event for the force-reclaim seam.
     func storeEvents(_ events: [NewPumpEvent], lastReconciliation: Date) {
         addToStore(events, lastReconciliation: lastReconciliation, replacePendingEvents: false)
     }
 
-    /// e44: `backfillDoses` against the real store (update-or-insert by syncIdentifier).
+    /// `backfillDoses` against the real store (update-or-insert by syncIdentifier).
     func backfill(_ doses: [DoseEntry]) {
         let exp = host.expectation(description: "syncDoseEntries")
         Task {
@@ -345,8 +345,7 @@ final class LoanBooksHarnessTests: XCTestCase {
 
     // MARK: - 2. The bolus twin pair
 
-    /// A bolus seeded as both a zero-length journal row and a pod-native row double-books
-    /// (field 2026-07-29).
+    /// A bolus seeded as both a zero-length journal row and a pod-native row double-books.
     func testDuplicateBolusTwinDetection() {
         let now = Date()
         let b = now.addingTimeInterval(-.minutes(5))
@@ -369,21 +368,22 @@ final class LoanBooksHarnessTests: XCTestCase {
                        "distinct identities blind every store dedup layer — both twins land as rows")
         let sample = driver.tick(at: now)
         XCTAssertEqual(sample, 1.90, accuracy: 0.1,
-                       "the store books BOTH twins: ~2 × 0.95 U of IOB for one physical bolus (+0.95 U phantom, field 2026-07-29)")
+                       "the store books BOTH twins: ~2 × 0.95 U of IOB for one physical bolus (+0.95 U phantom)")
     }
 
     // MARK: - 3. The hand-back seam
 
     /// The watch-to-phone IOB seam across a hand-back is explained by decay plus the zero temp's
-    /// withheld basal, within 0.1 U (field 2026-07-29).
+    /// withheld basal, within 0.1 U. Replays a recorded hand-back (2026-07-29): the
+    /// odd offsets and the clock times in the comments below are that session's.
     func testHandbackSeamCloses() {
         let now = Date()
-        let t = now.addingTimeInterval(-.minutes(20))         // plays the field 21:16
+        let t = now.addingTimeInterval(-.minutes(20))         // plays 21:16
         let handback = t.addingTimeInterval(.minutes(4.3))    // 21:20:18 — cancel/truncate
         let phoneEval = t.addingTimeInterval(.minutes(4.5))   // 21:21 — first phone sample
 
         let watch = makeDriver()
-        // The field numbers: 0.95 U at t−31 min, then 2.80 superseded by 0.00.
+        // The recorded numbers: 0.95 U at t−31 min, then 2.80 superseded by 0.00.
         watch.enactBolus(units: 0.95, at: t.addingTimeInterval(-.minutes(31)))
         watch.enactTemp(rate: 2.80, at: t.addingTimeInterval(-.minutes(26)), duration: .minutes(30))
         watch.enactTemp(rate: 0.00, at: t.addingTimeInterval(-.minutes(16)), duration: .minutes(12))
@@ -500,7 +500,7 @@ final class LoanBooksHarnessTests: XCTestCase {
 
     // MARK: - 6. The bolus-crash fix — books land after the hop
 
-    /// A bolus through the hopped topology lands in the book (field IOB 2.33).
+    /// A bolus through the hopped topology lands in the book.
     func testBolusLandsInTheBookAfterQueueHop() {
         let now = Date()
         let bolusStart = now.addingTimeInterval(-.minutes(5))  // inside the model delay: IOB is the full dose
@@ -525,7 +525,7 @@ final class LoanBooksHarnessTests: XCTestCase {
 
         let sample = driver.tick(at: now)
         XCTAssertEqual(sample, 2.33, accuracy: 0.1,
-                       "the store must carry the full delivered bolus (field 20:45: 2.33)")
+                       "the store must carry the full delivered bolus")
     }
 
     // MARK: - Carb-side helpers (tests 7-8)
@@ -735,8 +735,7 @@ final class LoanBooksHarnessTests: XCTestCase {
 
     // MARK: - 8. The relay gap — truncated phone ICE overstates COB
 
-    /// A phone missing loan-window glucose credits less absorption and so shows more COB
-    /// (field 2026-07-29, the 6 g vs 7 g seam).
+    /// A phone missing loan-window glucose credits less absorption and so shows more COB.
     func testTruncatedPhoneICEOverstatesCOB() {
         let now = Date()
         let handback = now
@@ -766,17 +765,17 @@ final class LoanBooksHarnessTests: XCTestCase {
 
         // Assert the direction with a ≥1 g floor.
         XCTAssertGreaterThan(phoneTruncatedCOB, watchCOB,
-                             "relay-gap direction: the truncated-ICE phone must read HIGHER COB (6g-vs-7g, 2026-07-29 21:21)")
+                             "relay-gap direction: the truncated-ICE phone must read HIGHER COB")
         XCTAssertGreaterThan(phoneTruncatedCOB - watchCOB, 1.0,
-                             "the gap must be material — at least the field's +1 g seam")
+                             "the gap must be material — at least 1 g")
         XCTAssertLessThanOrEqual(phoneTruncatedCOB, 20.0 + 0.01,
                                  "sanity: COB can never exceed the entry")
     }
 
-    // MARK: - 9. e44 — the store's basal boundary vs a late journal commit
+    // MARK: - 9. The store's basal boundary vs a late journal commit
 
     /// Force-reclaim salvage then a late journal: `addPumpEvents` drops basal-shaped rows before
-    /// `lastImmutableBasalEndDate`; the backfill upsert lands them (field e44, 2026-08-13).
+    /// `lastImmutableBasalEndDate`; the backfill upsert lands them.
     func testForceReclaimSalvageThenLateJournalCommitLandsTempsInTheBooks() {
         let now = Date()
         let loanStart = now.addingTimeInterval(-.minutes(40))
@@ -866,7 +865,7 @@ final class LoanBooksHarnessTests: XCTestCase {
                 + rows(hexT3, list).reduce(0) { $0 + $1.programmedUnits }
         }
 
-        // 5. THE e44 SIGNATURE, from the real store.
+        // 5. THE BOUNDARY SIGNATURE, from the real store.
         let broken = driver.normalizedDoses(start: loanStart, end: handedBack)
         XCTAssertFalse(rows(hexBolus, broken).isEmpty, "the bolus escapes the boundary filter — DoseStore.swift:1174")
         XCTAssertTrue(rows(hexT3, broken).isEmpty,
@@ -902,8 +901,7 @@ final class LoanBooksHarnessTests: XCTestCase {
 
 // MARK: - Pulse-quantization fidelity across the wire
 
-/// Temps must carry the pod's floored units; re-deriving by rounding drifts +0.025 U per slice
-/// (field 2026-07-30, epoch 73).
+/// Temps must carry the pod's floored units; re-deriving by rounding drifts +0.025 U per slice.
 final class LoanWireQuantizationTests: XCTestCase {
 
     /// The seeded temp reproduces the phone's floored units.
@@ -933,7 +931,7 @@ final class LoanWireQuantizationTests: XCTestCase {
         }
         XCTAssertNil(legacySeeded.deliveredUnits, "older phones send no actual — fallback path")
         XCTAssertGreaterThan(legacySeeded.unitsInDeliverableIncrements, podFloored,
-                             "the fallback rounds UP here — the field over-statement, pinned")
+                             "the fallback rounds UP here — the over-statement, pinned")
     }
 
     /// The per-slice drift is one-signed.
@@ -959,7 +957,7 @@ final class LoanWireQuantizationTests: XCTestCase {
         XCTAssertGreaterThan(roundedTotal, flooredTotal,
                              "the pre-fix path must over-count — one-signed, never under")
         XCTAssertEqual(roundedTotal - flooredTotal, 0.025 * 33, accuracy: 0.025 * 33 * 0.6,
-                       "drift scales with slice count at ~0.025 U each (field: 33 slices → +0.30)")
+                       "drift scales with slice count at ~0.025 U each")
     }
 }
 

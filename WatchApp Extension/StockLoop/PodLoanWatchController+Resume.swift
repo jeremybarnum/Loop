@@ -89,7 +89,7 @@ extension PodLoanWatchController {
                 loopManager.checkPumpDataAndLoop()
             }
         }
-        SportLog.event("loan", "RESUMED — epoch \(epoch ?? -1) rebuilt from saved pod state after a relaunch (R40(e): stock relaunch) · \(RuntimeStateLog.snapshot())")
+        SportLog.event("loan", "RESUMED — epoch \(epoch ?? -1) rebuilt from saved pod state after a relaunch (stock relaunch) · \(RuntimeStateLog.snapshot())")
     }
 
     /// For a session that cannot resume: records may not have reached the phone yet.

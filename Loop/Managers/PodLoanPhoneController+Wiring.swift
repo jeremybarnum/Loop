@@ -117,7 +117,7 @@ extension WatchDataManager {
                                    DateFormatter.localizedString(from: e.startDate, dateStyle: .none, timeStyle: .medium),
                                    e.syncIdentifier.map { String($0.prefix(8)) } ?? "nil")
                         }.joined(separator: " | ")
-                        self.log.default("PODLOAN carb delete: no match for %.0f g @ %{public}@ · candidates: %{public}@",
+                        self.log.default("Pod loan carb delete: no match for %.0f g @ %{public}@ · candidates: %{public}@",
                                          gone.grams, String(describing: gone.startDate), lineup)
                         completion(NSError(domain: "PodLoan.carbDelete", code: 404, userInfo: [
                             NSLocalizedDescriptionKey: "no match among \(entries.count) candidate(s): \(lineup)"]))

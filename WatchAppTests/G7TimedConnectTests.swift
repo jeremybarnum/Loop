@@ -21,7 +21,7 @@ private class TestBluetoothManager: G7BluetoothManager {
 }
 
 /// An adopted sensor skips discovery, where stock latches activation; unlatched, every reading
-/// was "invalid" and glucose froze (2026-09-19).
+/// was "invalid" and glucose froze.
 final class G7AdoptedSensorActivationTests: XCTestCase {
     private func message(_ hex: String) -> G7GlucoseMessage { G7GlucoseMessage(data: Data(hexadecimalString: hex)!)! }
 
@@ -120,8 +120,8 @@ final class G7WatchAcquisitionTests: XCTestCase {
     }
 
     func testTheGridDelayWithNoReadingOnRecordClearsTheTailLikeTheHold() {
-        // No grid to aim at, but never a plain connect straight after a close: on 2026-09-16 a
-        // same-burst failure storm (58 of 77 handshakes) began with exactly that.
+        // No grid to aim at, but never a plain connect straight after a close: a same-burst
+        // failure storm (58 of 77 handshakes) once began with exactly that.
         XCTAssertEqual(G7WatchAcquisition.relodgePlan(.gridDelay, sinceLinkUp: 3.5, anchor: nil), .holdThenConnect(wait: 31.5))
         XCTAssertNil(G7WatchAcquisition.relodgePlan(.gridDelay, sinceLinkUp: 120, anchor: nil))
     }

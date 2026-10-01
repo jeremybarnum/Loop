@@ -73,7 +73,7 @@ final class StockLoopSession {
                 let cancelled = stale.filter { !$0.isTransferring }
                 guard !cancelled.isEmpty else { return }
                 cancelled.forEach { $0.cancel() }
-                SportLog.event("wc", "superseded \(cancelled.count) queued offer(s) with the fresh one (#120)")
+                SportLog.event("wc", "superseded \(cancelled.count) queued offer(s) with the fresh one")
             }
 
             // A live hand-back offer is never queued: accepted late, it would split the pod.
@@ -149,7 +149,7 @@ final class StockLoopSession {
         startLinkCensus()
 
         // No radio arbiter between G7 and pod; contention during acquisition is unmeasured.
-        SportLog.event("policy", "link policy AUTOMATIC (#101): pod orphaned between doses, reclaim per cycle, acquisition-gated while un-adopted")
+        SportLog.event("policy", "link policy AUTOMATIC: pod orphaned between doses, reclaim per cycle, acquisition-gated while un-adopted")
     }
 
     private static let previousLaunchKey = "SportMode.previousLaunchAt"

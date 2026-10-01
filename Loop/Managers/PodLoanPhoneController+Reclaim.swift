@@ -200,7 +200,7 @@ extension PodLoanPhoneController {
 
         // Defer behind a write in flight, or carbs (which have no identity) would double.
         if commitInFlight {
-            handbackDiag(epoch, "force reclaim DEFERRED (#118) — a hand-back commit is writing; runs when it lands")
+            handbackDiag(epoch, "force reclaim DEFERRED — a hand-back commit is writing; runs when it lands")
             pendingForceReclaimReason = reason
             return
         }
@@ -282,7 +282,7 @@ extension PodLoanPhoneController {
             anchor = nil
         }
         guard let anchor = anchor, let schedule = deps.settings().basalRateSchedule else {
-            handbackDiag(epoch, "** R37 force-reclaim audit IMPOSSIBLE — no start odometer/schedule; loop OPENS on principle (cannot verify => do not resume) **")
+            handbackDiag(epoch, "** force-reclaim audit IMPOSSIBLE — no start odometer/schedule; loop OPENS on principle (cannot verify => do not resume) **")
             deps.openLoopForUncertainReconciliation()
             armOpenLoopReminder()
             deps.issueUrgentNotice("Watch Session Unverified", Self.sessionUnverifiedBody)
@@ -304,7 +304,7 @@ extension PodLoanPhoneController {
             takeoverUnits: takeoverUnits, wholeLoanExpected: wholeLoanExpected)
 
         handbackDiag(epoch, String(format:
-            "R37 audit armed — expected %.3f U from %d record(s) + schedule fill over window since %@ (%d checkpoint(s)); verdict on the reclaim round-trip",
+            "force-reclaim audit armed — expected %.3f U from %d record(s) + schedule fill over window since %@ (%d checkpoint(s)); verdict on the reclaim round-trip",
             expected, allEvents.count,
             checkpointsThisLoan > 0 ? String(format: "last sync %.0f min ago", deps.now().timeIntervalSince(anchor.asOf) / 60) : "takeover",
             checkpointsThisLoan))

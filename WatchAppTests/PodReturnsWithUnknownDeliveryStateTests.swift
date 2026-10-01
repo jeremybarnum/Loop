@@ -11,7 +11,7 @@ import LoopKit
 @testable import OmnipodKit
 
 /// A pump taken back after a release has unknown delivery: the controller reads before it
-/// writes (fault 0x31, 2026-09-19), and the copies of doses in flight at release are the other
+/// writes (or faults 0x31), and the copies of doses in flight at release are the other
 /// controller's.
 final class PodReturnsWithUnknownDeliveryStateTests: XCTestCase {
     private func makeManager(bolusInFlight: Bool) throws -> OmniPumpManager {

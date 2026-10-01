@@ -14,7 +14,7 @@ extension ExtensionDelegate {
     private static let bluetoothWakeStaleAfter: TimeInterval = 60
 
     /// Tasks already completed this wake. WatchKit can hand the same task over again, and
-    /// completing one twice throws (crash 2026-09-29 22:21:48, mid certificate exchange).
+    /// completing one twice throws (crash 2026-09-29, mid certificate exchange).
     private static var completedBluetoothTasks = Set<ObjectIdentifier>()
 
     private func completeOnce(_ task: WKBluetoothAlertRefreshBackgroundTask) {

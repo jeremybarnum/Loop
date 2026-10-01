@@ -150,11 +150,11 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertNotNil(c.pumpManager, "the pump manager is rebuilt from the saved state")
         XCTAssertNotNil(c.loopManager.pumpManager, "and handed to the loop, so dosing can resume")
         XCTAssertTrue(c.isLoanActiveNonBlocking,
-                      "the main-safe mirror is set — init loads the phase without its didSet (bench 2026-09-18: onboarding screen + blank IOB)")
+                      "the main-safe mirror is set — init loads the phase without its didSet (else: onboarding screen + blank IOB)")
         XCTAssertNotNil(c.loopManager.settings.basalRateSchedule,
-                        "the granted therapy settings came back from disk (bench 2026-09-18: blank IOB, no schedule)")
+                        "the granted therapy settings came back from disk (else: blank IOB, no schedule)")
         XCTAssertTrue(c.phoneSupportsInterimHandback,
-                      "the phone's hand-back capability comes back with the grant payload (bench 2026-09-18: resumed loan handed back single-phase)")
+                      "the phone's hand-back capability comes back with the grant payload (else: a resumed loan hands back single-phase)")
         XCTAssertNotNil(c.pumpStateStore.wrappedValue,
                         "the saved state stays on disk — the next relaunch resumes the same way")
     }
@@ -208,7 +208,7 @@ final class WakeResumeTests: XCTestCase {
         let relaunched = await makeController()
         XCTAssertEqual(relaunched.loopManager.lastLoopCompleted?.timeIntervalSince1970 ?? 0,
                        completed.timeIntervalSince1970, accuracy: 0.001,
-                       "the last-loop time comes back from disk (bench 2026-09-18: gray ring for one cycle)")
+                       "the last-loop time comes back from disk (else: gray ring for one cycle)")
     }
 
     func testLiveHandbackWithPhoneUnreachableFailsFastAndKeepsTheLoan() async {
@@ -255,11 +255,11 @@ final class WakeResumeTests: XCTestCase {
 
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         XCTAssertNotNil(c.loopManager.settings.basalRateSchedule, "therapy settings")
-        XCTAssertTrue(c.loopManager.closedLoopEnabledNonBlocking, "closed-loop mode — bench: a resumed loan came back OPEN")
+        XCTAssertTrue(c.loopManager.closedLoopEnabledNonBlocking, "closed-loop mode — else a resumed loan comes back OPEN")
         XCTAssertTrue(c.loopManager.isIntegralRetrospectiveCorrectionEnabled, "retrospective-correction mode")
         XCTAssertTrue(c.phoneSupportsInterimHandback, "the phone's interim hand-back capability")
         XCTAssertTrue(c.phoneSupportsOverrideRecords, "the phone's override-records capability")
-        XCTAssertEqual(c.deliveredAtTakeover, 12.5, "the delivery baseline — bench: the hand-back audit read delivered=n/a")
+        XCTAssertEqual(c.deliveredAtTakeover, 12.5, "the delivery baseline — else the hand-back audit reads delivered=n/a")
         XCTAssertTrue(c.isLoanActiveNonBlocking, "the live-loan mirror")
     }
 
@@ -335,7 +335,7 @@ final class WakeResumeTests: XCTestCase {
     // MARK: the rebuild after a relaunch
 
     func testASavedSessionIsLiveFromLaunchNotFromTheEndOfItsRebuild() async {
-        // State shows a live session before the slow pump rebuild finishes (field 2026-09-20).
+        // State shows a live session before the slow pump rebuild finishes.
         persistGrantedSettings()
         saveState {
             $0.phase = .active
@@ -414,7 +414,7 @@ final class WakeResumeTests: XCTestCase {
     }
 
     func testAReleasedWatchNeverResumesByTimer() async throws {
-        // Once released, no timer brings the watch back to dosing (field 2026-09-19).
+        // Once released, no timer brings the watch back to dosing.
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         c.isPhoneReachable = { true }
         var sent: [[String: Any]] = []

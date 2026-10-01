@@ -192,7 +192,7 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     }
 
     private func sendSetBolusUserInfo(carbEntry: NewCarbEntry?, bolus: Double) async throws {
-        // PODLOAN: during a loan the phone has released the pod, so bolus on the watch's pump. Carbs
+        // During a pod loan the phone has released the pod, so bolus on the watch's pump. Carbs
         // go to the local store and the loan journal, not the stock relay.
         if let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession,
            session.loanController.isLoanActive {

@@ -296,7 +296,7 @@ final class GlucoseAlertManager: ObservableObject {
 
     @Published var cgmProvidesOwnAlerts: Bool = false
 
-    /// PODLOAN: true while the watch holds the pod; set by WatchDataManager at wiring time.
+    /// True while the watch holds the pod on loan; set by WatchDataManager at wiring time.
     var predictedLowSuppressionGate: (() -> Bool)?
 
     var effectiveLoopAlertsEnabled: Bool {
@@ -692,7 +692,7 @@ final class GlucoseAlertManager: ObservableObject {
 
     func evaluatePredictedGlucose(_ predicted: [PredictedGlucoseValue], now: Date = Date()) async {
         guard effectiveLoopAlertsEnabled else { return }
-        // PODLOAN: this forecast lacks the watch's doses until hand-back; the wrist runs its own.
+        // During a pod loan this forecast lacks the watch's doses until hand-back; the wrist runs its own.
         guard predictedLowSuppressionGate?() != true else { return }
         let config = activeConfiguration(at: now)
         guard config.predictedLowEnabled else { return }

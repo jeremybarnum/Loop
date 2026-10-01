@@ -65,9 +65,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     var notices: [String] = []
     /// Drives Dependencies.isConnectionReady — false = pod still returning from a reclaim.
     var connectionReady = true
-    /// Item 1: every HANDBACK-DIAG line the controller emitted (the harness otherwise drops .diag).
+    /// Every HANDBACK-DIAG line the controller emitted (the harness otherwise drops .diag).
     var diags: [String] = []
-    /// Item 1: how many times the phone enacted the post-return temp cancel, and its result.
+    /// How many times the phone enacted the post-return temp cancel, and its result.
     var cancelCalls = 0
     var cancelError: Error?
     /// How many times the phone stopped automatic dosing over a reconciliation difference.
@@ -600,7 +600,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         // The ladder spending its last rung, or a new Start — either lands here mid-write.
         controller.forceReclaimToOwner(reason: "test: force lands mid-commit")
         XCTAssertNotNil(controller.pendingForceReclaimReason,
-                        "a force must park behind a write in flight (#118)")
+                        "a force must park behind a write in flight")
 
         let ackSent = expectSend()
         holdPumpEventWrites = false
@@ -611,9 +611,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
         XCTAssertNil(controller.pendingForceReclaimReason,
                      "the hand-back satisfies the force: records committed, radio back, judged by the close")
-        XCTAssertNil(diagMatching("R37 audit armed"),
+        XCTAssertNil(diagMatching("force-reclaim audit armed"),
                      "no second audit — its expectation is bare schedule fill against an emptied staging area")
-        XCTAssertNil(diagMatching("R37 force-reclaim audit IMPOSSIBLE"))
+        XCTAssertNil(diagMatching("force-reclaim audit IMPOSSIBLE"))
         XCTAssertEqual(openLoopCalls, 0, "a hand-back that went perfectly must not open the loop")
     }
 
@@ -809,10 +809,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(pauseCalls, [true], "dosing pauses at launch")
     }
 
-    // MARK: - Item 1: the phone reads the end-of-loan odometer and cancels the inherited temp
+    // MARK: - The phone reads the end-of-loan odometer and cancels the inherited temp
 
-    /// The audit's end reading is the phone's reclaim round-trip, not the watch's stale offer
-    /// (field 2026-08-11).
+    /// The audit's end reading is the phone's reclaim round-trip, not the watch's stale offer.
     func testHandbackAuditUsesThePhonesOwnOdometerNotTheWatchsStaleOne() throws {
         let controller = makeController()
         let grant = establishLoan(controller)
@@ -866,9 +865,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(cancelCalls, 0, "must not command a pod that is not back yet")
 
         connectionReady = true
-        waitUntil(timeout: 8, "R33 cancel") { self.lock.lock(); defer { self.lock.unlock() }; return self.cancelCalls > 0 }
+        waitUntil(timeout: 8, "reclaim temp cancel") { self.lock.lock(); defer { self.lock.unlock() }; return self.cancelCalls > 0 }
         XCTAssertEqual(cancelCalls, 1, "cancel exactly once per loan, on the verified round-trip")
-        XCTAssertNotNil(diagMatching("R33 temp cancelled"), "the cancel's outcome must be in the log")
+        XCTAssertNotNil(diagMatching("temp cancelled — pod reverts to the user's schedule until"), "the cancel's outcome must be in the log")
 
         // The chase keeps ticking after verification; the audit must not re-fire on later ticks.
         let settle = expectation(description: "no second cancel")
@@ -895,7 +894,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         wait(for: [ackSent], timeout: 5)
         waitForState(controller, .owner)
 
-        waitUntil(timeout: 8, "failed-cancel diag") { self.diagMatching("R33 temp cancel FAILED") != nil }
+        waitUntil(timeout: 8, "failed-cancel diag") { self.diagMatching("temp cancel FAILED — pod keeps") != nil }
         XCTAssertEqual(controller.state, .owner, "a failed cancel must not strand the loan state")
         // The audit is independent of the cancel and must still have landed.
         XCTAssertNotNil(diagMatching("reconcile[AUTHORITATIVE]"))
@@ -1050,7 +1049,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
         // The verdict logs first, then stops dosing, then notifies: wait on the last of the three.
         waitUntil(timeout: 5, "open-loop verdict") {
-            guard self.diagMatching("R32 OPEN LOOP") != nil else { return false }
+            guard self.diagMatching("OPEN LOOP — residual") != nil else { return false }
             self.lock.lock(); defer { self.lock.unlock() }
             return self.urgentNotices.contains("Loop Open — Unexplained Insulin")
         }
@@ -1077,7 +1076,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         wait(for: [ackSent], timeout: 5)
         waitForState(controller, .owner)
 
-        waitUntil(timeout: 8, "warn verdict") { self.diagMatching("R32 WARN") != nil }
+        waitUntil(timeout: 8, "warn verdict") { self.diagMatching("WARN — residual") != nil }
         XCTAssertEqual(openLoopCalls, 0, "a shortfall must NOT open the loop — that worsens under-treatment")
         // "Overstated": the pod delivered less than the records. Urgent both ways; only positive opens the loop.
         XCTAssertTrue(urgentNotices.contains("Insulin On Board May Be Overstated"))
@@ -1090,8 +1089,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         try runLoanToAudit(controller, deliveredDuringLoan: 0.10)
 
         XCTAssertEqual(openLoopCalls, 0)
-        XCTAssertNil(diagMatching("R32 OPEN LOOP"))
-        XCTAssertNil(diagMatching("R32 WARN"))
+        XCTAssertNil(diagMatching("OPEN LOOP — residual"))
+        XCTAssertNil(diagMatching("WARN — residual"))
         XCTAssertTrue(notices.isEmpty, "a normal loan must produce no notice at all, got \(notices)")
     }
 
@@ -1113,12 +1112,12 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         let controller = makeController()
         try runLoanToAudit(controller, deliveredDuringLoan: 0.25)
 
-        waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("R32 OPEN LOOP") != nil }
+        waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("OPEN LOOP — residual") != nil }
         XCTAssertEqual(openLoopCalls, 1, "+0.25 U is over the 0.20 U bound — the loop must open")
         XCTAssertTrue(urgentNotices.contains("Loop Open — Unexplained Insulin"))
     }
 
-    /// +0.200 with float dust stays inside the band (field e223, 2026-08-26).
+    /// +0.200 with float dust stays inside the band.
     func testResidualExactlyOnTheBandStaysSilentDespiteFloatDust() throws {
         let controller = makeController()
         let grant = establishLoan(controller)
@@ -1137,7 +1136,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("reconcile[AUTHORITATIVE]") != nil }
 
         XCTAssertEqual(openLoopCalls, 0, "exactly ±0.200 is ON the band, not beyond it — float dust must not open the loop")
-        XCTAssertNil(diagMatching("R32 OPEN LOOP"))
+        XCTAssertNil(diagMatching("OPEN LOOP — residual"))
     }
 
     /// The negative twin: −0.2000000000000007 stays inside the band.
@@ -1158,7 +1157,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("reconcile[AUTHORITATIVE]") != nil }
 
         XCTAssertEqual(openLoopCalls, 0)
-        XCTAssertNil(diagMatching("R32 WARN"), "exactly −0.200 is ON the band — float dust must not warn")
+        XCTAssertNil(diagMatching("WARN — residual"), "exactly −0.200 is ON the band — float dust must not warn")
     }
 
     // MARK: - Since-last-sync checkpoints
@@ -1197,8 +1196,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         try finishLoan(controller, epoch: grant.epoch, finalOdometer: 10.30)
 
         XCTAssertEqual(openLoopCalls, 0, "each window reconciled at a sync — no verdict may fire on the loan total")
-        XCTAssertNil(diagMatching("R32 OPEN LOOP"))
-        XCTAssertNil(diagMatching("R32 WARN"))
+        XCTAssertNil(diagMatching("OPEN LOOP — residual"))
+        XCTAssertNil(diagMatching("WARN — residual"))
     }
 
     /// The checkpoint must not blunt detection: insulin the tail cannot explain still opens.
@@ -1209,7 +1208,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         try sendCheckpoint(controller, epoch: grant.epoch, latest: 10.0, asOf: Date().addingTimeInterval(2))
         try finishLoan(controller, epoch: grant.epoch, finalOdometer: 10.5)
 
-        waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("R32 OPEN LOOP") != nil }
+        waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("OPEN LOOP — residual") != nil }
         XCTAssertEqual(openLoopCalls, 1, "+0.5 U since the last sync is unexplained — the loop must open")
     }
 
@@ -1222,7 +1221,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         try sendCheckpoint(controller, epoch: grant.epoch, latest: 10.15, asOf: nil)
         try finishLoan(controller, epoch: grant.epoch, finalOdometer: 10.30)
 
-        waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("R32 OPEN LOOP") != nil }
+        waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("OPEN LOOP — residual") != nil }
         XCTAssertEqual(openLoopCalls, 1, "no asOf = no checkpoint — +0.30 over the whole loan must still open")
     }
 
@@ -1234,7 +1233,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         try sendCheckpoint(controller, epoch: grant.epoch, latest: 10.5, asOf: Date().addingTimeInterval(2))
         try finishLoan(controller, epoch: grant.epoch, finalOdometer: 10.5)
 
-        waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("R32 OPEN LOOP") != nil }
+        waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("OPEN LOOP — residual") != nil }
         XCTAssertEqual(openLoopCalls, 1, "a checkpoint that failed to reconcile must not retire its window")
     }
 
@@ -1262,7 +1261,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         lock.unlock()
         XCTAssertEqual(opened, 0, "the tail since the sync is 0.15 U — inside the band")
         XCTAssertTrue(booked.isEmpty, "the synced window is already in the records — nothing to book")
-        XCTAssertNil(diagMatching("R37 OPEN LOOP"))
+        XCTAssertNil(diagMatching("OPEN LOOP — force-reclaim"))
     }
 
     /// Row 10: the same offer redelivered (lost ack) re-acks the same cursor and
@@ -1402,7 +1401,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed on the empty close")
     }
 
-    /// With this phone's Bluetooth off, the final offer is not acked (bench 2026-09-19).
+    /// With this phone's Bluetooth off, the final offer is not acked.
     func testFinalOfferIsNotAcceptedWhileThisPhonesBluetoothIsOff() throws {
         var off = true
         let controller = makeController(bluetoothPoweredOff: { [unowned self] in
@@ -1436,10 +1435,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         waitForState(controller, .owner)
     }
 
-    // MARK: - Field incident: stale offer clamps a LATER epoch's doses
+    // MARK: - Stale offer clamps a LATER epoch's doses
 
     /// A stale offer's drain must not clamp a later epoch's temps to its own hand-back time
-    /// (Core Data rejected the negative durations). Expected to fail until fixed.
+    /// (Core Data rejected the negative durations).
     func testStaleOfferMustNotClampALaterEpochsDosesToItsOwnHandbackTime() throws {
         let controller = makeController()
         let grant1 = establishLoan(controller)
@@ -1467,7 +1466,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(epoch1Offer).transportDictionary())
         wait(for: [staleAck], timeout: 5)
 
-        // FIXED (option A): a stale offer now drains only the events it actually carried,
+        // A stale offer drains only the events it actually carried,
         // so epoch 2's live temp is never in scope to be clamped to epoch 1's handedBackAt.
         let written = addedDoses.flatMap { $0 }
         let inverted = written.filter { $0.endDate < $0.startDate }
@@ -1597,7 +1596,7 @@ extension PodLoanPhoneControllerTests {
 
         controller.forceReclaimToOwner(reason: "test: watch dead, but books are complete")
         waitForState(controller, .owner)
-        waitUntil(timeout: 5, "clean verdict") { self.diagMatching("R37 audit CLEAN") != nil }
+        waitUntil(timeout: 5, "clean verdict") { self.diagMatching("force-reclaim audit CLEAN") != nil }
 
         lock.lock()
         let opened = openLoopCalls
@@ -1818,7 +1817,7 @@ extension PodLoanPhoneControllerTests {
         XCTAssertNotNil(controller.reclaimProgress?.fraction, "the handover draws a bar now — the sweep is retired")
         XCTAssertEqual(controller.reclaimProgress.map { $0.expectedBy.timeIntervalSince($0.startedAt) } ?? 0, 10,
                        accuracy: 0.5, "the published deadline is the drain promise, past which the label concedes")
-        XCTAssertNotNil(diagMatching("reclaim ladder LIVE"), "the branch and its evidence are in the field log")
+        XCTAssertNotNil(diagMatching("reclaim ladder LIVE"), "the branch and its evidence are in the log")
 
         ladder.fire("reclaim-resend")
         XCTAssertEqual(revokeCount(), 2, "the second attempt is a resend, not a force")
@@ -2138,7 +2137,7 @@ extension PodLoanPhoneControllerTests {
 
     // MARK: - Request TTL (queued-channel ghosts)
 
-    /// A request older than the TTL earns no grant; a fresh one still grants (field 2026-08-30).
+    /// A request older than the TTL earns no grant; a fresh one still grants.
     func testStaleRequestIsIgnoredAndAFreshOneStillGrants() throws {
         let controller = makeController(now: { self.clock })
 
@@ -2263,7 +2262,7 @@ extension PodLoanPhoneControllerTests {
     }
 
     /// A stale final offer draining during a live successor loan closes the books but yields
-    /// rather than reclaiming (field 2026-08-31).
+    /// rather than reclaiming.
     func testGhostDrainCloseYieldsInsteadOfStealingFromTheLiveLoan() throws {
         let token = seizeCredentialOutstanding()
         let controller = makeController()
@@ -2379,7 +2378,7 @@ extension PodLoanPhoneControllerTests {
         XCTAssertTrue(controller.isPodLoanedOut, "pill reads Pod on Watch, not Handing over…")
         XCTAssertTrue(MockPumpManager.testConnectionReleased, "the pod stays released — the live loan needs it")
 
-        // The reunion: the seized loan's offer adopts the burned epoch forward (276→277 on tape).
+        // The reunion: the seized loan's offer adopts the burned epoch forward (epoch N+1).
         controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
             HandbackOffer(epoch: ghost.epoch + 1, handedBackAt: Date(), finalStatus: nil, odometer: nil,
                           events: [], tombstones: [], recovered: false, released: false,
@@ -2470,12 +2469,12 @@ extension PodLoanPhoneControllerTests {
 
     // MARK: - Grant anchor
 
-    /// A failed takeover's `grantOfferedAt` does not leak into the next grant (field 2026-08-17).
+    /// A failed takeover's `grantOfferedAt` does not leak into the next grant.
     func testANewGrantDoesNotInheritAFailedTakeoversClock() throws {
         clock = Date()
         let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
 
-        // Grant once, then abandon it the way the field did: the watch says the grant never
+        // Grant once, then abandon it: the watch says the grant never
         // arrived, which reclaims to owner — and under the old code never cleared the anchor.
         let g1 = offerGrant(controller)
         controller.handleIncoming(userInfo: try LoanMessage.statusReport(
@@ -2697,7 +2696,7 @@ extension PodLoanPhoneControllerTests {
         XCTAssertNil(controller.loanStartedAt)
     }
 
-    /// Records from a closed session are answered with the revoke again (bench 2026-09-20).
+    /// Records from a closed session are answered with the revoke again.
     func testRecordsFromAClosedSessionAreAnsweredWithTheRevoke() throws {
         let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
         let grant = establishLoan(controller)
@@ -2791,7 +2790,7 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(silenceWarnings(), 0, "and the watch still gets its cycle to report first")
     }
 
-    /// 2026-09-18: a queued message landed 65 minutes late and was believed. A report counts by
+    /// A queued message can land an hour late and must not be believed. A report counts by
     /// when the watch SENT it, never by when it arrived.
     func testABatchThatSatInAQueueReportsNothingNew() throws {
         let controller = makeController(now: { [weak self] in self?.clock ?? Date() })

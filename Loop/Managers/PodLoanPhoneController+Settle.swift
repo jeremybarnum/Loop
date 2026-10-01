@@ -91,7 +91,7 @@ extension PodLoanPhoneController {
     func resolveOwedForceReclaimAudit(why: String) {
         guard let pending = pendingHandbackAudit, pending.flavor == .forceReclaim else { return }
         pendingHandbackAudit = nil
-        handbackDiag(pending.epoch, "** R37: audit NEVER RAN — \(why). Session UNVERIFIED, loop OPENS **")
+        handbackDiag(pending.epoch, "** force-reclaim audit NEVER RAN — \(why). Session UNVERIFIED, loop OPENS **")
         deps.setAutomaticDosingPaused(false)
         deps.openLoopForUncertainReconciliation()
         armOpenLoopReminder()
@@ -233,7 +233,7 @@ extension PodLoanPhoneController {
             }
         } else if pending.flavor == .forceReclaim {
             // No delivery total: a force reclaim is still unverified.
-            handbackDiag(pending.epoch, "** R37: reclaim round-trip landed but no odometer — session UNVERIFIED, loop OPENS **")
+            handbackDiag(pending.epoch, "** force-reclaim round-trip landed but no odometer — session UNVERIFIED, loop OPENS **")
             deps.setAutomaticDosingPaused(false)
             deps.openLoopForUncertainReconciliation()
             armOpenLoopReminder()
@@ -248,9 +248,9 @@ extension PodLoanPhoneController {
             guard let self = self else { return }
             self.queue.async {
                 if let error = error {
-                    self.handbackDiag(pending.epoch, "R33 temp cancel FAILED — pod keeps the watch's temp until the next cycle · \(String(describing: error))")
+                    self.handbackDiag(pending.epoch, "temp cancel FAILED — pod keeps the watch's temp until the next cycle · \(String(describing: error))")
                 } else {
-                    self.handbackDiag(pending.epoch, "R33 temp cancelled — pod reverts to the user's schedule until the phone's next reading")
+                    self.handbackDiag(pending.epoch, "temp cancelled — pod reverts to the user's schedule until the phone's next reading")
                 }
             }
         }

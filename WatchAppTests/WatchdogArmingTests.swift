@@ -42,14 +42,14 @@ final class WatchdogArmingTests: XCTestCase {
         XCTAssertEqual(reqs.count, 4, "stock parity: 20/40m + 1/2h, one request per rung")
         let intervals: Set<TimeInterval> = Set(reqs.compactMap { interval(of: $0) })
         let expected: Set<TimeInterval> = [1200, 2400, 3600, 7200]
-        XCTAssertEqual(intervals, expected, "the phone's exact ladder (ruling 2026-08-24)")
+        XCTAssertEqual(intervals, expected, "the phone's exact ladder")
     }
 
     func testHandbackStuckArmsAtTwoMinutes() {
         HandbackStuckAlert.arm()
         let reqs = pending()
         XCTAssertEqual(reqs.count, 1)
-        XCTAssertEqual(interval(of: reqs[0]), 2 * 60, "this times a COMMIT acknowledgement, not presence — 5 s split the pod on 2026-09-19")
+        XCTAssertEqual(interval(of: reqs[0]), 2 * 60, "this times a COMMIT acknowledgement, not presence — a 5 s budget split the pod")
     }
 
     // MARK: - Replacement, which is the whole mechanism
