@@ -40,7 +40,7 @@ extension PodLoanPhoneController {
         }
 
         if let seize = request.supportsSeize {
-            deps.defaults.set(seize, forKey: Keys.watchSupportsSeize)
+            updateState { $0.watchSupportsSeize = seize }
         }
         // Version skew ends here with a nack; the apps install separately.
         guard request.supportedVersions.contains(LoanProtocol.version) else {
@@ -318,12 +318,9 @@ extension PodLoanPhoneController {
 
     /// Minted once; echoed back by a watch that started alone.
     func dormantSeizeToken() -> UUID {
-        if let raw = deps.defaults.string(forKey: Keys.dormantSeizeToken),
-           let token = UUID(uuidString: raw) {
-            return token
-        }
+        if let token = persisted.seizeToken { return token }
         let token = UUID()
-        deps.defaults.set(token.uuidString, forKey: Keys.dormantSeizeToken)
+        updateState { $0.seizeToken = token }
         return token
     }
 
@@ -335,7 +332,7 @@ extension PodLoanPhoneController {
     private func queue_considerDormantRefresh(bookChanged: Bool = false) {
         // Only while this phone holds the pod, and only to a watch that said it can use this.
         guard state == .owner else { return }
-        guard deps.defaults.bool(forKey: Keys.watchSupportsSeize) else { return }
+        guard persisted.watchSupportsSeize else { return }
         guard let pump = deps.pumpManager(),
               let lendable = pump as? PumpConnectionLendable,
               !lendable.isConnectionReleased else { return }

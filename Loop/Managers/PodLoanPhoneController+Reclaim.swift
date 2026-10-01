@@ -91,12 +91,6 @@ extension PodLoanPhoneController {
 
         static let windowWorstHistory = "PodLoanPhoneController.windowResidualWorst"
 
-        /// Nothing dormant is sent to a watch that cannot start alone.
-        static let watchSupportsSeize = "PodLoanPhoneController.watchSupportsSeize"
-
-        /// Echoed by a watch that started alone; required before believing it holds the pod.
-        static let dormantSeizeToken = "PodLoanPhoneController.dormantSeizeToken"
-
         /// Persisted because the blackout it answers can include a phone reboot.
         static let yieldingToInferredLoan = "PodLoanPhoneController.yieldingToInferredLoan"
 

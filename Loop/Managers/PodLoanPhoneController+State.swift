@@ -11,7 +11,7 @@ import LoopCore
 
 struct PodLoanPhoneState: RawRepresentable {
     /// Bumped when a group of legacy keys moves in, so each group migrates exactly once.
-    static let version = 1
+    static let version = 2
 
     /// When the watch last reported a cycle, so a relaunch is not read as silence.
     var holdRenewedAt: Date?
@@ -19,23 +19,33 @@ struct PodLoanPhoneState: RawRepresentable {
     var holdLapseNoticedAt: Date?
     var watchSilenceWarningsIssued = 0
 
+    /// The watch said it can start alone; nothing dormant goes to a watch that cannot.
+    var watchSupportsSeize = false
+    /// Minted once and echoed by a watch that started alone: this phone's reunion credential.
+    var seizeToken: UUID?
+
     init() {}
 
     init?(rawValue: [String: Any]) {
         holdRenewedAt = rawValue["holdRenewedAt"] as? Date
         holdLapseNoticedAt = rawValue["holdLapseNoticedAt"] as? Date
         watchSilenceWarningsIssued = rawValue["watchSilenceWarningsIssued"] as? Int ?? 0
+        watchSupportsSeize = rawValue["watchSupportsSeize"] as? Bool ?? false
+        seizeToken = (rawValue["seizeToken"] as? String).flatMap(UUID.init(uuidString:))
     }
 
     var rawValue: [String: Any] {
-        var raw: [String: Any] = ["version": Self.version, "watchSilenceWarningsIssued": watchSilenceWarningsIssued]
+        var raw: [String: Any] = ["version": Self.version, "watchSilenceWarningsIssued": watchSilenceWarningsIssued,
+                                  "watchSupportsSeize": watchSupportsSeize]
+        raw["seizeToken"] = seizeToken?.uuidString
         raw["holdRenewedAt"] = holdRenewedAt
         raw["holdLapseNoticedAt"] = holdLapseNoticedAt
         return raw
     }
 
     /// Every key a group's fields came from, removed once the file holds them.
-    static let legacyKeys = ["holdRenewedAt", "holdLapseNoticedAt", "watchSilenceWarningsIssued"]
+    static let legacyKeys = ["holdRenewedAt", "holdLapseNoticedAt", "watchSilenceWarningsIssued",
+                             "watchSupportsSeize", "dormantSeizeToken"]
         .map { "PodLoanPhoneController." + $0 }
 
     /// Reads, field for field, each group the saved file predates.
@@ -45,6 +55,10 @@ struct PodLoanPhoneState: RawRepresentable {
             holdRenewedAt = defaults.object(forKey: key("holdRenewedAt")) as? Date
             holdLapseNoticedAt = defaults.object(forKey: key("holdLapseNoticedAt")) as? Date
             watchSilenceWarningsIssued = defaults.integer(forKey: key("watchSilenceWarningsIssued"))
+        }
+        if savedVersion < 2 {
+            watchSupportsSeize = defaults.bool(forKey: key("watchSupportsSeize"))
+            seizeToken = defaults.string(forKey: key("dormantSeizeToken")).flatMap(UUID.init(uuidString:))
         }
     }
 }

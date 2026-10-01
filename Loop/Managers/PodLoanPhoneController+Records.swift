@@ -27,7 +27,7 @@ extension PodLoanPhoneController {
 
             // A future epoch means the watch is running a loan this phone never granted.
             if state == .owner, batch.epoch > epoch,
-               deps.defaults.string(forKey: Keys.dormantSeizeToken) != nil {
+               persisted.seizeToken != nil {
                 engageInferredLoanYield(evidence: "future-epoch batch e\(batch.epoch) at .owner (live seized loan streaming)")
             }
 
@@ -73,7 +73,7 @@ extension PodLoanPhoneController {
         // Retro-acknowledge a loan the watch started alone: needs the token and a higher epoch,
         // and never over a grant in flight or a live loan.
         if let token = offer.seizeToken, state == .owner || state == .reclaimPending, offer.epoch > epoch,
-           token.uuidString == deps.defaults.string(forKey: Keys.dormantSeizeToken) {
+           token == persisted.seizeToken {
             if state == .reclaimPending {
                 cancelReclaimLadder()
                 handbackDiag(offer.epoch, "[seize] retro-ack arrived MID-RECLAIM — ladder stood down; the aimed revoke got its drain")

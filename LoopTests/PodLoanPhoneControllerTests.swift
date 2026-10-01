@@ -1035,6 +1035,20 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: "PodLoanPhoneController.holdRenewedAt"))
     }
 
+    /// The seize pairing migrates once, and the token survives byte for byte.
+    func testSeizePairingMigratesWithTheTokenIntact() {
+        let token = seizeCredentialOutstanding()
+        let first = makeController()
+        XCTAssertEqual(first.persisted.seizeToken, token, "a watch already holding the token is still recognised")
+        XCTAssertTrue(first.persisted.watchSupportsSeize)
+        XCTAssertEqual(first.dormantSeizeToken(), token, "never re-minted once migrated")
+        XCTAssertNil(defaults.object(forKey: "PodLoanPhoneController.dormantSeizeToken"))
+        XCTAssertNil(defaults.object(forKey: "PodLoanPhoneController.watchSupportsSeize"))
+
+        defaults.set(UUID().uuidString, forKey: "PodLoanPhoneController.dormantSeizeToken")
+        XCTAssertEqual(makeController().persisted.seizeToken, token, "the file wins over a re-seeded legacy key")
+    }
+
     /// +0.25 U is over the ±0.20 bound and under the old ±0.5, so a revert fails this.
     func testResidualJustAboveTheTightenedBoundOpensTheLoop() throws {
         let controller = makeController()
@@ -2051,7 +2065,6 @@ extension PodLoanPhoneControllerTests {
     /// The refresh throttle stamps at enqueue, so a burst yields one refresh.
     func testDormantRefreshBurstYieldsOneRefresh() {
         defaults.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
-        defer { defaults.removeObject(forKey: "PodLoanPhoneController.watchSupportsSeize") }
         let controller = makeController()
 
         let firstRefresh = expectSend()
@@ -2617,7 +2630,6 @@ extension PodLoanPhoneControllerTests {
     /// The standing copy refreshes on a bolus or carb, collapses bursts, and loses nothing.
     func testTheStandingCopyFollowsTheBook() {
         defaults.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
-        defer { defaults.removeObject(forKey: "PodLoanPhoneController.watchSupportsSeize") }
         let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
         func copies() -> Int {
             lock.lock(); defer { lock.unlock() }
