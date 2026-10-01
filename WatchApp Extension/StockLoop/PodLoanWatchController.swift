@@ -432,6 +432,9 @@ final class PodLoanWatchController {
 
     var revokeCapturedDeliveredAt: Date?
 
+    /// The loan whose pump fault the phone has been told about.
+    var faultReportedEpoch: Int?
+
     /// Main-readable mirrors, written from the queue.
     let loanActiveMirrorLock = NSLock()
     var _loanActiveMirror = false

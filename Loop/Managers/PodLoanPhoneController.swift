@@ -359,6 +359,9 @@ final class PodLoanPhoneController {
     /// Per grant; cleared wherever a loan is abandoned.
     var grantOfferedAt: Date?
 
+    /// The pod fault already announced, as "epoch fault", so a repeated report stays quiet.
+    var podFaultNoticed: String?
+
     /// Only the force-reclaim flavour persists.
     var pendingHandbackAudit: PendingHandbackAudit? {
         didSet {

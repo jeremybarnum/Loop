@@ -148,7 +148,7 @@ extension PodLoanPhoneController {
     }
 
     /// The one place an ungranted loan can be recognised. `knowsGrant` nil means no information;
-    /// only an explicit false may act. Pod faults reported here are logged only.
+    /// only an explicit false may act. A pod fault is announced once.
     func handleStatusReport(_ report: StatusReport) {
         // A newer epoch the watch holds backs both a yield and a re-aimed revoke.
         if report.holdsPod, report.epoch > epoch {
@@ -201,9 +201,20 @@ extension PodLoanPhoneController {
             sendMessage(.denied(LoanDenied(reason: "The hand-over never reached the watch. The phone kept the pod. Tap Start again.")))
             reclaimToOwner(alert: nil, reason: "grant CONFIRMED LOST by the watch")
         }
-        if report.podFault != nil {
-            handbackDiag(report.epoch, "pod fault reported in a status report — logged only; the watch owns pod-fault surfacing during a loan")
+        if let fault = report.podFault {
+            handbackDiag(report.epoch, "pod fault reported by the watch (\(fault)) — the watch raises the pod's alarm; the phone posts one notice")
+            noticePodFault(fault, epoch: report.epoch)
         }
+    }
+
+    /// The watch alarms too, but the user may be nearer the phone.
+    func noticePodFault(_ fault: String, epoch: Int) {
+        let key = "\(epoch) \(fault)"
+        guard podFaultNoticed != key else { return }
+        podFaultNoticed = key
+        deps.issueUrgentNotice(
+            NSLocalizedString("Pod Fault", comment: "Phone notice title when the watch reports a pod fault during a loan"),
+            NSLocalizedString("The watch reports a pod fault. Insulin delivery has stopped — replace the pod.", comment: "Phone notice body when the watch reports a pod fault during a loan"))
     }
 
 }

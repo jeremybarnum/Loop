@@ -1508,6 +1508,31 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         return removed
     }
 
+    // MARK: - A pod fault during a loan
+
+    /// The watch reports a fault: the phone posts one urgent notice, however often it hears it.
+    func testAPodFaultReportedByTheWatchIsAnnouncedOnceOnThePhone() throws {
+        let controller = makeController()
+        let grant = offerGrant(controller)
+        let status = LoanPodStatus(timestamp: Date(), deliveredUnits: 10, reservoirLevel: nil, isSuspended: false, faultCode: nil)
+        controller.handleIncoming(userInfo: try LoanMessage.takeoverComplete(TakeoverComplete(epoch: grant.epoch, firstPodStatus: status)).transportDictionary())
+        waitForState(controller, .loaned)
+
+        func report(fault: String?) throws {
+            controller.handleIncoming(userInfo: try LoanMessage.statusReport(StatusReport(
+                epoch: grant.epoch, mode: .closedDirect, lastDirectGlucoseAge: 60, lastEventSeq: 0,
+                podFault: fault, holdsPod: true, knowsGrant: true)).transportDictionary())
+            controller.queue.sync { }
+        }
+        try report(fault: nil)
+        XCTAssertFalse(urgentNotices.contains("Pod Fault"), "no fault, no notice")
+
+        try report(fault: "inoperable")
+        try report(fault: "inoperable")
+        XCTAssertEqual(urgentNotices.filter { $0 == "Pod Fault" }.count, 1, "one notice per fault, not one per report")
+        XCTAssertEqual(controller.state, .loaned, "the loan itself is the watch's to end")
+    }
+
     // MARK: - Glucose alarms on the wrist
 
     /// The grant carries the phone's glucose alert settings, so the wrist sounds the same lows.

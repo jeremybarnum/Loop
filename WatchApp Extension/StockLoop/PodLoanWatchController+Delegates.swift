@@ -18,6 +18,14 @@ extension PodLoanWatchController: PumpManagerDelegate {
     /// Saved on every update; its presence tells the next launch the loan was live.
     func pumpManagerDidUpdateState(_ pumpManager: PumpManager) {
         pumpStateStore.wrappedValue = pumpManager.watchRawValue
+        reportPumpFaultOnce()
+    }
+
+    /// The phone hears of a fault once per loan, without waiting to be asked.
+    func reportPumpFaultOnce() {
+        guard pumpFaultDescription != nil, phase == .active, let current = epoch, faultReportedEpoch != current else { return }
+        faultReportedEpoch = current
+        sendHoldsPodStatusReport(reason: "pump fault")
     }
 
     /// Book, complete, then journal. On a failed write nothing is acked or journaled; the pod
