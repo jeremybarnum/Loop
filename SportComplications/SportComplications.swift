@@ -52,7 +52,8 @@ struct SportComplicationView: View {
             Text(snapshot.line(kind, at: entry.date))
         case .accessoryCorner:
             Text(cornerCenter)
-                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .font(.system(size: 24, weight: .semibold, design: .rounded))
+                .minimumScaleFactor(0.6).lineLimit(1)
                 .widgetLabel { Text(cornerLabel) }
         case .accessoryCircular:
             ZStack {
@@ -91,8 +92,8 @@ struct SportComplicationView: View {
 
     private var cornerLabel: String {
         switch kind {
-        case .iob: return "IOB U"
-        case .cob: return "COB g"
+        case .iob: return "IOB"
+        case .cob: return "COB"
         case .eventual: return "Eventual"
         case .glucoseToEventual: return "→ \(snapshot.eventualText(at: entry.date) ?? SportComplicationSnapshot.dash)"
         }

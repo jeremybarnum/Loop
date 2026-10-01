@@ -76,11 +76,12 @@ struct SportComplicationSnapshot: Codable, Equatable {
     func eventualText(at date: Date) -> String? { loopFresh(at: date) ? glucoseText(eventual) : nil }
     func currentText(at date: Date) -> String? { glucoseFresh(at: date) ? glucoseText(glucose) : nil }
 
-    /// The short form, for a corner or a circle: "1.2U", "24g", "→128", "120→128".
+    /// The short form, for a corner or a circle: "1.2", "24", "→128", "120→128". No units: there
+    /// is no room for them on the wrist, and the label says what the number is.
     func short(_ kind: Kind, at date: Date) -> String {
         switch kind {
-        case .iob: return iobText(at: date).map { "\($0)U" } ?? Self.dash
-        case .cob: return cobText(at: date).map { "\($0)g" } ?? Self.dash
+        case .iob: return iobText(at: date) ?? Self.dash
+        case .cob: return cobText(at: date) ?? Self.dash
         case .eventual: return "→\(eventualText(at: date) ?? Self.dash)"
         case .glucoseToEventual: return "\(currentText(at: date) ?? Self.dash)→\(eventualText(at: date) ?? Self.dash)"
         }
@@ -89,8 +90,8 @@ struct SportComplicationSnapshot: Codable, Equatable {
     /// The labelled form, for an inline slot (the Utility face's corners and bottom).
     func line(_ kind: Kind, at date: Date) -> String {
         switch kind {
-        case .iob: return "IOB \(iobText(at: date).map { "\($0) U" } ?? Self.dash)"
-        case .cob: return "COB \(cobText(at: date).map { "\($0) g" } ?? Self.dash)"
+        case .iob: return "IOB \(iobText(at: date) ?? Self.dash)"
+        case .cob: return "COB \(cobText(at: date) ?? Self.dash)"
         case .eventual: return "Eventually \(eventualText(at: date) ?? Self.dash)"
         case .glucoseToEventual: return "BG \(currentText(at: date) ?? Self.dash) → \(eventualText(at: date) ?? Self.dash)"
         }

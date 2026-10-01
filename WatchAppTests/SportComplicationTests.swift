@@ -20,16 +20,16 @@ final class SportComplicationTests: XCTestCase {
 
     func testShortFormsFitACorner() {
         let s = snapshot()
-        XCTAssertEqual(s.short(.iob, at: now), "1.2U")
-        XCTAssertEqual(s.short(.cob, at: now), "24g")
+        XCTAssertEqual(s.short(.iob, at: now), "1.2")
+        XCTAssertEqual(s.short(.cob, at: now), "24")
         XCTAssertEqual(s.short(.eventual, at: now), "→128")
         XCTAssertEqual(s.short(.glucoseToEventual, at: now), "120→128")
     }
 
     func testInlineLinesSayWhatEachNumberIs() {
         let s = snapshot()
-        XCTAssertEqual(s.line(.iob, at: now), "IOB 1.2 U")
-        XCTAssertEqual(s.line(.cob, at: now), "COB 24 g")
+        XCTAssertEqual(s.line(.iob, at: now), "IOB 1.2")
+        XCTAssertEqual(s.line(.cob, at: now), "COB 24")
         XCTAssertEqual(s.line(.eventual, at: now), "Eventually 128")
         XCTAssertEqual(s.line(.glucoseToEventual, at: now), "BG 120 → 128")
     }
