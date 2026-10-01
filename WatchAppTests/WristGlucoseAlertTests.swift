@@ -142,6 +142,6 @@ final class WristGlucoseAlertTests: XCTestCase {
         await manager.evaluatePredictedLowAlert(forecast)?.value
 
         XCTAssertNotNil(request(GlucoseAlertManager.predictedLowAlertIdentifier),
-                        "the phone's predicted low is held during a loan, so the wrist's forecast is the one that counts")
+                        "the wrist raises predicted low from its own forecast, which has the loan's doses")
     }
 }
