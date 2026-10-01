@@ -28,13 +28,23 @@ final class WakeResumeTests: XCTestCase {
         defaults = UserDefaults(suiteName: "WakeResumeTests-\(UUID().uuidString)")!
     }
 
+    /// Writes the controller's state file as a previous run left it.
+    private func saveState(_ change: (inout PodLoanWatchState) -> Void) {
+        var store = PersistedProperty<[String: Any]>(key: "PodLoanWatchState", directory: journalDir)
+        var state = store.wrappedValue.flatMap(PodLoanWatchState.init(rawValue:)) ?? PodLoanWatchState()
+        change(&state)
+        store.wrappedValue = state.rawValue
+    }
+
     /// The grant's settings payload on disk, including the supplement's basal schedule.
     private func persistGrantedSettings() {
         let basal = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 1.0)])!
         let raw = try! PropertyListSerialization.data(fromPropertyList: LoopSettings().rawValue, format: .binary, options: 0)
         let supplement = try! PropertyListSerialization.data(fromPropertyList: ["basalRateSchedule": basal.rawValue], format: .binary, options: 0)
-        defaults.set(["raw": raw, "supplement": supplement, "interim": true, "overrideRecords": true],
-                     forKey: PodLoanWatchController.Keys.grantedTherapySettings)
+        saveState {
+            $0.grantedSettings = .init(therapySettingsRaw: raw, supplementRaw: supplement,
+                                       supportsInterimHandback: true, supportsOverrideRecords: true)
+        }
     }
 
     override func tearDown() {
@@ -70,8 +80,10 @@ final class WakeResumeTests: XCTestCase {
     private func relaunch(phase: PodLoanWatchController.Phase, epoch: Int = 7, savedState: [String: Any]?,
                           granted: Bool = true) async -> PodLoanWatchController {
         if granted { persistGrantedSettings() }
-        defaults.set(phase.rawValue, forKey: PodLoanWatchController.Keys.phase)
-        defaults.set(epoch, forKey: PodLoanWatchController.Keys.epoch)
+        saveState {
+            $0.phase = phase
+            $0.epoch = epoch
+        }
         if let savedState { defaults.set(savedState, forKey: PodLoanWatchController.Keys.pumpState) }
         let c = await makeController()
         c.resumeIfNeeded()   // what the session does once the hooks are wired
@@ -140,6 +152,47 @@ final class WakeResumeTests: XCTestCase {
         let again = await makeController()
         XCTAssertNotNil(again.pumpStateStore.wrappedValue?["controllerId"], "the file wins over a re-seeded legacy key")
         XCTAssertNil(defaults.object(forKey: PodLoanWatchController.Keys.pumpState))
+    }
+
+    /// A loan saved by the old build migrates field for field, capability flags included.
+    func testControllerStateMigratesOnceFromLegacyKeys() async {
+        let token = UUID()
+        let basal = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 1.0)])!
+        let raw = try! PropertyListSerialization.data(fromPropertyList: LoopSettings().rawValue, format: .binary, options: 0)
+        let supplement = try! PropertyListSerialization.data(fromPropertyList: ["basalRateSchedule": basal.rawValue], format: .binary, options: 0)
+        typealias K = PodLoanWatchController.Keys
+        defaults.set(PodLoanWatchController.Phase.active.rawValue, forKey: K.phase)
+        defaults.set(7, forKey: K.epoch)
+        defaults.set(9, forKey: K.highWaterEpoch)
+        defaults.set(["raw": raw, "supplement": supplement, "interim": true, "overrideRecords": true], forKey: K.grantedTherapySettings)
+        defaults.set(12.5, forKey: K.deliveredAtTakeover)
+        defaults.set(token.uuidString, forKey: PodLoanWatchController.DormantKeys.activeToken)
+        defaults.set(readablePumpState, forKey: K.pumpState)
+        let c = await makeController()
+        c.resumeIfNeeded()
+        c.queue.sync { }
+        XCTAssertEqual(c.phase, .active, "the live loan resumes after the update")
+        XCTAssertEqual(c.epoch, 7)
+        XCTAssertEqual(c.persisted.highWaterEpoch, 9)
+        XCTAssertTrue(c.phoneSupportsInterimHandback, "the capability flags move with the settings")
+        XCTAssertTrue(c.phoneSupportsOverrideRecords)
+        XCTAssertEqual(c.deliveredAtTakeover, 12.5)
+        XCTAssertEqual(c.persisted.seizeToken, token, "a seized loan keeps its reunion token")
+        for key in PodLoanWatchState.legacyKeys { XCTAssertNil(defaults.object(forKey: key), key) }
+
+        defaults.set(PodLoanWatchController.Phase.idle.rawValue, forKey: K.phase)
+        defaults.set(1, forKey: K.highWaterEpoch)
+        let again = await makeController()
+        XCTAssertEqual(again.persisted.phase, .active, "the file wins over a re-seeded legacy key")
+        XCTAssertEqual(again.persisted.highWaterEpoch, 9)
+    }
+
+    /// An idle watch keeps its high-water mark across the migration.
+    func testHighWaterSurvivesMigrationOnAnIdleWatch() async {
+        defaults.set(9, forKey: PodLoanWatchController.Keys.highWaterEpoch)
+        let c = await makeController()
+        XCTAssertEqual(c.phase, .idle)
+        XCTAssertEqual(c.persisted.highWaterEpoch, 9)
     }
 
     func testActiveLoanWithSavedPodStateResumes() async {
@@ -242,7 +295,7 @@ final class WakeResumeTests: XCTestCase {
         let live = await makeController()
         live.loopManager.setClosedLoopEnabled(true, reason: "test")
         live.loopManager.setIntegralRetrospectiveCorrection(true)
-        defaults.set(12.5, forKey: PodLoanWatchController.Keys.deliveredAtTakeover)
+        saveState { $0.deliveredAtTakeover = 12.5 }
 
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         XCTAssertNotNil(c.loopManager.settings.basalRateSchedule, "therapy settings")
@@ -348,8 +401,10 @@ final class WakeResumeTests: XCTestCase {
     func testASavedSessionIsLiveFromLaunchNotFromTheEndOfItsRebuild() async {
         // State shows a live session before the slow pump rebuild finishes (field 2026-09-20).
         persistGrantedSettings()
-        defaults.set(PodLoanWatchController.Phase.active.rawValue, forKey: PodLoanWatchController.Keys.phase)
-        defaults.set(7, forKey: PodLoanWatchController.Keys.epoch)
+        saveState {
+            $0.phase = .active
+            $0.epoch = 7
+        }
         defaults.set(readablePumpState, forKey: PodLoanWatchController.Keys.pumpState)
         let c = await makeController()
         XCTAssertTrue(c.isLoanActiveNonBlocking, "live from the moment the saved session is found")
@@ -363,8 +418,10 @@ final class WakeResumeTests: XCTestCase {
     }
 
     func testAFailedRebuildIsNeitherLiveNorResuming() async {
-        defaults.set(PodLoanWatchController.Phase.active.rawValue, forKey: PodLoanWatchController.Keys.phase)
-        defaults.set(7, forKey: PodLoanWatchController.Keys.epoch)
+        saveState {
+            $0.phase = .active
+            $0.epoch = 7
+        }
         defaults.set(readablePumpState, forKey: PodLoanWatchController.Keys.pumpState)
         let c = await makeController()          // no granted settings on disk: the rebuild must fail
         c.resumeIfNeeded()

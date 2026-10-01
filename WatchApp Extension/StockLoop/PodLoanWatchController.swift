@@ -163,32 +163,11 @@ final class PodLoanWatchController {
     /// The copy's pod total and records, consumed once at takeover.
     var takeoverCopyTotal: (units: Double, asOf: Date)?
     var takeoverCopyRecords: [LoanDoseRecord] = []
-    /// Persisted, and mirrored synchronously in didSet.
-    var phase: Phase {
-        didSet {
-            defaults.set(phase.rawValue, forKey: Keys.phase)
-            loanActiveMirrorLock.lock()
-            _loanActiveMirror = (phase == .active)
-            loanActiveMirrorLock.unlock()
-            // Holds are edge-triggered, so re-asserting a phase cannot double-acquire.
-            if (oldValue == .takingOver) != (phase == .takingOver) {
-                onTakeoverRadioHold?(phase == .takingOver)
-                setTakeoverSessionListener(phase == .takingOver)
-            }
-
-            if (oldValue == .handingBack) != (phase == .handingBack) {
-                onHandbackRuntimeHold?(phase == .handingBack)
-            }
-
-            if oldValue != phase {
-                NotificationCenter.default.post(name: .podLoanPhaseDidChange, object: nil)
-            }
-        }
-    }
-    /// Persisted; cleared at close (`Keys.highWaterEpoch` survives).
-    var epoch: Int? {
-        didSet { defaults.set(epoch, forKey: Keys.epoch) }
-    }
+    /// The persisted state (+State): phase, epoch, high-water, the live loan's settings,
+    /// odometer and reunion token. Written whole by `updateState`.
+    var stateStore: PersistedProperty<[String: Any]>
+    var _persisted: PodLoanWatchState
+    let stateLock = NSLock()
 
     /// Repaint without a phase change — for the notes and prompts the glance draws.
     func notifyUI() {
@@ -197,9 +176,6 @@ final class PodLoanWatchController {
 
     /// Non-nil means this watch has the pod; only `teardownPump` clears it.
     var pumpManager: OmniPumpManager?
-
-    /// The odometer at takeover; every audit is measured from it.
-    var deliveredAtTakeover: Double?
 
     /// Takeover timings and the glance's bar are measured from it.
     var attemptStartedAt: Date?
@@ -264,6 +240,7 @@ final class PodLoanWatchController {
     var isWatchAppActive: () -> Bool = { RuntimeStateLog.appStateName() == "active" }
     var playTakeoverNudge: () -> Void = { WKInterfaceDevice.current().play(.notification) }
 
+    /// Legacy UserDefaults keys, migrated once into the state files.
     enum Keys {
         static let phase = "PodLoanWatchController.phase"
         static let epoch = "PodLoanWatchController.epoch"
@@ -287,24 +264,17 @@ final class PodLoanWatchController {
         self.defaults = defaults
         self.stateDirectory = stateDirectory
         Self.retiredKeys.forEach(defaults.removeObject(forKey:))
-        var dormant = stateDirectory.map { PersistedProperty<Data>(key: "PodLoanDormantGrant", directory: $0) }
-            ?? PersistedProperty(key: "PodLoanDormantGrant")
-        if let legacy = defaults.data(forKey: DormantKeys.envelope) {
-            if dormant.wrappedValue == nil { dormant.wrappedValue = legacy }
-            if dormant.wrappedValue != nil { defaults.removeObject(forKey: DormantKeys.envelope) }
-        }
-        self.dormantGrantStore = dormant
-        var pumpStore = stateDirectory.map { PersistedProperty<PumpManager.RawStateValue>(key: "PumpManagerState", directory: $0) }
-            ?? PersistedProperty(key: "PumpManagerState")
-        if let legacy = defaults.dictionary(forKey: Keys.pumpState) {
-            if pumpStore.wrappedValue == nil { pumpStore.wrappedValue = legacy }
-            if pumpStore.wrappedValue != nil { defaults.removeObject(forKey: Keys.pumpState) }
-        }
-        self.pumpStateStore = pumpStore
-        self.phase = Phase(rawValue: defaults.string(forKey: Keys.phase) ?? "") ?? .idle
-        self.epoch = defaults.object(forKey: Keys.epoch) as? Int
+        self.dormantGrantStore = Self.migratedStore("PodLoanDormantGrant", in: stateDirectory,
+                                                    legacyKey: DormantKeys.envelope, defaults: defaults)
+        self.pumpStateStore = Self.migratedStore("PumpManagerState", in: stateDirectory,
+                                                 legacyKey: Keys.pumpState, defaults: defaults)
+        var store = stateDirectory.map { PersistedProperty<[String: Any]>(key: "PodLoanWatchState", directory: $0) }
+            ?? PersistedProperty(key: "PodLoanWatchState")
+        self._persisted = Self.loadState(from: &store, legacy: defaults)
+        self.stateStore = store
 
-        let savedPumpState = phase == .active ? pumpStateStore.wrappedValue : nil
+        // Normalised without the phase observers, then saved once below.
+        let savedPumpState = _persisted.phase == .active ? pumpStateStore.wrappedValue : nil
         if let savedPumpState {
             pendingResumeState = savedPumpState
 
@@ -316,27 +286,26 @@ final class PodLoanWatchController {
             loopManager.beginAwaitingPumpManager()
         } else if journal.hasUndrainedEvents {
             // Records outlived their loan: park as a drain and say so.
-            phase = .recoveredDrain
+            _persisted.phase = .recoveredDrain
             issueSessionEndedAlert()
         } else {
-            switch phase {
+            switch _persisted.phase {
             case .idle:
                 break
             case .requested, .takingOver:
                 // A start that never finished: tell the phone, stay startable.
-                pendingInterruptedTakeoverEpoch = epoch
+                pendingInterruptedTakeoverEpoch = _persisted.epoch
                 lastIdleNote = NSLocalizedString("Sport Mode start was interrupted. Tap Start to try again.", comment: "Glance: start interrupted by relaunch")
-                phase = .idle
-                epoch = nil
+                _persisted.phase = .idle
+                _persisted.epoch = nil
             case .active, .handingBack, .revoked, .recoveredDrain:
                 // No saved pod state: drain the records, never resurrect the session.
-                phase = .recoveredDrain
+                _persisted.phase = .recoveredDrain
                 issueSessionEndedAlert()
             }
         }
-        // init skips the observers, so save what it normalised or the next launch repeats it.
-        defaults.set(phase.rawValue, forKey: Keys.phase)
-        defaults.set(epoch, forKey: Keys.epoch)
+        // Saved, or the next launch repeats the normalisation.
+        stateStore.wrappedValue = _persisted.rawValue
     }
 
     /// Saved pod state handed from `init` to `resumeIfNeeded`, which does the rebuild.
@@ -423,8 +392,8 @@ final class PodLoanWatchController {
         pumpManager?.pumpManagerDelegate = nil
         pumpManager = nil
         pumpStateStore.wrappedValue = nil
-        defaults.removeObject(forKey: Keys.deliveredAtTakeover)
-        defaults.removeObject(forKey: Keys.grantedTherapySettings)
+        // The odometer stays until close: the drain's offers still measure from it.
+        updateState { $0.grantedSettings = nil }
 
         let loopManager = self.loopManager
         Task { await loopManager.resetInsulinBook(reason: "teardown") }

@@ -215,7 +215,7 @@ final class SeizeActivationTests: XCTestCase {
 
         XCTAssertNil(snap.seizeOfferIssuedAt, "the confirm consumed the offer")
         XCTAssertEqual(snap.phase, .idle, "the fixture activation fails and returns to idle (startable again)")
-        XCTAssertNil(defaults.string(forKey: "PodLoanWatchController.activeSeizeToken"),
+        XCTAssertNil(controller.persisted.seizeToken,
                      "no .active, no persisted token — a failed activation must leave nothing to echo")
     }
 
@@ -270,7 +270,7 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertNotNil(snap.seizeOfferIssuedAt, "…and the offline offer is up")
         XCTAssertTrue(labels.contains("handback-resend"), "the resend chain was re-kicked on return to the drain")
         XCTAssertGreaterThanOrEqual(sent, 2, "the request went out and so did a recovered offer")
-        XCTAssertNil(defaults.string(forKey: "PodLoanWatchController.activeSeizeToken"),
+        XCTAssertNil(controller.persisted.seizeToken,
                      "before the confirm the token is pending-only")
 
         controller.confirmSeize()
@@ -279,7 +279,7 @@ final class SeizeActivationTests: XCTestCase {
         let after = LoanEventJournal(directory: journalDir)        // fresh instance = the persisted truth
         XCTAssertEqual(after.activeEpoch, 6, "folded to max(credential 3, journal 5 + 1)")
         XCTAssertEqual(after.unackedEvents().map(\.id), [parked.id], "the parked record rides the new loan's stream")
-        XCTAssertEqual(defaults.string(forKey: "PodLoanWatchController.activeSeizeToken"), token.uuidString,
+        XCTAssertEqual(controller.persisted.seizeToken, token,
                        "token persisted at FOLD — a tokenless future-epoch offer would be dropped by the phone")
         XCTAssertEqual(snap.phase, .recoveredDrain, "the failed activation rests back on the drain, still startable")
     }
@@ -303,7 +303,7 @@ final class SeizeActivationTests: XCTestCase {
 
         controller.requestLoan(watchBuild: "reunion-test")
         XCTAssertEqual(controller.debugSnapshot().phase, .active, "precondition: sim flow reached the live loan")
-        defaults.set(UUID().uuidString, forKey: "PodLoanWatchController.activeSeizeToken")   // mark it SEIZED
+        controller.updateState { $0.seizeToken = UUID() }   // mark it SEIZED
 
         controller.noteReachabilityChanged(true)
         _ = controller.debugSnapshot()                              // fence the arming block
@@ -361,7 +361,7 @@ final class SeizeActivationTests: XCTestCase {
         _ = controller.debugSnapshot()
         XCTAssertTrue(pendingDebounce.isEmpty, "a normal loan must never arm the reunion prompt")
 
-        defaults.set(UUID().uuidString, forKey: "PodLoanWatchController.activeSeizeToken")
+        controller.updateState { $0.seizeToken = UUID() }
         controller.noteReachabilityChanged(false)
         _ = controller.debugSnapshot()
         XCTAssertTrue(pendingDebounce.isEmpty, "a reachability LOSS is not a reunion")
@@ -429,7 +429,7 @@ final class SeizeActivationTests: XCTestCase {
         }
         controller.requestLoan(watchBuild: "reunion-test")
         XCTAssertEqual(controller.debugSnapshot().phase, .active)
-        defaults.set(UUID().uuidString, forKey: "PodLoanWatchController.activeSeizeToken")
+        controller.updateState { $0.seizeToken = UUID() }
 
         controller.noteReachabilityChanged(true)
         _ = controller.debugSnapshot()
@@ -558,7 +558,7 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertEqual(requests, 2, "the confirm went to the phone as a second ordinary request")
         XCTAssertEqual(snap.phase, .requested, "waiting on the phone's grant, not activating the stored credential")
         XCTAssertNil(snap.seizeOfferIssuedAt, "the offer was consumed")
-        XCTAssertNil(defaults.string(forKey: "PodLoanWatchController.activeSeizeToken"))
+        XCTAssertNil(controller.persisted.seizeToken)
     }
 
     /// An accepted grant withdraws the offline offer (bench 2026-09-26).

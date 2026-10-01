@@ -44,12 +44,11 @@ extension PodLoanWatchController {
     func resumeSavedLoanOnQueue(_ savedState: PumpManager.RawStateValue) {
         defer { endResuming() }
 
-        guard let payload = defaults.dictionary(forKey: Keys.grantedTherapySettings),
-              let raw = payload["raw"] as? Data,
-              let settings = Self.decodeTherapySettings(raw: raw, supplement: payload["supplement"] as? Data),
+        guard let payload = persisted.grantedSettings,
+              let settings = Self.decodeTherapySettings(raw: payload.therapySettingsRaw, supplement: payload.supplementRaw),
               settings.basalRateSchedule != nil else {
             pumpStateStore.wrappedValue = nil
-            defaults.removeObject(forKey: Keys.grantedTherapySettings)
+            updateState { $0.grantedSettings = nil }
             phase = .recoveredDrain
             issueSessionEndedAlert()
             SportLog.event("loan", "RESUME failed — therapy settings unreadable; falling back to a recovered drain")
@@ -59,7 +58,7 @@ extension PodLoanWatchController {
         SportLog.event("loan", "RESUME: building the pump manager from saved state")
         guard let manager = OmniPumpManager(rawState: savedState) else {
             pumpStateStore.wrappedValue = nil
-            defaults.removeObject(forKey: Keys.grantedTherapySettings)
+            updateState { $0.grantedSettings = nil }
             phase = .recoveredDrain
             issueSessionEndedAlert()
             SportLog.event("loan", "RESUME failed — saved pod state unreadable; falling back to a recovered drain")
@@ -67,9 +66,8 @@ extension PodLoanWatchController {
         }
         SportLog.event("loan", "RESUME: pump manager built")
         loopManager.settings = settings
-        phoneSupportsInterimHandback = payload["interim"] as? Bool ?? false
-        phoneSupportsOverrideRecords = payload["overrideRecords"] as? Bool ?? false
-        deliveredAtTakeover = defaults.object(forKey: Keys.deliveredAtTakeover) as? Double
+        phoneSupportsInterimHandback = payload.supportsInterimHandback
+        phoneSupportsOverrideRecords = payload.supportsOverrideRecords
         manager.pumpManagerDelegate = self
         manager.delegateQueue = queue
         pumpManager = manager
