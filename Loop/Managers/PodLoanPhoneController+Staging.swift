@@ -42,9 +42,4 @@ extension PodLoanPhoneController {
         for event in snapshot.events { staged[event.id] = event }
         stagedTombstones.formUnion(snapshot.tombstones)
     }
-
-    /// The exactly-once record (dedup is by event ID), so it must survive a relaunch.
-    func persistCommittedIDs() {
-        deps.defaults.set(committedIDs.map(\.uuidString), forKey: Keys.committedIDs)
-    }
 }

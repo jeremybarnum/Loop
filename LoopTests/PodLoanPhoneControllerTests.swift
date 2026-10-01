@@ -77,6 +77,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     var holdPumpEventWrites = false
     var heldPumpEventWrite: ((Error?) -> Void)?
     private let lock = NSLock()
+    /// Called for every non-diag send, before it is recorded: lets a test inspect disk at send time.
+    var onSend: ((LoanMessage) -> Void)?
     var suiteName: String!
     var defaults: UserDefaults!
     var stateDir: URL!
@@ -152,6 +154,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                     self.lock.lock(); self.diags.append(d.text); self.lock.unlock()
                     return
                 }
+                if let message = try? LoanMessage.decode(fromTransport: dictionary) { self.onSend?(message) }
                 self.lock.lock()
                 if let message = try? LoanMessage.decode(fromTransport: dictionary) {
                     self.sent.append(message)
@@ -718,6 +721,57 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         waitForState(controller, .owner)
         XCTAssertEqual(pauseCalls, [true, false], "dosing restored only after commit")
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed at loan close")
+    }
+
+    /// The committed IDs are on disk before the ack leaves: a relaunch after an ack can never
+    /// re-commit, and carbs have no identity to dedup a second meal by.
+    func testTheAckIsNeverSentBeforeTheCommitIsSaved() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        let event = makeEvent(seq: 1, units: 1.0, at: Date())
+        var savedAtAck: PodLoanPhoneState?
+        let dir = stateDir!
+        onSend = { message in
+            guard case .handbackAck = message else { return }
+            let file = PersistedProperty<[String: Any]>(key: PodLoanPhoneController.stateFileKey, directory: dir)
+            savedAtAck = file.wrappedValue.flatMap(PodLoanPhoneState.init(rawValue:))
+        }
+        let ackSent = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(HandbackOffer(
+            epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+            events: [event], tombstones: [], recovered: false)).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        XCTAssertEqual(savedAtAck?.committedIDs, [event.id], "the save holding the IDs lands before the ack")
+        XCTAssertEqual(savedAtAck?.committedCursor, 1)
+    }
+
+    /// A phone relaunched mid-loan migrates the loan and pauses dosing at once, as before.
+    func testMidLoanMigrationKeepsTheLoanAndPausesDosing() {
+        let committed = UUID()
+        let k = { "PodLoanPhoneController." + $0 }
+        defaults.set("loaned", forKey: k("state"))
+        defaults.set(7, forKey: k("epoch"))
+        defaults.set(3, forKey: k("cursor"))
+        defaults.set([committed.uuidString], forKey: k("committedIDs"))
+        defaults.set(true, forKey: k("pendingRevoke"))
+        defaults.set(true, forKey: k("yieldingToInferredLoan"))
+        let controller = makeController()
+        XCTAssertEqual(controller.state, .loaned)
+        XCTAssertEqual(controller.epoch, 7)
+        XCTAssertEqual(controller.committedCursor, 3)
+        XCTAssertEqual(controller.committedIDs, [committed])
+        XCTAssertTrue(controller.pendingRevoke)
+        XCTAssertTrue(controller.yieldingToInferredLoan)
+        XCTAssertEqual(pauseCalls, [true], "dosing pauses at launch")
+        for key in ["state", "epoch", "cursor", "committedIDs", "pendingRevoke", "yieldingToInferredLoan"] {
+            XCTAssertNil(defaults.object(forKey: k(key)), key)
+        }
+
+        defaults.set("owner", forKey: k("state"))
+        defaults.set(0, forKey: k("epoch"))
+        let relaunched = makeController()
+        XCTAssertEqual(relaunched.state, .loaned, "a re-seeded legacy key never beats the file")
+        XCTAssertEqual(relaunched.epoch, 7)
     }
 
     // MARK: - Item 1: the phone reads the end-of-loan odometer and cancels the inherited temp

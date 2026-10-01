@@ -242,17 +242,6 @@ final class PodLoanPhoneController {
             ?? PersistedProperty(key: Self.stateFileKey)
         self._persisted = Self.loadState(from: &store, legacy: dependencies.defaults)
         self.stateStore = store
-        self.state = State(rawValue: dependencies.defaults.string(forKey: Keys.state) ?? "") ?? .owner
-        self.epoch = dependencies.defaults.object(forKey: Keys.epoch) as? Int ?? 0
-
-        self.yieldingToInferredLoan = dependencies.defaults.bool(forKey: Keys.yieldingToInferredLoan)
-        self.committedCursor = dependencies.defaults.object(forKey: Keys.cursor) as? Int ?? 0
-        self.pendingRevoke = dependencies.defaults.bool(forKey: Keys.pendingRevoke)
-        if let raw = dependencies.defaults.array(forKey: Keys.committedIDs) as? [String] {
-            self.committedIDs = Set(raw.compactMap(UUID.init(uuidString:)))
-        } else {
-            self.committedIDs = []
-        }
         loadStaged()
 
         // Only a base from this epoch.
@@ -345,9 +334,6 @@ final class PodLoanPhoneController {
     /// A force reclaim that is waiting for the in-flight write to land.
     var pendingForceReclaimReason: String?
 
-    /// Exactly-once record of committed events, persisted; the only dedup test.
-    var committedIDs: Set<UUID>
-
     var staged: [UUID: LoanEvent] = [:]
     var stagedTombstones: Set<UUID> = []
     var t1WorkItem: DispatchWorkItem?
@@ -372,37 +358,6 @@ final class PodLoanPhoneController {
     /// Per grant; cleared wherever a loan is abandoned.
     var grantOfferedAt: Date?
 
-    /// Persisted: the blackout it answers can include a phone reboot.
-    var yieldingToInferredLoan: Bool {
-        didSet { deps.defaults.set(yieldingToInferredLoan, forKey: Keys.yieldingToInferredLoan) }
-    }
-
-    /// Persisted; every route back to `.owner` opens the settle window before observers hear of it.
-    var state: State {
-        didSet {
-            deps.defaults.set(state.rawValue, forKey: Keys.state)
-
-            if oldValue != state {
-                if oldValue != .owner, state == .owner {
-                    beginReclaimSettleWindow()
-                }
-
-                syncUIMirror()
-                deps.ownershipDidChange()
-            }
-        }
-    }
-
-    /// Monotonic; the watch rejects any epoch it has already seen.
-    var epoch: Int {
-        didSet { deps.defaults.set(epoch, forKey: Keys.epoch) }
-    }
-
-    /// Reported to the watch; never the dedup test here.
-    var committedCursor: Int {
-        didSet { deps.defaults.set(committedCursor, forKey: Keys.cursor) }
-    }
-
     /// Only the force-reclaim flavour persists.
     var pendingHandbackAudit: PendingHandbackAudit? {
         didSet {
@@ -413,10 +368,5 @@ final class PodLoanPhoneController {
                 updateState { $0.pendingForceAudit = nil }
             }
         }
-    }
-
-    /// Persisted so a relaunch re-sends the revoke.
-    var pendingRevoke: Bool {
-        didSet { deps.defaults.set(pendingRevoke, forKey: Keys.pendingRevoke) }
     }
 }

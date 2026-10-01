@@ -60,22 +60,12 @@ extension PodLoanPhoneController {
         }
     }
 
-    /// Persisted so a relaunch mid-loan never wakes believing it owns the pod.
+    /// UserDefaults keys still in use; the loan's state lives in `PodLoanPhoneState`.
     enum Keys {
-        static let state = "PodLoanPhoneController.state"
-        static let epoch = "PodLoanPhoneController.epoch"
-        static let cursor = "PodLoanPhoneController.cursor"
-        static let pendingRevoke = "PodLoanPhoneController.pendingRevoke"
-        /// The exactly-once record. Losing it would let a resend re-commit doses already booked.
-        static let committedIDs = "PodLoanPhoneController.committedIDs"
-
         /// Rolling diagnostic series. Nothing reads these back to change behaviour.
         static let residualHistory = "PodLoanPhoneController.residualHistory"
 
         static let windowWorstHistory = "PodLoanPhoneController.windowResidualWorst"
-
-        /// Persisted because the blackout it answers can include a phone reboot.
-        static let yieldingToInferredLoan = "PodLoanPhoneController.yieldingToInferredLoan"
 
         /// Written by earlier builds and read by nothing now; removed at launch.
         static let retired = ["deliveredAuthoritative", "residualHistoryPurged.2026-08-13", "expectedUnits",
@@ -265,12 +255,11 @@ extension PodLoanPhoneController {
                 }
             }
 
-            committedIDs.formUnion(events.map(\.id))
-            persistCommittedIDs()
-
             // Advance the cursor too, or the watch never closes its loan.
-            if let newCursor = events.map(\.seq).max() {
-                committedCursor = max(committedCursor, newCursor)
+            let newCursor = events.map(\.seq).max()
+            updateState {
+                $0.committedIDs.formUnion(events.map(\.id))
+                if let newCursor { $0.committedCursor = max($0.committedCursor, newCursor) }
             }
 
             deps.issueNotice(
