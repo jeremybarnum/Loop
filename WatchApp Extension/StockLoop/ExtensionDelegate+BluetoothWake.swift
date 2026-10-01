@@ -24,6 +24,7 @@ extension ExtensionDelegate {
 
     /// Called from `handle(_ backgroundTasks:)`, once per delivery.
     func podLoanNoteBackgroundTasks(_ backgroundTasks: Set<WKRefreshBackgroundTask>) {
+        guard FeatureFlags.sportModeEnabled else { return }
         let bluetoothOnly = backgroundTasks.allSatisfy { $0 is WKBluetoothAlertRefreshBackgroundTask }
         if !bluetoothOnly {
             let kinds = backgroundTasks.map { String(describing: type(of: $0)) }.sorted().joined(separator: ",")

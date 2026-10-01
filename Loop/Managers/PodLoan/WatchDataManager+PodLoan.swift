@@ -19,6 +19,7 @@ extension WatchDataManager {
 
     /// Wires the Loop-Failure suppression gate to the loan state, once.
     func wireLoopFailureSuppressionGate() {
+        guard FeatureFlags.sportModeEnabled else { return }
         deviceManager.alertManager?.loopNotRunningSuppressionGate = { [weak self] in
             self?.podLoanController.isLoanedOutForUI ?? false
         }
@@ -32,6 +33,8 @@ extension WatchDataManager {
 
     /// Brought up with WatchDataManager, after the session is activated.
     func podLoanStartup() {
+        // With the flag off nothing of the loan starts: no controller, no census, no log.
+        guard FeatureFlags.sportModeEnabled else { return }
         // The build as a commit and build time, matching the watch; build numbers do not name source.
         PhoneLog.event("session", "Loop phone ready — build \(BuildDetails.default.codeIdentity)")
 
@@ -60,6 +63,7 @@ extension WatchDataManager {
     // MARK: - Loop pulse
 
     func podLoanConsiderRefresh(for updateContext: LoopUpdateContext) {
+        guard FeatureFlags.sportModeEnabled else { return }
         // Every loop update pings the refresher; its gating is inside.
         podLoanController.considerDormantRefresh(bookChanged: updateContext == .insulin || updateContext == .carbs)
         // The watch's hold on the pod lapses by itself when its renewals stop — same pulse.
@@ -71,6 +75,7 @@ extension WatchDataManager {
     private static var lastOnboardingKey = ""   // [onboarding-gate] dedupe
 
     func podLoanLogOnboardingContext(_ context: WatchContext) {
+        guard FeatureFlags.sportModeEnabled else { return }
         // Logged on change; pairs with the watch's [onboarding-gate] lines.
         let onboardingKey = "\(context.isOnboardingCompleted == true)|\(deviceManager.cgmManager != nil)|\(deviceManager.pumpManager?.isOnboarded == true)"
         if onboardingKey != Self.lastOnboardingKey {
@@ -83,6 +88,7 @@ extension WatchDataManager {
 
     /// Whether the watch's bolus must be refused because the pod is not this phone's to command.
     func podLoanRefusesWatchBolus(_ bolus: SetBolusUserInfo, message: [String: Any]) -> Bool {
+        guard FeatureFlags.sportModeEnabled else { return false }
         // The pod is on the watch: refuse delivery loudly. An attached carb entry is still stored.
         let deliveryRefusedForLoan = bolus.value > 0 && podLoanController.isPodLoanedOut
         if deliveryRefusedForLoan {
@@ -98,7 +104,7 @@ extension WatchDataManager {
     /// method WatchConnectivity drops the message silently.
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
         Task { @MainActor in
-            guard (try? LoanMessage.decode(fromTransport: message)) != nil else {
+            guard FeatureFlags.sportModeEnabled, (try? LoanMessage.decode(fromTransport: message)) != nil else {
                 log.default("Ignoring unexpected sendMessage from the watch: %{public}@",
                             String(describing: Array(message.keys)))
                 return
@@ -114,6 +120,10 @@ extension WatchDataManager {
         // Loan traffic arrives on the queued channel. Route ours, log anything else; never drop
         // silently.
         Task { @MainActor in
+            guard FeatureFlags.sportModeEnabled else {
+                log.default("Unexpected userInfo from the watch: %{public}@", String(describing: Array(userInfo.keys)))
+                return
+            }
             do {
                 if let message = try LoanMessage.decode(fromTransport: userInfo) {
                     lockedLastWatchContact.value = Date()
@@ -129,6 +139,7 @@ extension WatchDataManager {
 
     /// The loan's half of `sessionReachabilityDidChange`.
     func podLoanSessionReachabilityDidChange(_ session: WCSession) {
+        guard FeatureFlags.sportModeEnabled else { return }
         if session.isReachable {
             lockedLastWatchContact.value = Date()
             podLoanController.watchDidBecomeReachable()
@@ -138,6 +149,7 @@ extension WatchDataManager {
     /// The watch's log files. Copied at once (the system deletes the file on return) to Documents,
     /// for AirDrop from the phone, and mirrored to iCloud.
     nonisolated func session(_ session: WCSession, didReceive file: WCSessionFile) {
+        guard FeatureFlags.sportModeEnabled else { return }
         lockedLastWatchContact.value = Date()   // the log pulse is the loan's heartbeat
         guard file.metadata?["kind"] as? String == "g7watch.log" else { return }
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -215,6 +227,7 @@ extension WatchDataManager {
     /// Logs the moment isWatchAppInstalled or pairing changes; when false, WatchConnectivity
     /// queues every message, which can strand a hand-back ack.
     nonisolated func sessionWatchStateDidChange(_ session: WCSession) {
+        guard FeatureFlags.sportModeEnabled else { return }
         PhoneLog.event("link", "** WATCH STATE CHANGED ** paired=\(session.isPaired) "
             + "appInstalled=\(session.isWatchAppInstalled) reachable=\(session.isReachable) "
             + "activation=\(session.activationState.rawValue) "

@@ -562,7 +562,7 @@ extension WatchDataManager: WCSessionDelegate {
         Task { @MainActor in
             self.log.default("Received message: %{public}@", message)
             // Loan handshake messages, handled before the stock message handling.
-            if (try? LoanMessage.decode(fromTransport: message)) != nil {
+            if FeatureFlags.sportModeEnabled, (try? LoanMessage.decode(fromTransport: message)) != nil {
                 lockedLastWatchContact.value = Date()
                 podLoanController.handleIncoming(userInfo: message)
                 replyHandler([:])

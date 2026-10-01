@@ -8,6 +8,7 @@
 
 import Foundation
 import LoopCore
+import G7SensorKit
 import WatchConnectivity
 import WatchKit
 
@@ -34,7 +35,7 @@ extension ExtensionDelegate {
 
     /// Built at launch (opening the stores is async); a message landing before it is ready is logged.
     private func startStockLoopSession() {
-        guard stockLoopSession == nil, !stockLoopSessionStarting else { return }
+        guard FeatureFlags.sportModeEnabled, stockLoopSession == nil, !stockLoopSessionStarting else { return }
         stockLoopSessionStarting = true
         // Off the main actor: opening stores and a BLE central is not main-thread work.
         Task.detached(priority: .userInitiated) {
@@ -54,8 +55,17 @@ extension ExtensionDelegate {
 
     // MARK: App lifecycle
 
-    /// Called from `applicationDidFinishLaunching()`.
+    /// Called from `applicationDidFinishLaunching()`. With the flag off, nothing of Sport Mode starts.
     func podLoanDidFinishLaunching() {
+        guard FeatureFlags.sportModeEnabled else { return }
+        NotificationCenter.default.addObserver(forName: G7CGMManager.watchStatusDidChange, object: nil, queue: .main) { note in
+            guard let manager = note.object as? G7CGMManager else { return }
+            if !manager.watchIsSearching {
+                SensorSearchAlert.disarm()
+            } else if WKApplication.shared().applicationState != .active {
+                SensorSearchAlert.arm()
+            }
+        }
         // At launch, so the first loan message has somewhere to go; failure only disables Sport Mode.
         SportLog.event("session", "launch: starting Sport Mode stack")
         startStockLoopSession()
@@ -63,18 +73,24 @@ extension ExtensionDelegate {
 
     /// Called from `applicationDidBecomeActive()`.
     func podLoanDidBecomeActive() {
+        guard FeatureFlags.sportModeEnabled else { return }
         // Foreground: re-assert the workout session if anything holds it.
         startStockLoopSession()
         stockLoopSession?.ensureKeepalive()
         SportLog.event("lifecycle", "didBecomeActive [lifecycle-crumb]")
         NotificationCenter.default.post(name: Self.didBecomeActiveNotification, object: self)
+        SensorSearchAlert.disarm()
     }
 
     /// Called from `applicationWillResignActive()`.
     func podLoanWillResignActive() {
+        guard FeatureFlags.sportModeEnabled else { return }
         // Lifecycle breadcrumb.
         SportLog.event("lifecycle", "willResignActive [lifecycle-crumb]")
         NotificationCenter.default.post(name: Self.willResignActiveNotification, object: self)
+        if stockLoopSession?.stack.cgmManager.watchIsSearching == true {
+            SensorSearchAlert.arm()
+        }
     }
 
     /// Foreground transitions for SwiftUI pages.
@@ -89,6 +105,7 @@ extension ExtensionDelegate {
     }
 
     func sessionReachabilityDidChange(_ session: WCSession) {
+        guard FeatureFlags.sportModeEnabled else { return }
         SportLog.event("wc", "REACHABILITY CHANGED — reachable=\(session.isReachable) "
                            + "activation=\(session.activationState.rawValue)")
         // A seized loan prompts when the phone genuinely returns.
@@ -100,7 +117,7 @@ extension ExtensionDelegate {
     func session(_ session: WCSession, didReceiveMessage message: [String : Any]) {
         if let stockLoopSession {
             if stockLoopSession.handleIncomingIfLoanMessage(message, channel: .urgent) { return }
-        } else if message[LoanProtocol.userInfoKey] != nil {
+        } else if FeatureFlags.sportModeEnabled, message[LoanProtocol.userInfoKey] != nil {
             // Logged and the stack started, not discarded.
             log.error("Loan payload arrived on the urgent channel before the Sport Mode stack finished starting")
             startStockLoopSession()
@@ -111,6 +128,10 @@ extension ExtensionDelegate {
 
     /// The queued channel's half of the same recovery, called from `didReceiveUserInfo`.
     func podLoanNoteEarlyPayload() {
+        guard FeatureFlags.sportModeEnabled else {
+            log.default("Ignoring a loan payload: Sport Mode is off in this build")
+            return
+        }
         log.error("Loan payload arrived before the Sport Mode stack finished starting")
         startStockLoopSession()
     }

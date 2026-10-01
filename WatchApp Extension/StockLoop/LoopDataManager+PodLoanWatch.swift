@@ -16,6 +16,7 @@ extension LoopDataManager {
 
     /// Called from `activeContext`'s `didSet`.
     func podLoanNoteContextChange(_ oldValue: WatchContext?) {
+        guard FeatureFlags.sportModeEnabled else { return }
         // The phone's onboarding input to the gate, logged on change.
         let flag = activeContext?.isOnboardingCompleted
         if flag != oldValue?.isOnboardingCompleted || (oldValue == nil) != (activeContext == nil) {

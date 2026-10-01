@@ -17,6 +17,7 @@ extension ContentView {
     /// reachable. A live loan opens it, since the phone (whose flag this is) may be off.
     var isOnboarded: Bool {
         let phoneSaysOnboarded = loopManager.activeContext?.isOnboardingCompleted == true
+        guard FeatureFlags.sportModeEnabled else { return phoneSaysOnboarded }
         let gate = loanIsLive || phoneSaysOnboarded
         // Logged on change; pairs with [onboarding-gate] in LoopDataManager.
         let key = "\(gate)|\(loanIsLive)|\(phoneSaysOnboarded)"

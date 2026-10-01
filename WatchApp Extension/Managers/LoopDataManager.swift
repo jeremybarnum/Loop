@@ -380,8 +380,8 @@ extension LoopDataManager {
             correctionRange: self.watchInfo.loopSettings.glucoseTargetRangeSchedule,
             scheduleOverride: self.watchInfo.scheduleOverride,
             historicalGlucose: historicalGlucose,
-            // Draw the prediction in any loop mode, as the phone does.
-            predictedGlucose: activeContext.predictedGlucose?.values
+            // With Sport Mode, draw the prediction in any loop mode, as the phone does.
+            predictedGlucose: (FeatureFlags.sportModeEnabled || (activeContext.isClosedLoop ?? false)) ? activeContext.predictedGlucose?.values : nil
         )
         return chartData
     }

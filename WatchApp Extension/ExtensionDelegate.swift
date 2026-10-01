@@ -16,7 +16,6 @@ import os.log
 import UserNotifications
 import LoopKit
 import LoopCore
-import G7SensorKit
 import ClockKit
 
 class ExtensionDelegate: NSObject, WKApplicationDelegate {
@@ -85,14 +84,6 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     func applicationDidFinishLaunching() {
         podLoanDidFinishLaunching()
         UNUserNotificationCenter.current().delegate = self
-        NotificationCenter.default.addObserver(forName: G7CGMManager.watchStatusDidChange, object: nil, queue: .main) { note in
-            guard let manager = note.object as? G7CGMManager else { return }
-            if !manager.watchIsSearching {
-                SensorSearchAlert.disarm()
-            } else if WKApplication.shared().applicationState != .active {
-                SensorSearchAlert.arm()
-            }
-        }
         if #available(watchOSApplicationExtension 5.0, *) {
             INRelevantShortcutStore.default.registerShortcuts()
         }
@@ -112,14 +103,10 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         loopManager.requestGlucoseBackfillIfNecessary()
 
         podLoanDidBecomeActive()
-        SensorSearchAlert.disarm()
     }
 
     func applicationWillResignActive() {
         podLoanWillResignActive()
-        if stockLoopSession?.stack.cgmManager.watchIsSearching == true {
-            SensorSearchAlert.arm()
-        }
     }
 
     // Not always main: the Bluetooth task arrives on CoreBluetooth's queue (crash 2026-09-14).
