@@ -279,6 +279,7 @@ final class PodLoanWatchController {
         self.journal = journal
         self.defaults = defaults
         self.stateDirectory = stateDirectory
+        Self.retiredKeys.forEach(defaults.removeObject(forKey:))
         self.phase = Phase(rawValue: defaults.string(forKey: Keys.phase) ?? "") ?? .idle
         self.epoch = defaults.object(forKey: Keys.epoch) as? Int
 

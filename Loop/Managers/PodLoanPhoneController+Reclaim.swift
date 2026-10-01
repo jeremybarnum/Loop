@@ -83,14 +83,8 @@ extension PodLoanPhoneController {
         /// Only force-reclaim audits persist, so the verdict survives a relaunch.
         static let pendingForceAudit = "PodLoanPhoneController.pendingForceAudit"
 
-        /// The last loan's delivered total as the PHONE measured it at the verified round-trip.
-        static let deliveredAuthoritative = "PodLoanPhoneController.deliveredAuthoritative"
-
         /// Rolling diagnostic series. Nothing reads these back to change behaviour.
         static let residualHistory = "PodLoanPhoneController.residualHistory"
-
-        /// Marks the one-time cleanup of force-reclaim residuals out of the series above.
-        static let residualHistoryPurged = "PodLoanPhoneController.residualHistoryPurged.2026-08-13"
 
         /// Where the audit window currently starts — stored with the epoch that owns it.
         static let auditBase = "PodLoanPhoneController.auditBase"
@@ -105,6 +99,11 @@ extension PodLoanPhoneController {
 
         /// Persisted because the blackout it answers can include a phone reboot.
         static let yieldingToInferredLoan = "PodLoanPhoneController.yieldingToInferredLoan"
+
+        /// Written by earlier builds and read by nothing now; removed at launch.
+        static let retired = ["deliveredAuthoritative", "residualHistoryPurged.2026-08-13", "expectedUnits",
+                              "watchAuditRan", "lastHandledForeignSessionAt", "rebidAt",
+                              "firstContactSinceRebid", "inferredLoanYieldDisabled"].map { "PodLoanPhoneController." + $0 }
     }
 
     enum NotificationID {

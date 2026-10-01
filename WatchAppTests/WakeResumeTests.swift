@@ -79,6 +79,13 @@ final class WakeResumeTests: XCTestCase {
         return c
     }
 
+    /// Keys no build reads any more are removed at launch.
+    func testRetiredKeysAreSweptAtLaunch() async {
+        for key in PodLoanWatchController.retiredKeys { defaults.set(true, forKey: key) }
+        _ = await makeController()
+        for key in PodLoanWatchController.retiredKeys { XCTAssertNil(defaults.object(forKey: key), key) }
+    }
+
     func testActiveLoanWithSavedPodStateResumes() async {
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         XCTAssertEqual(c.phase, .active, "an active loan with saved pod state resumes — not drained")

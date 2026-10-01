@@ -260,18 +260,7 @@ final class PodLoanPhoneController {
             self.checkpointsThisLoan = d["count"] as? Int ?? 0
         }
         installPodLinkCensus()
-
-        // One-time purge of force-reclaim residuals from the diagnostic series.
-        if !dependencies.defaults.bool(forKey: Keys.residualHistoryPurged) {
-            if var history = dependencies.defaults.array(forKey: Keys.residualHistory) as? [Double] {
-                let before = history.count
-                history.removeAll { $0 > 0.5 }
-                if history.count != before {
-                    dependencies.defaults.set(history, forKey: Keys.residualHistory)
-                }
-            }
-            dependencies.defaults.set(true, forKey: Keys.residualHistoryPurged)
-        }
+        Keys.retired.forEach(dependencies.defaults.removeObject(forKey:))
 
         // Re-arm an unruled force-reclaim audit.
         if let saved = dependencies.defaults.dictionary(forKey: Keys.pendingForceAudit),
