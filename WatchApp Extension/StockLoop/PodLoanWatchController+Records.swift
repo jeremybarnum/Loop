@@ -28,7 +28,7 @@ extension PodLoanWatchController {
 
         // The pod's last-known total rides along for a mid-loan checkpoint; no read is made for it.
         var odometer: LoanOdometerSnapshot?
-        if let start = deliveredAtTakeover, let latest = pumpManager?.podLoanInsulinDelivered,
+        if let start = deliveredAtTakeover, let latest = pumpManager?.lentDeviceInsulinDelivered,
            let asOf = pumpManager?.podLoanInsulinDeliveredAt {
             odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest,
                                             freshenSucceeded: false, asOf: asOf)

@@ -110,7 +110,7 @@ extension PodLoanWatchController {
                 epoch: epoch ?? journal.activeEpoch,
                 mode: currentMode(),
                 hasPumpManager: pumpManager != nil,
-                deliveredUnits: pumpManager?.podLoanInsulinDelivered,
+                deliveredUnits: pumpManager?.lentDeviceInsulinDelivered,
                 podFault: pumpManager?.podLoanFaultDescription,
                 lastEventSeq: journal.lastEventSeq,
                 unackedCount: journal.unackedEvents().count,
@@ -136,7 +136,7 @@ extension PodLoanWatchController {
     func debugReadStatus(completion: @escaping (Bool?) -> Void) {
         queue.async {
             guard let manager = self.pumpManager else { completion(nil); return }
-            manager.podLoanReadStatus { ok in completion(ok) }
+            manager.refreshLentDeviceStatus { ok in completion(ok) }
         }
     }
 
