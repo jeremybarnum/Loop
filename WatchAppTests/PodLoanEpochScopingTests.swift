@@ -144,58 +144,6 @@ final class StrandedSensorIdentityTests: XCTestCase {
     }
 }
 
-// MARK: - Sport Mode start gate
-
-/// The Start gate keys on whether this watch has an enrolled, living sensor that has gone quiet.
-final class SportModeStartGateTests: XCTestCase {
-
-    private func verdict(_ sensorName: String?, _ activatedAt: Date?, _ lastDirect: Date?, _ now: Date) -> WatchLoopManager.StartGateVerdict {
-        WatchLoopManager.startGateVerdict(sensorName: sensorName, sensorActivatedAt: activatedAt,
-                                          lastDirectG7At: lastDirect, now: now)
-    }
-
-    /// No enrolled sensor warns rather than blocks.
-    func testNoEnrolledSensorWarnsButDoesNotBlock() {
-        let now = Date()
-        XCTAssertEqual(verdict(nil, nil, nil, now), .noSensorEverEnrolled)
-    }
-
-    /// An identity past its life is a corpse the launch path discards; it must not block Start on
-    /// its way out, or a dead sensor would lock the wearer out of Sport Mode entirely.
-    func testExpiredSensorAllowsStart() {
-        let now = Date()
-        XCTAssertEqual(verdict("DXCMqL", now.addingTimeInterval(-(WatchLoopManager.longestSessionWithGrace + .hours(1))), nil, now), .allowed)
-    }
-
-    /// Enrolled, alive, delivering: the healthy case must not be refused.
-    func testFreshDirectReadingAllowsStart() {
-        let now = Date()
-        XCTAssertEqual(verdict("DXCMqL", now.addingTimeInterval(-.hours(24)), now.addingTimeInterval(-.minutes(4)), now), .allowed)
-    }
-
-    /// Not a fault: a fresh enrollment legitimately takes minutes, so it gets the calmer wording
-    /// rather than a "check Dexcom" prompt that reads as an error on a healthy new sensor.
-    func testEnrolledButNeverDeliveredIsWaiting() {
-        let now = Date()
-        XCTAssertEqual(verdict("DXCMu0", now.addingTimeInterval(-.minutes(3)), nil, now), .waitingForFirstReading(sensorName: "DXCMu0"))
-    }
-
-    /// The field case: enrolled, alive, and silent past the bound. A loan here would run on relay
-    /// alone and stop looping the moment the phone leaves.
-    func testEnrolledAndSilentBlocksStart() {
-        let now = Date()
-        XCTAssertEqual(verdict("DXCMqL", now.addingTimeInterval(-.hours(24)), now.addingTimeInterval(-.minutes(31)), now), .noDirectConnection(sensorName: "DXCMqL", silentMinutes: 31))
-    }
-
-    /// The bound is 15 minutes, not the 7-minute display window: deciding whether the LINK works
-    /// needs three missed cadence periods, or one jittered reading refuses a healthy setup.
-    func testJustInsideTheBoundStillAllowsStart() {
-        let now = Date()
-        XCTAssertEqual(verdict("DXCMqL", now.addingTimeInterval(-.hours(24)), now.addingTimeInterval(-(WatchLoopManager.startGateSilenceLimit - .minutes(1))), now), .allowed)
-    }
-}
-
-
 // MARK: - The BLE-wedge signature (PodLoanConnectClock.isWedge)
 
 /// The wedge signature (CBError 11, or no connect at all) decides the user's remedy, so both

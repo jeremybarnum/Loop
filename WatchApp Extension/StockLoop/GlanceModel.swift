@@ -282,7 +282,6 @@ final class GlanceViewModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
     }
 
-    /// The start gate warns and never blocks (see `StartGateVerdict`).
     func startSportMode() {
         RuntimeStateLog.mark("glance.startSportMode")
         guard !isPreview else { return }
@@ -295,19 +294,6 @@ final class GlanceViewModel: ObservableObject {
             return
         }
 
-        switch session.stack.loopManager.sportModeStartGate() {
-        case .allowed:
-            break
-        case .noSensorEverEnrolled:
-
-            SportLog.event("loan", "START with NO SENSOR EVER ENROLLED — loan will run on relayed BG alone and will stop looping if the phone leaves; proceeding (bench rigs look identical from here)")
-        case .waitingForFirstReading(let sensorName):
-
-            SportLog.event("loan", "START with sensor \(sensorName) enrolled but no direct reading yet on this watch — proceeding")
-        case .noDirectConnection(let sensorName, let silentMinutes):
-
-            SportLog.event("loan", "START with no direct BG from \(sensorName) for \(silentMinutes)m — expected between loans (no runtime, no radio); proceeding, but a relay-only loan stops looping if the phone leaves")
-        }
         session.loanController.requestLoan(watchBuild: build)
 
         // Snapshots at the tap and after, since a dark watch cannot send one later.

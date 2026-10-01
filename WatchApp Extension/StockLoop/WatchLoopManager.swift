@@ -468,54 +468,6 @@ final class WatchLoopManager {
     private var _lastDirectG7At: Date?
     private var _lastPhoneRelayAt: Date?
 
-    /// How long the direct G7 may have been silent before Start says so.
-    static let startGateSilenceLimit: TimeInterval = .minutes(15)
-
-    /// The Start tap's view of the watch's own sensor link. Every verdict warns, none blocks:
-    /// direct readings need the runtime the loan itself provides.
-    enum StartGateVerdict: Equatable {
-        case allowed
-
-        /// A sensor is enrolled and this watch has heard it before, but not recently. Expected
-        /// between loans, when the app has no runtime to listen with.
-        case noDirectConnection(sensorName: String, silentMinutes: Int)
-
-        /// Enrolled, never yet heard by THIS watch. A relay-only loan still works; it stops
-        /// looping if the phone leaves.
-        case waitingForFirstReading(sensorName: String)
-
-        /// No sensor has ever been enrolled here.
-        case noSensorEverEnrolled
-    }
-
-    /// Pure, and static, so the verdict can be exercised without a G7 or a store behind it.
-    /// `sportModeStartGate` supplies the live arguments.
-    static func startGateVerdict(sensorName: String?,
-                                 sensorActivatedAt: Date?,
-                                 sensorReportedEnd: Date? = nil,
-                                 lastDirectG7At: Date?,
-                                 now: Date) -> StartGateVerdict {
-        guard let name = sensorName else { return .noSensorEverEnrolled }
-
-        // An identity past its life is not something to warn about: the stack discards it and
-        // runs a fresh acquisition, so naming a dead sensor would give the user nothing to act on.
-        guard !persistedSensorIsPastLife(sensorActivatedAt, reportedEnd: sensorReportedEnd, now: now) else { return .allowed }
-        guard let lastDirect = lastDirectG7At else {
-            return .waitingForFirstReading(sensorName: name)
-        }
-        let silent = now.timeIntervalSince(lastDirect)
-        guard silent > startGateSilenceLimit else { return .allowed }
-        return .noDirectConnection(sensorName: name, silentMinutes: Int(silent / 60))
-    }
-
-    func sportModeStartGate(now: Date = Date()) -> StartGateVerdict {
-        Self.startGateVerdict(sensorName: g7Manager?.sensorName,
-                              sensorActivatedAt: g7Manager?.sensorActivatedAt,
-                              sensorReportedEnd: Self.reportedEnd(of: g7Manager),
-                              lastDirectG7At: lastGlucoseSourceStamps.direct,
-                              now: now)
-    }
-
     /// The longest G7 session, 15 days plus the 12-hour grace: the bound when the sensor has not
     /// reported its own session length.
     static let longestSessionWithGrace: TimeInterval = .hours(15 * 24 + 12)
