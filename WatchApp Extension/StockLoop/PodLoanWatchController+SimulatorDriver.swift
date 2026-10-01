@@ -3,7 +3,7 @@
 //  StockLoop
 //
 //  Simulator-only fake of the loan phases, for driving the UI without a phone or pod.
-//  Gated by `sim.fakeLoanFlow`.
+//  Gated by `simFakeLoanFlow`.
 //
 
 import Foundation

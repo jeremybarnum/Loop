@@ -273,8 +273,8 @@ final class SeizeActivationTests: XCTestCase {
 
     /// The phone returning during a seized loan raises a prompt; only the user's choice ends it.
     func testPhoneReturnPromptsAndOnlyTheUsersChoiceEndsASeizedLoan() async {
-        defaults.set(true, forKey: "sim.fakeLoanFlow")
         let controller = await makeController()
+        controller.simFakeLoanFlow = true
         controller.send = { _ in }
         controller.isPhoneReachable = { true }
         var pendingDebounce: [DispatchWorkItem] = []
@@ -327,8 +327,8 @@ final class SeizeActivationTests: XCTestCase {
     /// The three gates that must each keep the debounce unarmed: no reunion token (a
     /// NORMAL loan never prompts), the kill switch, and a reachability LOSS.
     func testReunionDebounceRespectsItsGates() async {
-        defaults.set(true, forKey: "sim.fakeLoanFlow")
         let controller = await makeController()
+        controller.simFakeLoanFlow = true
         controller.send = { _ in }
         controller.isPhoneReachable = { true }
         var pendingDebounce: [DispatchWorkItem] = []
@@ -394,8 +394,8 @@ final class SeizeActivationTests: XCTestCase {
     /// Detector C (fix 2): the reunion prompt and Keep each SEND a holdsPod status
     /// report, so the phone's yield never waits on dose-stream evidence.
     func testReunionPromptAndKeepSendHoldsPodReports() async {
-        defaults.set(true, forKey: "sim.fakeLoanFlow")
         let controller = await makeController()
+        controller.simFakeLoanFlow = true
         var holdsPodEpochs: [Int] = []
         controller.send = { dict in
             if let message = try? LoanMessage.decode(fromTransport: dict),
@@ -457,8 +457,8 @@ final class SeizeActivationTests: XCTestCase {
 
     /// Stale status queries, revokes and grants during a live loan answer with what the watch holds.
     func testStaleTrafficWhileActiveAnswersHoldsPod() async throws {
-        defaults.set(true, forKey: "sim.fakeLoanFlow")
         let controller = await makeController()
+        controller.simFakeLoanFlow = true
         var holdsPodEpochs: [Int] = []
         controller.send = { dict in
             if let message = try? LoanMessage.decode(fromTransport: dict),

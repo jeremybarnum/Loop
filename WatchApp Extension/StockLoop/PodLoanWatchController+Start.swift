@@ -203,9 +203,8 @@ extension PodLoanWatchController {
     func requestLoan(watchBuild: String) {
         #if targetEnvironment(simulator)
 
-        let simFakeFlow = defaults.bool(forKey: "sim.fakeLoanFlow")
-        SportLog.event("loan", "Start (sim): sim.fakeLoanFlow=\(simFakeFlow) — \(simFakeFlow ? "FAKE flow driver" : "REAL loan protocol")")
-        if simFakeFlow { simDriveStart(); return }
+        SportLog.event("loan", "Start (sim): simFakeLoanFlow=\(simFakeLoanFlow) — \(simFakeLoanFlow ? "FAKE flow driver" : "REAL loan protocol")")
+        if simFakeLoanFlow { simDriveStart(); return }
         #endif
         queue.async {
             guard self.phase == .idle || self.phase == .recoveredDrain else {
