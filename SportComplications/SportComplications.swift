@@ -87,7 +87,8 @@ struct SportComplicationView: View {
         case .iob: return snapshot.iobText(at: d) ?? SportComplicationSnapshot.dash
         case .cob: return snapshot.cobText(at: d) ?? SportComplicationSnapshot.dash
         case .eventual: return snapshot.eventualText(at: d) ?? SportComplicationSnapshot.dash
-        case .glucoseToEventual: return snapshot.currentText(at: d) ?? SportComplicationSnapshot.dash
+        case .glucoseToEventual, .glucose: return snapshot.currentText(at: d) ?? SportComplicationSnapshot.dash
+        case .iobCob: return snapshot.short(.iobCob, at: d)
         }
     }
 
@@ -97,6 +98,8 @@ struct SportComplicationView: View {
         case .cob: return "COB"
         case .eventual: return "→"
         case .glucoseToEventual: return snapshot.currentText(at: entry.date) ?? SportComplicationSnapshot.dash
+        case .iobCob: return "IOB·COB"
+        case .glucose: return "BG"
         }
     }
 
@@ -142,6 +145,8 @@ struct SportIOBWidget: SportComplicationWidget { static let kind = SportComplica
 struct SportCOBWidget: SportComplicationWidget { static let kind = SportComplicationSnapshot.Kind.cob }
 struct SportEventualWidget: SportComplicationWidget { static let kind = SportComplicationSnapshot.Kind.eventual }
 struct SportGlucoseToEventualWidget: SportComplicationWidget { static let kind = SportComplicationSnapshot.Kind.glucoseToEventual }
+struct SportIOBCOBWidget: SportComplicationWidget { static let kind = SportComplicationSnapshot.Kind.iobCob }
+struct SportGlucoseWidget: SportComplicationWidget { static let kind = SportComplicationSnapshot.Kind.glucose }
 
 @main
 struct SportComplicationsBundle: WidgetBundle {
@@ -150,5 +155,7 @@ struct SportComplicationsBundle: WidgetBundle {
         SportCOBWidget()
         SportEventualWidget()
         SportGlucoseToEventualWidget()
+        SportIOBCOBWidget()
+        SportGlucoseWidget()
     }
 }

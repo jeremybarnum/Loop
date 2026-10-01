@@ -42,6 +42,16 @@ final class SportComplicationTests: XCTestCase {
         XCTAssertEqual(s.curved(.glucoseToEventual, at: now), "120 → 128")
     }
 
+    func testIOBAndCOBShareTheBottomSlotAndBGStandsAloneInACorner() {
+        let s = snapshot()
+        XCTAssertEqual(s.line(.iobCob, at: now), "IOB 1.2 · COB 24")
+        XCTAssertEqual(s.curved(.glucose, at: now), "120")
+        XCTAssertEqual(s.line(.glucose, at: now), "BG 120")
+        let stale = snapshot(loopAge: 20 * 60, glucoseAge: 20 * 60)
+        XCTAssertEqual(stale.line(.iobCob, at: now), "IOB — · COB —")
+        XCTAssertEqual(stale.curved(.glucose, at: now), "—", "like stock: a dash after 15 min")
+    }
+
     /// A stale loop must not leave old insulin on the wrist as if it were current.
     func testAStaleLoopShowsDashes() {
         let s = snapshot(loopAge: 20 * 60)

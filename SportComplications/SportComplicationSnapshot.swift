@@ -49,6 +49,10 @@ struct SportComplicationSnapshot: Codable, Equatable {
         case cob = "SportCOB"
         case eventual = "SportEventual"
         case glucoseToEventual = "SportGlucoseToEventual"
+        /// Both on one line, for the roomy bottom slot.
+        case iobCob = "SportIOBCOB"
+        /// Just the reading, for a corner.
+        case glucose = "SportGlucose"
 
         var title: String {
             switch self {
@@ -56,6 +60,8 @@ struct SportComplicationSnapshot: Codable, Equatable {
             case .cob: return "COB"
             case .eventual: return "Eventual BG"
             case .glucoseToEventual: return "BG → Eventual"
+            case .iobCob: return "IOB · COB"
+            case .glucose: return "BG"
             }
         }
 
@@ -84,6 +90,8 @@ struct SportComplicationSnapshot: Codable, Equatable {
         case .cob: return cobText(at: date) ?? Self.dash
         case .eventual: return "→\(eventualText(at: date) ?? Self.dash)"
         case .glucoseToEventual: return "\(currentText(at: date) ?? Self.dash)→\(eventualText(at: date) ?? Self.dash)"
+        case .iobCob: return "\(iobText(at: date) ?? Self.dash)·\(cobText(at: date) ?? Self.dash)"
+        case .glucose: return currentText(at: date) ?? Self.dash
         }
     }
 
@@ -94,6 +102,8 @@ struct SportComplicationSnapshot: Codable, Equatable {
         case .cob: return "COB \(cobText(at: date) ?? Self.dash)"
         case .eventual: return "Eventually \(eventualText(at: date) ?? Self.dash)"
         case .glucoseToEventual: return "BG \(currentText(at: date) ?? Self.dash) → \(eventualText(at: date) ?? Self.dash)"
+        case .iobCob: return "IOB \(iobText(at: date) ?? Self.dash) · COB \(cobText(at: date) ?? Self.dash)"
+        case .glucose: return "BG \(currentText(at: date) ?? Self.dash)"
         }
     }
 
@@ -104,6 +114,8 @@ struct SportComplicationSnapshot: Codable, Equatable {
         case .cob: return "COB \(cobText(at: date) ?? Self.dash)"
         case .eventual: return "EVENTUAL \(eventualText(at: date) ?? Self.dash)"
         case .glucoseToEventual: return "\(currentText(at: date) ?? Self.dash) → \(eventualText(at: date) ?? Self.dash)"
+        case .iobCob: return "IOB \(iobText(at: date) ?? Self.dash) · COB \(cobText(at: date) ?? Self.dash)"
+        case .glucose: return currentText(at: date) ?? Self.dash
         }
     }
 
