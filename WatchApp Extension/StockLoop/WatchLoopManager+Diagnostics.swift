@@ -11,7 +11,6 @@ import HealthKit
 import LoopKit
 import LoopAlgorithm
 import LoopCore
-import G7SensorKit
 import WatchConnectivity
 import os.log
 
