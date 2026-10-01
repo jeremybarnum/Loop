@@ -228,6 +228,26 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertTrue(c.isLoanActiveNonBlocking, "the live-loan mirror")
     }
 
+    /// Loop mode, correction model and last cycle move from UserDefaults to one state file, once.
+    func testLoopStateMigratesOnceFromLegacyKeys() async {
+        let completed = Date(timeIntervalSinceNow: -240)
+        defaults.set(true, forKey: WatchLoopManager.closedLoopDefaultsKey)
+        defaults.set(true, forKey: WatchLoopManager.integralRCDefaultsKey)
+        defaults.set(completed, forKey: WatchLoopManager.lastLoopCompletedKey)
+        let first = await makeController()
+        XCTAssertTrue(first.loopManager.closedLoopEnabledNonBlocking)
+        XCTAssertTrue(first.loopManager.isIntegralRetrospectiveCorrectionEnabled)
+        XCTAssertEqual(first.loopManager.lastLoopCompleted, completed)
+        for key in [WatchLoopManager.closedLoopDefaultsKey, WatchLoopManager.integralRCDefaultsKey, WatchLoopManager.lastLoopCompletedKey] {
+            XCTAssertNil(defaults.object(forKey: key), "\(key) is removed once the file holds it")
+        }
+
+        defaults.set(false, forKey: WatchLoopManager.closedLoopDefaultsKey)
+        let second = await makeController()
+        XCTAssertTrue(second.loopManager.closedLoopEnabledNonBlocking, "the file wins over a re-seeded legacy key")
+        XCTAssertNil(defaults.object(forKey: WatchLoopManager.closedLoopDefaultsKey))
+    }
+
     func testClosedLoopDoesNotOutliveItsLoan() async {
         let live = await makeController()
         live.loopManager.setClosedLoopEnabled(true, reason: "test")

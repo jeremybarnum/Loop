@@ -235,17 +235,25 @@ final class WatchLoopManager {
         return _closedLoopMirror
     }
 
-    // Persisted, and reloaded in `init`. Held only in memory, a relaunch mid-loan came back OPEN
-    // with a grey ring — and the phone then inherited OPEN at hand-back.
+    /// Legacy keys, migrated into `WatchLoopState` once at launch.
     static let closedLoopDefaultsKey = "WatchLoopManager.closedLoopEnabled"
     static let integralRCDefaultsKey = "WatchLoopManager.integralRetrospectiveCorrection"
+    static let lastLoopCompletedKey = "WatchLoopManager.lastLoopCompleted"
+
+    /// Saves one change to the persisted loop state; the whole value is written at once.
+    func updateLoopState(_ change: (inout WatchLoopState) -> Void) {
+        loopStateLock.lock()
+        defer { loopStateLock.unlock() }
+        change(&loopState)
+        loopStateStore.wrappedValue = loopState.rawValue
+    }
     /// Syncs onto `dataAccessQueue`, with the same caveat as `closedLoopEnabled`: not from the
     /// loan controller's queue.
     var isIntegralRetrospectiveCorrectionEnabled: Bool { dataAccessQueue.sync { integralRetrospectiveCorrectionEnabled } }
 
     /// Per session, so the next grant's mode is not mistaken for a transition.
     func resetClosedLoopForSessionEnd() {
-        defaults.set(false, forKey: Self.closedLoopDefaultsKey)
+        updateLoopState { $0.closedLoopEnabled = false }
         closedLoopMirrorLock.lock()
         _closedLoopMirror = false
         closedLoopMirrorLock.unlock()
@@ -257,7 +265,7 @@ final class WatchLoopManager {
     /// Mirror written synchronously so an immediate hand-back carries the new value. Opening the
     /// loop cancels the running temp, only on a real closed-to-open transition.
     func setClosedLoopEnabled(_ enabled: Bool, reason: String = "by user") {
-        defaults.set(enabled, forKey: Self.closedLoopDefaultsKey)
+        updateLoopState { $0.closedLoopEnabled = enabled }
 
         closedLoopMirrorLock.lock()
         let wasEnabled = _closedLoopMirror
@@ -406,6 +414,12 @@ final class WatchLoopManager {
     /// Where state files live; nil in the app (Documents).
     let stateDirectory: URL?
 
+    /// Loop mode, correction model and last cycle, persisted as one value; a relaunch mid-loan
+    /// must not come back open with a grey ring.
+    var loopStateStore: PersistedProperty<[String: Any]>
+    private(set) var loopState: WatchLoopState
+    let loopStateLock = NSLock()
+
     /// The G7 manager's `rawState`, in a file as stock keeps a CGM manager, replaced whole.
     var cgmManagerState: PersistedProperty<CGMManager.RawStateValue>
 
@@ -421,17 +435,21 @@ final class WatchLoopManager {
             ?? PersistedProperty(key: "CGMManagerState")
         Self.migrateLegacyCGMState(defaults: defaults, into: &cgmState)
         self.cgmManagerState = cgmState
+        var stateStore = stateDirectory.map { PersistedProperty<[String: Any]>(key: "WatchLoopState", directory: $0) }
+            ?? PersistedProperty(key: "WatchLoopState")
+        let loopState = WatchLoopState.load(from: &stateStore, legacy: defaults)
+        self.loopStateStore = stateStore
+        self.loopState = loopState
         self.doseStore = doseStore
         self.glucoseStore = glucoseStore
         self.carbStore = carbStore
         self.settingsProvider = WatchSettingsProvider(settings: settings)
         self.overrideHistory = overrideHistory
         self.settings = settings
-        self.lastLoopCompleted = defaults.object(forKey: Self.lastLoopCompletedKey) as? Date
-        let closed = defaults.bool(forKey: Self.closedLoopDefaultsKey)
-        self._closedLoopEnabled = closed
-        self._closedLoopMirror = closed
-        self.integralRetrospectiveCorrectionEnabled = defaults.bool(forKey: Self.integralRCDefaultsKey)
+        self.lastLoopCompleted = loopState.lastLoopCompleted
+        self._closedLoopEnabled = loopState.closedLoopEnabled
+        self._closedLoopMirror = loopState.closedLoopEnabled
+        self.integralRetrospectiveCorrectionEnabled = loopState.integralRetrospectiveCorrectionEnabled
         defaults.removeObject(forKey: Self.lastDirectG7DefaultsKey)
 
         // The store asks us for the scheduled basal it nets doses against; see the
@@ -582,7 +600,7 @@ final class WatchLoopManager {
 
     /// Applied on `dataAccessQueue`, ahead of the first prediction.
     func setIntegralRetrospectiveCorrection(_ enabled: Bool) {
-        defaults.set(enabled, forKey: Self.integralRCDefaultsKey)
+        updateLoopState { $0.integralRetrospectiveCorrectionEnabled = enabled }
         dataAccessQueue.async {
             self.integralRetrospectiveCorrectionEnabled = enabled
             SportLog.event("loan", "retrospective correction: \(enabled ? "INTEGRAL" : "standard") (from grant)")
@@ -627,9 +645,8 @@ final class WatchLoopManager {
 
     /// When a cycle last completed — the freshness ring's only input. Persisted on every write:
     /// a relaunch mid-loan that came back with no value opened the ring grey for a cycle.
-    private static let lastLoopCompletedKey = "WatchLoopManager.lastLoopCompleted"
     var lastLoopCompleted: Date? {
-        didSet { defaults.set(lastLoopCompleted, forKey: Self.lastLoopCompletedKey) }
+        didSet { updateLoopState { $0.lastLoopCompleted = lastLoopCompleted } }
     }
 
     /// Adopts the phone's completion time at grant; only ever moves forward.
@@ -677,4 +694,42 @@ private extension PresetSymbol {
     /// Emoji only. A non-emoji symbol's raw value is an asset or system-image name, which would
     /// land in the log as a meaningless token rather than a glyph.
     var textGlyph: String? { symbolType == .emoji ? value : nil }
+}
+
+/// The loop manager's persisted state, saved and restored as one value.
+struct WatchLoopState: RawRepresentable {
+    var closedLoopEnabled = false
+    var integralRetrospectiveCorrectionEnabled = false
+    var lastLoopCompleted: Date?
+
+    init() {}
+
+    init?(rawValue: [String: Any]) {
+        closedLoopEnabled = rawValue["closedLoopEnabled"] as? Bool ?? false
+        integralRetrospectiveCorrectionEnabled = rawValue["integralRetrospectiveCorrectionEnabled"] as? Bool ?? false
+        lastLoopCompleted = rawValue["lastLoopCompleted"] as? Date
+    }
+
+    var rawValue: [String: Any] {
+        var raw: [String: Any] = ["closedLoopEnabled": closedLoopEnabled,
+                                  "integralRetrospectiveCorrectionEnabled": integralRetrospectiveCorrectionEnabled]
+        raw["lastLoopCompleted"] = lastLoopCompleted
+        return raw
+    }
+
+    /// The file if present; otherwise the legacy keys, written to the file first, then removed.
+    static func load(from store: inout PersistedProperty<[String: Any]>, legacy defaults: UserDefaults) -> WatchLoopState {
+        let keys = [WatchLoopManager.closedLoopDefaultsKey, WatchLoopManager.integralRCDefaultsKey, WatchLoopManager.lastLoopCompletedKey]
+        if let saved = store.wrappedValue.flatMap(WatchLoopState.init(rawValue:)) {
+            keys.forEach(defaults.removeObject(forKey:))
+            return saved
+        }
+        var state = WatchLoopState()
+        state.closedLoopEnabled = defaults.bool(forKey: WatchLoopManager.closedLoopDefaultsKey)
+        state.integralRetrospectiveCorrectionEnabled = defaults.bool(forKey: WatchLoopManager.integralRCDefaultsKey)
+        state.lastLoopCompleted = defaults.object(forKey: WatchLoopManager.lastLoopCompletedKey) as? Date
+        store.wrappedValue = state.rawValue
+        if store.wrappedValue != nil { keys.forEach(defaults.removeObject(forKey:)) }
+        return state
+    }
 }
