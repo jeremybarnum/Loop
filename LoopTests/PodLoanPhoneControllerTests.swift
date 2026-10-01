@@ -750,6 +750,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(addedDoses.count, 1)
         XCTAssertEqual(addedDoses[0].count, 1, "the bolus event enters the store before the ack")
         waitForState(controller, .owner)
+        waitUntil(timeout: 5, "dosing resumed") { self.lock.lock(); defer { self.lock.unlock() }; return self.pauseCalls.last == false }
         XCTAssertEqual(pauseCalls, [true, false], "dosing restored only after commit")
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed at loan close")
     }
@@ -1377,6 +1378,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
         XCTAssertEqual(addedDoses.flatMap { $0 }.count, 1, "the legacy offer's records are committed")
         waitForState(controller, .owner)
+        waitUntil(timeout: 5, "dosing resumed") { self.lock.lock(); defer { self.lock.unlock() }; return self.pauseCalls.last == false }
         XCTAssertEqual(pauseCalls, [true, false], "dosing is restored — the loan is not left open")
     }
 
