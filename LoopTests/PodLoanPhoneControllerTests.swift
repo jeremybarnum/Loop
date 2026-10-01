@@ -2751,6 +2751,37 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(copies(), 2, "one burst, one copy")
     }
 
+    /// A glucose alert change reaches the standing copy at once, like a therapy change: neither
+    /// the 30-minute periodic floor nor the book's short floor holds it.
+    func testAGlucoseAlertChangeRefreshesTheStandingCopyAtOnce() {
+        saveState { $0.watchSupportsSeize = true }
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        func copies() -> Int {
+            lock.lock(); defer { lock.unlock() }
+            return sent.filter { if case .dormantGrant = $0 { return true }; return false }.count
+        }
+        var alerts = GlucoseAlertSettings(profiles: [.makePrimary()], activeProfileID: UUID(),
+                                          cgmProvidesOwnAlerts: false, loopAlertsOverrideForOwnAlertingCGM: false)
+        alerts.activeProfileID = alerts.profiles[0].id
+        controller.noteGlucoseAlertSettings(alerts)
+        waitUntil(timeout: 5, "first copy") { copies() == 1 }
+
+        controller.noteGlucoseAlertSettings(alerts)
+        controller.considerDormantRefresh()
+        controller.queue.sync { }
+        usleep(300_000)
+        XCTAssertEqual(copies(), 1, "the same settings again: nothing to send")
+
+        alerts.profiles[0].configuration.lowThresholdMgDL = 80   // seconds after the last copy
+        controller.noteGlucoseAlertSettings(alerts)
+        waitUntil(timeout: 5, "the low threshold changed") { copies() == 2 }
+
+        controller.considerDormantRefresh(bookChanged: true)      // a bolus right after: the book's floor holds
+        controller.queue.sync { }
+        usleep(300_000)
+        XCTAssertEqual(copies(), 2, "a book change inside its floor waits for the trailing refresh")
+    }
+
     /// A loan the watch ANNOUNCED (a seized pod) is anchored at this phone's own last pod read —
     /// never at an earlier loan's — and a silent one is warned about like any other.
     func testALoanTheWatchAnnouncedIsAnchoredHereAndWarnedAboutWhenSilent() throws {

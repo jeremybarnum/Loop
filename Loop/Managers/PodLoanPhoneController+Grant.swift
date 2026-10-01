@@ -305,13 +305,35 @@ extension PodLoanPhoneController {
     /// Floor on book-triggered refreshes, with one trailing refresh.
     private static let bookRefreshFloor: TimeInterval = 30
 
-    /// Everything the wrist would dose differently on.
+    /// Everything in the settings the wrist would behave differently on.
     private static func settingsFingerprint(_ s: LoopSettings) -> String {
         let basal = s.basalRateSchedule.map { String(describing: $0.items) } ?? "-"
         let isf = s.insulinSensitivitySchedule.map { String(describing: $0.items) } ?? "-"
         let cr = s.carbRatioSchedule.map { String(describing: $0.items) } ?? "-"
         let targets = s.glucoseTargetRangeSchedule.map { String(describing: $0.items) } ?? "-"
-        return "\(basal)|\(isf)|\(cr)|\(targets)|\(String(describing: s.maximumBolus))|\(String(describing: s.maximumBasalRatePerHour))|\(s.dosingEnabled)"
+        return [basal, isf, cr, targets, String(describing: s.maximumBolus), String(describing: s.maximumBasalRatePerHour),
+                "\(s.dosingEnabled)", s.basalRateSchedule?.timeZone.identifier ?? "-",
+                String(describing: s.suspendThreshold), String(describing: s.preMealTargetRange),
+                "\(s.automaticDosingStrategy)", String(describing: s.overridePresets),
+                String(describing: s.defaultRapidActingModel)].joined(separator: "|")
+    }
+
+    /// The settings plus what the copy carries from outside them.
+    private func standingCopyFingerprint(_ s: LoopSettings) -> String {
+        let activeOverride = deps.scheduleOverride().flatMap { $0.hasFinished() ? nil : $0 }
+        return [Self.settingsFingerprint(s), String(describing: activeOverride),
+                "\(UserDefaults.standard.integralRetrospectiveCorrectionEnabled)",
+                String(describing: deps.pumpManager()?.status.insulinType),
+                String(describing: glucoseAlertSettingsSeen)].joined(separator: "|")
+    }
+
+    /// The phone's glucose alert settings changed (or were first seen): refresh the copy now.
+    func noteGlucoseAlertSettings(_ settings: GlucoseAlertSettings) {
+        queue.async { [weak self] in
+            guard let self, settings != self.glucoseAlertSettingsSeen else { return }
+            self.glucoseAlertSettingsSeen = settings
+            self.queue_considerDormantRefresh()
+        }
     }
 
     /// Minted once; echoed back by a watch that started alone.
@@ -339,7 +361,7 @@ extension PodLoanPhoneController {
               settings.basalRateSchedule != nil else { return }
 
         // The epoch rides the fingerprint, so a spent epoch is never reused.
-        let fingerprint = Self.settingsFingerprint(settings) + "|e\(epoch)"
+        let fingerprint = standingCopyFingerprint(settings) + "|e\(epoch)"
         let periodicDue = lastDormantRefreshAt.map { deps.now().timeIntervalSince($0) >= Self.dormantRefreshInterval } ?? true
         let settingsChanged = fingerprint != lastDormantSettingsFingerprint
         guard periodicDue || settingsChanged || bookChanged else { return }

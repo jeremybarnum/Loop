@@ -6,6 +6,7 @@
 //  WatchConnectivity channels, the reclaim background hold, and the link census.
 //
 
+import Combine
 import HealthKit
 import UIKit
 import WatchConnectivity
@@ -41,7 +42,24 @@ extension WatchDataManager {
         // Eager, so a relaunch mid-loan restores the state machine before any message.
         _ = podLoanController
         startLinkCensus()
+        followGlucoseAlertSettings()
     }
+
+    /// A glucose alert change reaches the watch's standing copy now, not at the periodic refresh.
+    private func followGlucoseAlertSettings() {
+        let manager = deviceManager.glucoseAlertManager
+        podLoanController.noteGlucoseAlertSettings(manager.sharedSettings)
+        // Fires before the change; the main-actor hop reads it after.
+        Self.glucoseAlertSettingsChanges = manager.objectWillChange.sink { [weak self, weak manager] _ in
+            Task { @MainActor in
+                guard let self, let manager else { return }
+                self.podLoanController.noteGlucoseAlertSettings(manager.sharedSettings)
+            }
+        }
+    }
+
+    /// Written once on main at startup.
+    nonisolated(unsafe) private static var glucoseAlertSettingsChanges: AnyCancellable?
 
     // MARK: - Background task
 

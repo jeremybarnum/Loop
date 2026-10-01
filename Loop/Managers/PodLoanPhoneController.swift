@@ -357,6 +357,8 @@ final class PodLoanPhoneController {
 
     var lastClosedSessionRevokeAt: Date?
     var lastDormantSettingsFingerprint: String?
+    /// The phone's glucose alert settings as last seen; part of the standing copy's fingerprint.
+    var glucoseAlertSettingsSeen: GlucoseAlertSettings?
 
     /// The newest loan the watch claimed that this phone never granted, and when.
     var newestForeignLoanEvidence: (epoch: Int, at: Date)?
