@@ -116,6 +116,19 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: WatchLoopManager.cgmStateDefaultsKey))
     }
 
+    /// An interrupted start is reported once: the next relaunch is plain idle, not a second
+    /// `takeoverFailed` and a second "start was interrupted".
+    func testASecondRelaunchAfterAnInterruptedStartIsIdle() async {
+        let first = await relaunch(phase: .takingOver, savedState: nil, granted: false)
+        XCTAssertEqual(first.phase, .idle)
+        XCTAssertEqual(first.pendingInterruptedTakeoverEpoch, 7, "the first relaunch tells the phone")
+        let second = await makeController()
+        XCTAssertEqual(second.phase, .idle)
+        XCTAssertNil(second.epoch)
+        XCTAssertNil(second.pendingInterruptedTakeoverEpoch, "the normalised phase was saved, so nothing is re-reported")
+        XCTAssertNil(second.lastIdleNote)
+    }
+
     func testActiveLoanWithSavedPodStateResumes() async {
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         XCTAssertEqual(c.phase, .active, "an active loan with saved pod state resumes — not drained")

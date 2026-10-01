@@ -313,6 +313,9 @@ final class PodLoanWatchController {
                 issueSessionEndedAlert()
             }
         }
+        // init skips the observers, so save what it normalised or the next launch repeats it.
+        defaults.set(phase.rawValue, forKey: Keys.phase)
+        defaults.set(epoch, forKey: Keys.epoch)
     }
 
     /// Saved pod state handed from `init` to `resumeIfNeeded`, which does the rebuild.
