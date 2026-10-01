@@ -184,7 +184,7 @@ extension PodLoanPhoneController {
     }
 
     /// One placeholder per loan, findable by epoch alone — the delete has nothing else to go on.
-    private static func gapSyncIdentifier(epoch: Int) -> String { "PODLOAN-ODOGAP-e\(epoch)" }
+    private static func gapSyncIdentifier(epoch: Int) -> String { "LOAN-AUDIT-GAP-e\(epoch)" }
 
     /// Launch-time retry for a placeholder whose delete failed AFTER the real records landed.
     func retryPersistedGapDeleteIfAny() {

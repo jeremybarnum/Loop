@@ -1587,7 +1587,7 @@ extension PodLoanPhoneControllerTests {
                       "the alert rides the URGENT channel — the watch is dead, the phone must get attention")
         XCTAssertEqual(booked.count, 1, "the gap books as a placeholder bolus")
         XCTAssertEqual(booked.first?.deliveredUnits ?? 0, 2.5, accuracy: 0.1, "booked amount = the odometer gap")
-        XCTAssertEqual(booked.first?.syncIdentifier, "PODLOAN-ODOGAP-e\(grant.epoch)",
+        XCTAssertEqual(booked.first?.syncIdentifier, "LOAN-AUDIT-GAP-e\(grant.epoch)",
                        "deterministic identity, so the watch's return can retire it")
         XCTAssertEqual(booked.first?.manuallyEntered, true,
                        "manual-entry namespace — pump events overwrite syncIdentifier with hex(raw); manual doses keep it")
@@ -1667,7 +1667,7 @@ extension PodLoanPhoneControllerTests {
         let deleted = deletedGapSyncs
         lock.unlock()
 
-        XCTAssertEqual(deleted, ["PODLOAN-ODOGAP-e\(grant.epoch)"], "the placeholder retires by its deterministic identity")
+        XCTAssertEqual(deleted, ["LOAN-AUDIT-GAP-e\(grant.epoch)"], "the placeholder retires by its deterministic identity")
         waitUntil(timeout: 5, "state cleared") {
             controller.persisted.gapBooking == nil
         }
@@ -1717,7 +1717,7 @@ extension PodLoanPhoneControllerTests {
         lock.lock()
         let deleted = deletedGapSyncs
         lock.unlock()
-        XCTAssertEqual(deleted, ["PODLOAN-ODOGAP-e7"], "retried against the PERSISTED epoch, no offer involved")
+        XCTAssertEqual(deleted, ["LOAN-AUDIT-GAP-e7"], "retried against the PERSISTED epoch, no offer involved")
     }
 
     /// Launch-time store work waits for protected data (reboot before first unlock).
@@ -1736,7 +1736,7 @@ extension PodLoanPhoneControllerTests {
         // First unlock: the deferred work runs and the retry completes.
         unlock?()
         waitUntil(timeout: 5, "deferred retry runs at unlock") {
-            self.lock.lock(); defer { self.lock.unlock() }; return self.deletedGapSyncs == ["PODLOAN-ODOGAP-e9"]
+            self.lock.lock(); defer { self.lock.unlock() }; return self.deletedGapSyncs == ["LOAN-AUDIT-GAP-e9"]
         }
     }
 

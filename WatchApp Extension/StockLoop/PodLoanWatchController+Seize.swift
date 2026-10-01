@@ -216,7 +216,7 @@ extension PodLoanWatchController {
         }
         let entry = DoseEntry(type: .bolus, startDate: at, endDate: at, value: unexplained, unit: .units,
                               decisionId: nil, deliveredUnits: unexplained,
-                              syncIdentifier: "PODLOAN-WATCHGAP-e\(epoch)",
+                              syncIdentifier: "LOAN-WATCH-GAP-e\(epoch)",
                               insulinType: pumpManager?.status.insulinType)
         // Blocking: the first cycle must see the booking.
         let gate = DispatchSemaphore(value: 0)
