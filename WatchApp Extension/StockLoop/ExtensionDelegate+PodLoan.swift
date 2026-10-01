@@ -8,7 +8,9 @@
 
 import Foundation
 import LoopCore
+import LoopKit
 import G7SensorKit
+import UserNotifications
 import WatchConnectivity
 import WatchKit
 
@@ -66,9 +68,24 @@ extension ExtensionDelegate {
                 SensorSearchAlert.arm()
             }
         }
+        WatchAlertPresenter.registerCategory()
         // At launch, so the first loan message has somewhere to go; failure only disables Sport Mode.
         SportLog.event("session", "launch: starting Sport Mode stack")
         startStockLoopSession()
+    }
+
+    /// A wrist alert's response stays on the wrist; acknowledging the loaned pump's reaches the pump.
+    func podLoanHandleAlertResponse(_ response: UNNotificationResponse) async -> Bool {
+        let request = response.notification.request
+        guard FeatureFlags.sportModeEnabled, WatchAlertPresenter.isWristAlert(request.identifier) else { return false }
+        guard WatchAlertPresenter.acknowledges(response.actionIdentifier),
+              let identifier = WatchAlertPresenter.alertIdentifier(in: request.content.userInfo) else { return true }
+        guard let responder = await stockLoopSession?.loanController.pumpAlertResponder(for: identifier.managerIdentifier) else {
+            SportLog.event("alert", "ACKNOWLEDGED \(identifier.value) on the wrist — not the loaned pump's, nothing to pass on")
+            return true
+        }
+        await WatchAlertPresenter.acknowledge(identifier, with: responder, content: request.content)
+        return true
     }
 
     /// Called from `applicationDidBecomeActive()`.

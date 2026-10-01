@@ -115,6 +115,18 @@ extension PodLoanWatchController: PumpManagerDelegate {
     }
 }
 
+extension PodLoanWatchController {
+    /// The loaned pump, for an alert it raised, while the loan is live.
+    func pumpAlertResponder(for managerIdentifier: String) async -> AlertResponder? {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                let pump = self.phase == .active ? self.pumpManager : nil
+                continuation.resume(returning: pump?.pluginIdentifier == managerIdentifier ? pump : nil)
+            }
+        }
+    }
+}
+
 extension PodLoanWatchController: PumpManagerStatusObserver {
     func pumpManager(_ pumpManager: PumpManager, didUpdate status: PumpManagerStatus, oldStatus: PumpManagerStatus) {
         os_log("Pump status: %{public}@", log: log, type: .default, String(describing: status.basalDeliveryState))
