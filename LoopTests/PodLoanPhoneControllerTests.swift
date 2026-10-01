@@ -1060,6 +1060,42 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(makeController().persisted.seizeToken, token, "the file wins over a re-seeded legacy key")
     }
 
+    /// The audit anchors, owed force audit and gap booking migrate once into the state file.
+    func testAuditStateMigratesOnceFromLegacyKeys() {
+        let started = Date(timeIntervalSinceNow: -3600)
+        let k = { "PodLoanPhoneController." + $0 }
+        defaults.set(5, forKey: k("epoch"))
+        defaults.set(started, forKey: k("loanStartedAt"))
+        defaults.set(12.0, forKey: k("deliveredAtGrant"))
+        defaults.set(12.5, forKey: k("deliveredAtTakeover"))
+        defaults.set(["units": 13.0, "asOf": started, "epoch": 5, "count": 2], forKey: k("auditBase"))
+        defaults.set(["epoch": 5, "atStart": 12.5, "expected": 0.8, "loanMinutes": 60.0], forKey: k("pendingForceAudit"))
+        defaults.set(["epoch": 3, "units": 0.9, "bookedAt": started.timeIntervalSince1970, "deleteFailedAfterRecords": true],
+                     forKey: k("gapBooking"))
+        let controller = makeController()
+        XCTAssertEqual(controller.loanStartedAt, started)
+        XCTAssertEqual(controller.persisted.audit.deliveredAtGrant, 12.0)
+        XCTAssertEqual(controller.persisted.audit.deliveredAtTakeover, 12.5)
+        XCTAssertEqual(controller.auditBase?.units, 13.0, "a base from this epoch is kept")
+        XCTAssertEqual(controller.checkpointsThisLoan, 2)
+        XCTAssertEqual(controller.persisted.pendingForceAudit?.expected, 0.8)
+        XCTAssertEqual(controller.queue.sync { controller.pendingHandbackAudit?.flavor }, .forceReclaim, "the owed verdict re-arms")
+        waitUntil(timeout: 5, "the failed gap delete retries") { controller.persisted.gapBooking == nil }
+        lock.lock(); XCTAssertEqual(deletedGapSyncs, ["PODLOAN-ODOGAP-e3"]); lock.unlock()
+        for key in ["loanStartedAt", "deliveredAtGrant", "deliveredAtTakeover", "auditBase", "pendingForceAudit", "gapBooking"] {
+            XCTAssertNil(defaults.object(forKey: k(key)), key)
+        }
+    }
+
+    /// A base saved under another epoch is dropped at migration, as the launch guard did.
+    func testAMigratedBaseFromAnotherEpochIsDropped() {
+        defaults.set(5, forKey: "PodLoanPhoneController.epoch")
+        defaults.set(["units": 13.0, "asOf": Date(), "epoch": 4, "count": 2], forKey: "PodLoanPhoneController.auditBase")
+        let controller = makeController()
+        XCTAssertNil(controller.auditBase)
+        XCTAssertEqual(controller.checkpointsThisLoan, 0)
+    }
+
     /// +0.25 U is over the ±0.20 bound and under the old ±0.5, so a revert fails this.
     func testResidualJustAboveTheTightenedBoundOpensTheLoop() throws {
         let controller = makeController()
@@ -1576,7 +1612,7 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(deleted, ["PODLOAN-ODOGAP-e\(grant.epoch)"], "the placeholder retires by its deterministic identity")
         XCTAssertTrue(recovered, "the user is told their numbers changed, and why")
         waitUntil(timeout: 5, "state cleared") {
-            self.defaults.dictionary(forKey: "PodLoanPhoneController.gapBooking") == nil
+            controller.persisted.gapBooking == nil
         }
     }
 
@@ -1605,7 +1641,7 @@ extension PodLoanPhoneControllerTests {
 
         lock.lock(); let deleted = deletedGapSyncs; lock.unlock()
         XCTAssertTrue(deleted.isEmpty, "an offer that commits no NEW doses explains nothing — the placeholder must stand")
-        XCTAssertNotNil(defaults.dictionary(forKey: "PodLoanPhoneController.gapBooking"))
+        XCTAssertNotNil(controller.persisted.gapBooking)
     }
 
     /// A launch retries the placeholder delete only when it failed after the watch's records
@@ -1621,7 +1657,7 @@ extension PodLoanPhoneControllerTests {
         _ = controller
 
         waitUntil(timeout: 5, "launch retry succeeds") {
-            self.defaults.dictionary(forKey: "PodLoanPhoneController.gapBooking") == nil
+            controller.persisted.gapBooking == nil
         }
         lock.lock()
         let deleted = deletedGapSyncs
@@ -1642,7 +1678,7 @@ extension PodLoanPhoneControllerTests {
         Thread.sleep(forTimeInterval: 0.3)
         lock.lock(); let attemptsWhileLocked = deletedGapSyncs.count; lock.unlock()
         XCTAssertEqual(attemptsWhileLocked, 0, "store work ran during the pre-first-unlock window")
-        XCTAssertNotNil(defaults.dictionary(forKey: "PodLoanPhoneController.gapBooking"))
+        XCTAssertNotNil(controller.persisted.gapBooking)
 
         // First unlock: the deferred work runs and the retry completes.
         unlock?()
@@ -1663,7 +1699,7 @@ extension PodLoanPhoneControllerTests {
         _ = controller
 
         waitUntil(timeout: 5, "launch retry attempted") { self.lock.lock(); defer { self.lock.unlock() }; return !self.deletedGapSyncs.isEmpty }
-        XCTAssertNotNil(defaults.dictionary(forKey: "PodLoanPhoneController.gapBooking"),
+        XCTAssertNotNil(controller.persisted.gapBooking,
                         "still failing — state must survive for the NEXT launch or offer, not vanish")
     }
 
@@ -1683,7 +1719,7 @@ extension PodLoanPhoneControllerTests {
 
         lock.lock(); let deleted = deletedGapSyncs; lock.unlock()
         XCTAssertTrue(deleted.isEmpty, "an unexplained placeholder must NOT be deleted at launch — the insulin is still real")
-        XCTAssertNotNil(defaults.dictionary(forKey: "PodLoanPhoneController.gapBooking"),
+        XCTAssertNotNil(controller.persisted.gapBooking,
                         "the booking must persist so it keeps standing until the watch returns or it decays out")
     }
 
@@ -1706,7 +1742,7 @@ extension PodLoanPhoneControllerTests {
                           events: [realTail], tombstones: [], recovered: true)).transportDictionary())
 
         waitUntil(timeout: 5, "failure logged") { self.diagMatching("gap DELETE FAILED") != nil }
-        XCTAssertNotNil(defaults.dictionary(forKey: "PodLoanPhoneController.gapBooking"),
+        XCTAssertNotNil(controller.persisted.gapBooking,
                         "state survives a failed delete, so the next offer retries it")
     }
 
@@ -2252,7 +2288,7 @@ extension PodLoanPhoneControllerTests {
                           seizeToken: token)).transportDictionary())
         waitUntil(timeout: 5, "adopted") { controller.state == .loaned }
 
-        let anchor = defaults.object(forKey: "PodLoanPhoneController.loanStartedAt") as? Date
+        let anchor = controller.persisted.audit.loanStartedAt
         XCTAssertNotNil(anchor, "the window anchor is SET, never nil-to-default")
         XCTAssertEqual(anchor.map { abs($0.timeIntervalSince(eventStart)) < 1 }, true,
                        "…at the offer's earliest event")

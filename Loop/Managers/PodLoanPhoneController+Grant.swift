@@ -149,15 +149,12 @@ extension PodLoanPhoneController {
 
         // This loan's origin; the previous loan's takeover reading is cleared with it.
         let deliveredAtGrant = lendable.lentDeviceInsulinDelivered
-        if let delivered = deliveredAtGrant {
-            deps.defaults.set(delivered, forKey: Keys.deliveredAtGrant)
-        } else {
-            deps.defaults.removeObject(forKey: Keys.deliveredAtGrant)
+        updateState {
+            $0.audit.deliveredAtGrant = deliveredAtGrant
+            $0.audit.deliveredAtTakeover = nil
+            $0.audit.checkpoints = 0
         }
-        checkpointsThisLoan = 0
         worstWindowThisLoan = 0
-
-        deps.defaults.removeObject(forKey: Keys.deliveredAtTakeover)
 
         let releaseEpoch = epoch + 1
         handbackDiag(releaseEpoch, "GRANT — releasing pod BLE (wasReleased=\(lendable.isConnectionReleased))")
@@ -187,7 +184,6 @@ extension PodLoanPhoneController {
         stagedTombstones = []
         persistStaged()
         loanStartedAt = handedOverAt
-        deps.defaults.set(handedOverAt, forKey: Keys.loanStartedAt)
         holdRenewedAt = handedOverAt
         holdLapseNoticedAt = nil
 

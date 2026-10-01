@@ -86,16 +86,17 @@ extension PodLoanPhoneController {
             holdRenewedAt = offer.handedBackAt
             holdLapseNoticedAt = nil
 
-            auditBase = nil
-            checkpointsThisLoan = 0
+            updateState {
+                $0.audit.base = nil
+                $0.audit.checkpoints = 0
+                $0.audit.deliveredAtTakeover = nil
+            }
             worstWindowThisLoan = 0
-            deps.defaults.removeObject(forKey: Keys.deliveredAtTakeover)
 
             // Anchor the adopted loan at its earliest record, at most six hours back.
             let anchor = max(offer.events.map(\.record.startDate).min() ?? offer.handedBackAt,
                              deps.now().addingTimeInterval(-.hours(6)))
             loanStartedAt = anchor
-            deps.defaults.set(anchor, forKey: Keys.loanStartedAt)
         }
 
         // An offer ahead of this phone's epoch cannot be committed.
@@ -441,7 +442,7 @@ extension PodLoanPhoneController {
         stagedTombstones = []
         persistStaged()
 
-        deps.defaults.removeObject(forKey: Keys.deliveredAtGrant)
+        updateState { $0.audit.deliveredAtGrant = nil }
     }
 
 }

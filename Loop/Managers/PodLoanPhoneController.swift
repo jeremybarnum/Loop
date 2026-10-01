@@ -248,7 +248,6 @@ final class PodLoanPhoneController {
         self.yieldingToInferredLoan = dependencies.defaults.bool(forKey: Keys.yieldingToInferredLoan)
         self.committedCursor = dependencies.defaults.object(forKey: Keys.cursor) as? Int ?? 0
         self.pendingRevoke = dependencies.defaults.bool(forKey: Keys.pendingRevoke)
-        self.loanStartedAt = dependencies.defaults.object(forKey: Keys.loanStartedAt) as? Date
         if let raw = dependencies.defaults.array(forKey: Keys.committedIDs) as? [String] {
             self.committedIDs = Set(raw.compactMap(UUID.init(uuidString:)))
         } else {
@@ -257,22 +256,20 @@ final class PodLoanPhoneController {
         loadStaged()
 
         // Only a base from this epoch.
-        if let d = dependencies.defaults.dictionary(forKey: Keys.auditBase),
-           let units = d["units"] as? Double, let asOf = d["asOf"] as? Date,
-           (d["epoch"] as? Int) == self.epoch {
-            self.auditBase = AuditBase(units: units, asOf: asOf)
-            self.checkpointsThisLoan = d["count"] as? Int ?? 0
+        if _persisted.audit.baseEpoch != epoch, _persisted.audit.base != nil || _persisted.audit.checkpoints != 0 {
+            _persisted.audit.base = nil
+            _persisted.audit.checkpoints = 0
+            stateStore.wrappedValue = _persisted.rawValue
         }
         installPodLinkCensus()
         Keys.retired.forEach(dependencies.defaults.removeObject(forKey:))
 
         // Re-arm an unruled force-reclaim audit.
-        if let saved = dependencies.defaults.dictionary(forKey: Keys.pendingForceAudit),
-           let e = saved["epoch"] as? Int, let atStart = saved["atStart"] as? Double,
-           let expected = saved["expected"] as? Double, let loanMinutes = saved["loanMinutes"] as? Double {
+        if let saved = _persisted.pendingForceAudit {
+            let e = saved.epoch
             pendingHandbackAudit = PendingHandbackAudit(
-                epoch: e, deliveredAtStart: atStart, expected: expected,
-                loanMinutes: loanMinutes, cycles: 0,
+                epoch: e, deliveredAtStart: saved.deliveredAtStart, expected: saved.expected,
+                loanMinutes: saved.loanMinutes, cycles: 0,
                 watchLatest: nil, watchFreshened: false, flavor: .forceReclaim)
             queue.async { [weak self] in
                 guard let self = self else { return }
@@ -336,8 +333,6 @@ final class PodLoanPhoneController {
 
     var hasWarnedProtocolMismatch = false
 
-    var checkpointsThisLoan = 0
-
     var worstWindowThisLoan: Double = 0
 
     /// One write at a time: `committedIDs` updates only in a write's completion.
@@ -355,7 +350,6 @@ final class PodLoanPhoneController {
 
     var staged: [UUID: LoanEvent] = [:]
     var stagedTombstones: Set<UUID> = []
-    var loanStartedAt: Date?
     var t1WorkItem: DispatchWorkItem?
     var reclaimTimeoutWork: DispatchWorkItem?
     var reclaimResendWork: DispatchWorkItem?
@@ -409,28 +403,14 @@ final class PodLoanPhoneController {
         didSet { deps.defaults.set(committedCursor, forKey: Keys.cursor) }
     }
 
-    /// Persisted WITH the epoch that owns it, so a base can never be adopted by another loan.
-    var auditBase: AuditBase? {
-        didSet {
-            if let b = auditBase {
-                deps.defaults.set(["units": b.units, "asOf": b.asOf, "epoch": epoch,
-                                           "count": checkpointsThisLoan],
-                                          forKey: Keys.auditBase)
-            } else {
-                deps.defaults.removeObject(forKey: Keys.auditBase)
-            }
-        }
-    }
-
     /// Only the force-reclaim flavour persists.
     var pendingHandbackAudit: PendingHandbackAudit? {
         didSet {
             if let p = pendingHandbackAudit, p.flavor == .forceReclaim {
-                deps.defaults.set(["epoch": p.epoch, "atStart": p.deliveredAtStart,
-                                           "expected": p.expected, "loanMinutes": p.loanMinutes],
-                                          forKey: Keys.pendingForceAudit)
+                updateState { $0.pendingForceAudit = .init(epoch: p.epoch, deliveredAtStart: p.deliveredAtStart,
+                                                            expected: p.expected, loanMinutes: p.loanMinutes) }
             } else if oldValue?.flavor == .forceReclaim {
-                deps.defaults.removeObject(forKey: Keys.pendingForceAudit)
+                updateState { $0.pendingForceAudit = nil }
             }
         }
     }

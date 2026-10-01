@@ -32,10 +32,13 @@ extension PodLoanPhoneController {
         // Anchor the audit on the pod's total while it is still readable.
         if let units = (deps.pumpManager() as? PumpConnectionLendable)?.lentDeviceInsulinDelivered {
             let asOf = deps.pumpManager()?.lastSync ?? deps.now()
-            checkpointsThisLoan = 0
-            auditBase = AuditBase(units: units, asOf: asOf)
-            loanStartedAt = asOf
-            deps.defaults.set(asOf, forKey: Keys.loanStartedAt)
+            let owner = epoch
+            updateState {
+                $0.audit.checkpoints = 0
+                $0.audit.base = AuditBase(units: units, asOf: asOf)
+                $0.audit.baseEpoch = owner
+                $0.audit.loanStartedAt = asOf
+            }
         }
         deps.setAutomaticDosingPaused(true)
 
@@ -126,7 +129,7 @@ extension PodLoanPhoneController {
         cancelNotification(id: NotificationID.t1)
 
         if let atTakeover = complete.firstPodStatus.deliveredUnits {
-            deps.defaults.set(atTakeover, forKey: Keys.deliveredAtTakeover)
+            updateState { $0.audit.deliveredAtTakeover = atTakeover }
 
             auditBase = AuditBase(units: atTakeover, asOf: complete.firstPodStatus.timestamp)
         }
