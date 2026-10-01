@@ -106,6 +106,9 @@ final class PodLoanWatchController {
     /// Where state files live; nil in the app (Documents).
     let stateDirectory: URL?
 
+    /// The stored seize credential, in its own file: large, and replaced whole by each refresh.
+    var dormantGrantStore: PersistedProperty<Data>
+
     /// Sets the request timeout and refuses to queue a live offer; never gates a start.
     var isPhoneReachable: () -> Bool = { true }
 
@@ -280,6 +283,13 @@ final class PodLoanWatchController {
         self.defaults = defaults
         self.stateDirectory = stateDirectory
         Self.retiredKeys.forEach(defaults.removeObject(forKey:))
+        var dormant = stateDirectory.map { PersistedProperty<Data>(key: "PodLoanDormantGrant", directory: $0) }
+            ?? PersistedProperty(key: "PodLoanDormantGrant")
+        if let legacy = defaults.data(forKey: DormantKeys.envelope) {
+            if dormant.wrappedValue == nil { dormant.wrappedValue = legacy }
+            if dormant.wrappedValue != nil { defaults.removeObject(forKey: DormantKeys.envelope) }
+        }
+        self.dormantGrantStore = dormant
         self.phase = Phase(rawValue: defaults.string(forKey: Keys.phase) ?? "") ?? .idle
         self.epoch = defaults.object(forKey: Keys.epoch) as? Int
 

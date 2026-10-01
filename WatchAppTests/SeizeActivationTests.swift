@@ -138,6 +138,21 @@ final class SeizeActivationTests: XCTestCase {
 
     // MARK: - The entry gate
 
+    /// The stored credential moves from UserDefaults to its own file once, byte for byte.
+    func testTheDormantCredentialMigratesOnceToItsFile() async throws {
+        let token = UUID()
+        let legacy = try LoanProtocol.encoder.encode(fixtureDormant(issuedAt: Date(), token: token))
+        defaults.set(legacy, forKey: PodLoanWatchController.DormantKeys.envelope)
+        let first = await makeController()
+        XCTAssertEqual(first.storedDormantGrant()?.seizeToken, token)
+        XCTAssertEqual(first.dormantGrantStore.wrappedValue, legacy)
+        XCTAssertNil(defaults.object(forKey: PodLoanWatchController.DormantKeys.envelope))
+
+        defaults.set(try LoanProtocol.encoder.encode(fixtureDormant(issuedAt: Date())), forKey: PodLoanWatchController.DormantKeys.envelope)
+        let second = await makeController()
+        XCTAssertEqual(second.storedDormantGrant()?.seizeToken, token, "the file wins over a re-seeded legacy key")
+    }
+
     /// No credential stored: the timeout keeps its pre-seize behavior (idle note, no offer).
     /// With a stored credential: the offer appears. R40(b): offered, never auto-taken.
     func testTimedOutRequestOffersOfflineStartOnlyWithACredential() async {

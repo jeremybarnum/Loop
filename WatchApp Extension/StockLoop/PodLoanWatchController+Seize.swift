@@ -158,7 +158,7 @@ extension PodLoanWatchController {
             SportLog.event("seize", "dormant grant arrived but failed to re-encode — NOT stored [seize]")
             return
         }
-        defaults.set(data, forKey: DormantKeys.envelope)
+        dormantGrantStore.wrappedValue = data
         let podAddress = Self.podAddress(in: dormant.grant)
         currentPodAddress = podAddress
         SportLog.event("seize", String(format: "dormant grant refreshed — issued %@, %d dose record(s), token …%@, pod %@ [seize]",
@@ -170,7 +170,7 @@ extension PodLoanWatchController {
 
     /// nil if absent or undecodable.
     func storedDormantGrant() -> DormantGrant? {
-        guard let data = defaults.data(forKey: DormantKeys.envelope) else { return nil }
+        guard let data = dormantGrantStore.wrappedValue else { return nil }
         return try? LoanProtocol.decoder.decode(DormantGrant.self, from: data)
     }
 
@@ -239,7 +239,7 @@ extension PodLoanWatchController {
     }
 
     enum DormantKeys {
-        /// The stored credential. One at a time — a refresh replaces it.
+        /// Legacy home of the stored credential, migrated once into `dormantGrantStore`.
         static let envelope = "PodLoanWatchController.dormantGrant"
 
         /// Persisted for the life of a seized loan so every offer echoes it.
