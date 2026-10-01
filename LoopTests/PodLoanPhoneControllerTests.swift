@@ -1044,11 +1044,14 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         let controller = makeController()
         try runLoanToAudit(controller, deliveredDuringLoan: 2.0)   // vs ~0 expected
 
-        waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("R32 OPEN LOOP") != nil }
-        XCTAssertEqual(openLoopCalls, 1, "automatic dosing must be stopped exactly once")
-        // Escalation: anything that OPENS the loop rides the urgent channel (banner +
-        // time-sensitive), never the quiet list.
-        XCTAssertTrue(urgentNotices.contains("Loop Open — Unexplained Insulin"), "the user must be told, loudly")
+        // The verdict logs first, then stops dosing, then notifies: wait on the last of the three.
+        waitUntil(timeout: 5, "open-loop verdict") {
+            guard self.diagMatching("R32 OPEN LOOP") != nil else { return false }
+            self.lock.lock(); defer { self.lock.unlock() }
+            return self.urgentNotices.contains("Loop Open — Unexplained Insulin")
+        }
+        lock.lock(); let openLoops = openLoopCalls; lock.unlock()
+        XCTAssertEqual(openLoops, 1, "automatic dosing must be stopped exactly once")
     }
 
     /// NEGATIVE beyond the bound: the books carry phantom IOB, so the loop runs CAUTIOUS. Opening
@@ -2249,6 +2252,8 @@ extension PodLoanPhoneControllerTests {
                           events: [], tombstones: [], recovered: true, released: true,
                           seizeToken: token)).transportDictionary())
         waitUntil(timeout: 5, "close yielded") { controller.yieldingToInferredLoan }
+        // The yield flag is saved before the radio is released, in the same queue turn.
+        controller.queue.sync {}
 
         XCTAssertEqual(controller.state, .owner, "books closed at .owner…")
         XCTAssertTrue(MockPumpManager.testConnectionReleased, "…but custody NOT resumed — the pod stays the live loan's")
