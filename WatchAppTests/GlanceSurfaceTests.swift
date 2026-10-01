@@ -108,7 +108,7 @@ final class GlanceSurfaceTests: XCTestCase {
     }
 
     /// The diagnostics reconciliation panel reads this; it said "no prediction to reconcile" on
-    /// every cycle since the port because the field was never assigned.
+    /// every cycle because the field was never assigned.
     func testDiagnosticsCarriesAPredictionBreakdown() async {
         let manager = await makeManager()
         await seedGlucose(manager)

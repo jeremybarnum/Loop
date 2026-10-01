@@ -551,7 +551,7 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertEqual(cancelCalls, 2, "seize confirm cancels again — the strongest statement that no queued request should ever land")
     }
 
-    // MARK: - The offer answers one unanswered request (production-line lessons, 09-24 / 09-26)
+    // MARK: - The offer answers one unanswered request
 
     /// With the phone reachable at confirm, an ordinary request goes out (field 2026-09-24).
     func testConfirmWithThePhoneBackSendsAnOrdinaryRequest() async {
@@ -625,7 +625,7 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertNil(snap.seizeOfferIssuedAt, "the new request withdrew the stale offer")
     }
 
-    // MARK: - First contact with a new pod (production-line lesson, 2026-09-26)
+    // MARK: - First contact with a new pod
 
     /// Asks for the wrist only for an unmet pod; the wire `podAddress` is 0, the address is in the snapshot.
     func testTheStartPageAsksForTheWristOnlyForAPodThisWatchHasNotMet() async throws {

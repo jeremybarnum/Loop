@@ -4,7 +4,7 @@
 //
 //  Pins the pure half of the watch's G7 acquisition arm (G7WatchAcquisition) and the direct-auth
 //  fast path's primitives. The file keeps its timed-connect-era name only because Loop.xcodeproj
-//  lists it by name; the timed, bounded connect itself is gone (lean-out step 7, 2026-09-16).
+//  lists it by name; the timed, bounded connect itself is gone.
 //
 
 import XCTest

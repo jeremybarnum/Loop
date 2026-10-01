@@ -10,7 +10,7 @@ import LoopCore
 import LoopAlgorithm
 @testable import WatchApp
 
-// MARK: - The lean reacquisition path's one piece of persisted state
+// MARK: - The reacquisition path's one piece of persisted state
 
 /// The per-pod BLE handle cache's decisions; whether a handle is still valid only the radio knows.
 final class PodLoanBleIdentifierCacheTests: XCTestCase {

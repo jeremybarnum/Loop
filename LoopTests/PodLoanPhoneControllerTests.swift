@@ -1174,7 +1174,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertNil(diagMatching("R32 WARN"), "exactly −0.200 is ON the band — float dust must not warn")
     }
 
-    // MARK: - Since-last-sync checkpoints (ruled 2026-08-26)
+    // MARK: - Since-last-sync checkpoints
 
     /// Sends a checkpoint batch and waits for it on the controller's queue, so the next step sees
     /// the new base. `asOf: nil` models an older watch.
@@ -1630,7 +1630,7 @@ extension PodLoanPhoneControllerTests {
         lock.lock()
         let deleted = deletedGapSyncs
         // The urgent channel, not the quiet one: the recovered-records message rewrites IOB
-        // and COB, so it rides time-sensitive interruption (field request 2026-08-14).
+        // and COB, so it rides time-sensitive interruption.
         let recovered = urgentNotices.contains { $0.contains("Watch Records Recovered") }
         lock.unlock()
 
@@ -1771,7 +1771,7 @@ extension PodLoanPhoneControllerTests {
                         "state survives a failed delete, so the next offer retries it")
     }
 
-    // MARK: - Reclaim ladder (2026-08-13)
+    // MARK: - Reclaim ladder
 
     /// Every revoke the controller has sent so far. The ladder's whole contract is "two attempts,
     /// then force", and this is the only way to state the "two" half.
@@ -1877,7 +1877,7 @@ extension PodLoanPhoneControllerTests {
         let early = try XCTUnwrap(controller.reclaimProgress,
                                   "a forced settle publishes progress like any other")
         XCTAssertEqual(early.phase, .forceReclaimingPod)
-        // ONE promise for both settle flavors (lean ruling 2026-08-23) — the label differs,
+        // ONE promise for both settle flavors — the label differs,
         // the physics no longer do.
         XCTAssertEqual(early.expectedBy.timeIntervalSince(early.startedAt), 10, accuracy: 0.5)
 
@@ -1944,7 +1944,7 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(controller.state, .reclaimPending)
     }
 
-    // MARK: - The BLE settle is the wait the bar draws (2026-08-14)
+    // MARK: - The BLE settle is the wait the bar draws
 
     /// A watch-initiated hand-back publishes settle progress.
     func testWatchInitiatedHandbackPublishesSettleProgress() throws {
@@ -2444,7 +2444,7 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 5, "re-aim diag") { self.diagMatching("RE-AIMED") != nil }
     }
 
-    // MARK: - Grant anchor (2026-08-17)
+    // MARK: - Grant anchor
 
     /// A failed takeover's `grantOfferedAt` does not leak into the next grant (field 2026-08-17).
     func testANewGrantDoesNotInheritAFailedTakeoversClock() throws {
@@ -2596,7 +2596,7 @@ extension PodLoanPhoneControllerTests {
         return urgentNotices.filter { $0 == "Watch Not Reporting" }.count
     }
 
-    /// A silent watch is warned about at ~20, 40 and 60 min and never taken from (2026-09-08).
+    /// A silent watch is warned about at ~20, 40 and 60 min and never taken from.
     func testASilentWatchIsWarnedAboutAndNeverTakenFrom() throws {
         let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
         _ = establishLoan(controller)
@@ -2657,7 +2657,7 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(silenceWarnings(), 0)
     }
 
-    /// An audit consumes its anchors (2026-09-19).
+    /// An audit consumes its anchors.
     func testAnAuditConsumesItsAnchors() throws {
         let controller = makeController()
         _ = establishLoan(controller)

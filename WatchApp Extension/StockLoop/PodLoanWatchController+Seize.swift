@@ -29,7 +29,7 @@ extension PodLoanWatchController {
             }
             self.seizeOffer = nil
 
-            // The phone is back: start the ordinary way (production line 2026-09-24).
+            // The phone is back: start the ordinary way.
             if self.isPhoneReachable() {
                 SportLog.event("seize", "offline start SUPERSEDED at confirm — the phone is reachable again; sending a normal Start request [seize]")
                 self.requestLoan(watchBuild: BuildDetails.default.codeIdentity)

@@ -276,7 +276,7 @@ final class WakeResumeTests: XCTestCase {
     }
 
     func testLiveHandbackWithPhoneUnreachableFailsFastAndKeepsTheLoan() async {
-        // Ruled 2026-09-19: a live hand-back is never queued. Out of reach, End fails at once
+        // A live hand-back is never queued. Out of reach, End fails at once
         // and the loan continues — no offer is sent, nothing can land later and take the pod.
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         XCTAssertNotNil(c.pumpManager)
@@ -292,7 +292,7 @@ final class WakeResumeTests: XCTestCase {
     }
 
     func testPhoneRefusalEndsTheHandbackAtOnceAndKeepsTheLoan() async throws {
-        // Goal (a), 2026-09-19: with the phone's Bluetooth off, End is refused and the watch
+        // With the phone's Bluetooth off, End is refused and the watch
         // knows at once — no budget to wait out. The phone says so; the watch shows its reason.
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         c.isPhoneReachable = { true }
