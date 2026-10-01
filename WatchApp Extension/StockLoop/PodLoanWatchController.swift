@@ -422,6 +422,10 @@ final class PodLoanWatchController {
 
     var reunionPromptActive = false
 
+    /// Simulator only: Start and End drive the fake flow in +SimulatorDriver. Set by tests, or
+    /// by the `-simFakeLoanFlow` launch argument.
+    var simFakeLoanFlow = ProcessInfo.processInfo.arguments.contains("-simFakeLoanFlow")
+
     /// Simulator only: the fake CGM feed's timer, so a second Start cannot stack two.
     var simGlucoseTimer: DispatchSourceTimer?
 

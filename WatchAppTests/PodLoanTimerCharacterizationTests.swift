@@ -196,7 +196,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
     /// The sim driver arms its grant and active hops together, up front — not chained.
     func testSimFlowArmsGrantAndActiveTogether() async {
         let controller = await makeController()
-        defaults.set(true, forKey: "sim.fakeLoanFlow")
+        controller.simFakeLoanFlow = true
         let rec = TimerRecorder()
         rec.install(on: controller)
         controller.send = { _ in }
@@ -213,7 +213,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
     /// loan starts OPEN. The phase guards are what make out-of-order firing safe.
     func testSimFlowHopsWalkToActiveAndOpenLoop() async {
         let controller = await makeController()
-        defaults.set(true, forKey: "sim.fakeLoanFlow")
+        controller.simFakeLoanFlow = true
         let rec = TimerRecorder()
         rec.install(on: controller)
         controller.send = { _ in }
@@ -234,7 +234,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
     /// Out-of-order firing is inert, which is what makes arming both up front safe.
     func testSimActiveIsInertWhenItsPhaseGuardFails() async {
         let controller = await makeController()
-        defaults.set(true, forKey: "sim.fakeLoanFlow")
+        controller.simFakeLoanFlow = true
         let rec = TimerRecorder()
         rec.install(on: controller)
         controller.send = { _ in }

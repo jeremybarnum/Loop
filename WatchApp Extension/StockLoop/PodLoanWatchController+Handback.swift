@@ -22,7 +22,7 @@ extension PodLoanWatchController {
     /// without interim-offer support gets the single-phase path.
     func beginHandback() {
         #if targetEnvironment(simulator)
-        if defaults.bool(forKey: "sim.fakeLoanFlow") { simDriveHandback(); return }
+        if simFakeLoanFlow { simDriveHandback(); return }
         #endif
         queue.async {
             guard self.phase == .active, self.pumpManager != nil else { return }
