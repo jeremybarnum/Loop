@@ -85,7 +85,7 @@ final class PodLoanBleIdentifierCacheTests: XCTestCase {
     }
 }
 
-// MARK: - Stranded sensor identity (#104's blind spot)
+// MARK: - Stranded sensor identity
 
 /// The age predicate shared by the persist filter and the launch restore, which lets a real
 /// sensor change through.
@@ -100,7 +100,7 @@ final class StrandedSensorIdentityTests: XCTestCase {
     }
 
     /// The boundary matters: a sensor at 10d11h is still nominally alive and forgetting it would
-    /// re-open the false-forget #104 exists to prevent.
+    /// re-open the false forget this guard exists to prevent.
     func testJustInsideTheGraceWindowIsKept() {
         let now = Date()
         let activated = now.addingTimeInterval(-(lifeBound - .minutes(30)))

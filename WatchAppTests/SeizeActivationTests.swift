@@ -175,7 +175,7 @@ final class SeizeActivationTests: XCTestCase {
     }
 
     /// No credential stored: the timeout keeps its pre-seize behavior (idle note, no offer).
-    /// With a stored credential: the offer appears. R40(b): offered, never auto-taken.
+    /// With a stored credential: the offer appears: offered, never auto-taken.
     func testTimedOutRequestOffersOfflineStartOnlyWithACredential() async {
         let controller = await makeController()
         controller.send = { _ in }
@@ -240,7 +240,7 @@ final class SeizeActivationTests: XCTestCase {
                      "no .active, no persisted token — a failed activation must leave nothing to echo")
     }
 
-    // MARK: - Re-entry over a parked drain (R40, field 2026-08-30)
+    // MARK: - Re-entry over a parked drain (field 2026-08-30)
 
     /// The journal fold: adoptEpoch re-tags the epoch and keeps every event, seq, cursor,
     /// and tombstone — the one sanctioned way past begin()'s refuse-to-clobber.
@@ -305,7 +305,7 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertEqual(snap.phase, .recoveredDrain, "the failed activation rests back on the drain, still startable")
     }
 
-    // MARK: - R40 reunion: the phone's return ends a seized loan
+    // MARK: - Reunion: the phone's return ends a seized loan
 
     /// The phone returning during a seized loan raises a prompt; only the user's choice ends it.
     func testPhoneReturnPromptsAndOnlyTheUsersChoiceEndsASeizedLoan() async {
@@ -510,7 +510,7 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertEqual(live.phase, .active, "precondition: a live loan")
         guard let ours = live.epoch else { return XCTFail("active loan has no epoch") }
 
-        // A ghost-grant probe (#108) for an older epoch — the tape's 21:21:31 silence.
+        // A ghost-grant probe for an older epoch — the tape's 21:21:31 silence.
         controller.handleIncoming(userInfo: try LoanMessage.statusQuery(StatusQuery(epoch: ours - 1)).transportDictionary(), channel: .queued)
         _ = controller.debugSnapshot()
         XCTAssertEqual(holdsPodEpochs, [ours], "the stale query is answered with the loan we hold")

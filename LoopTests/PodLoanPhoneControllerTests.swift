@@ -553,7 +553,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                        "duplicates here mirror into every later grant and inflate COB")
     }
 
-    /// A force parked behind the final commit is dropped when that commit closes the loan (#118).
+    /// A force parked behind the final commit is dropped when that commit closes the loan.
     func testForceDeferredBehindTheFinalCommitIsDroppedByTheClose() throws {
         let controller = makeController()
         let grant = establishLoan(controller)
@@ -2123,7 +2123,7 @@ extension PodLoanPhoneControllerTests {
         try establishLoan(controller)   // fresh (nil-sentAt) request still grants — liveness + back-compat
     }
 
-    // MARK: - Dormant-refresh throttle (R40 seize credential pipe)
+    // MARK: - Dormant-refresh throttle (seize credential pipe)
 
     /// The refresh throttle stamps at enqueue, so a burst yields one refresh.
     func testDormantRefreshBurstYieldsOneRefresh() {
@@ -2142,7 +2142,7 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(refreshes.count, 1, "one burst, one refresh — the throttle stamps at enqueue")
     }
 
-    // MARK: - PHONE MIRROR (R40(a), the minimum-deviation paradigm)
+    // MARK: - PHONE MIRROR (the minimum-deviation paradigm)
 
     private func seizeCredentialOutstanding() -> UUID {
         let token = UUID()
