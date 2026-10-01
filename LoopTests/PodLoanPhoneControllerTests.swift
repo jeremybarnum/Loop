@@ -1941,6 +1941,7 @@ extension PodLoanPhoneControllerTests {
 
         XCTAssertTrue(ladder.isCancelled("reclaim-resend"), "a completed drain kills the pending resend")
         XCTAssertTrue(ladder.isCancelled("reclaim-force"), "and the force with it")
+        waitUntil(timeout: 5, "reclaim progress cleared") { controller.reclaimProgress == nil }
         XCTAssertNil(controller.reclaimProgress, "nothing left to draw a determinate bar for")
 
         // Belt and braces: even if a rung reached its deadline anyway, its guards refuse.
