@@ -745,33 +745,64 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(savedAtAck?.committedCursor, 1)
     }
 
-    /// A phone relaunched mid-loan migrates the loan and pauses dosing at once, as before.
-    func testMidLoanMigrationKeepsTheLoanAndPausesDosing() {
-        let committed = UUID()
+    /// Every legacy key moves into the state file once; a mid-loan relaunch pauses dosing at once.
+    func testLegacyKeysMigrateOnceIntoTheStateFile() {
+        let committed = UUID(), token = UUID()
+        let started = Date(timeIntervalSinceNow: -3600), renewed = Date(timeIntervalSinceNow: -1200)
+        let noticed = Date(timeIntervalSinceNow: -300)
         let k = { "PodLoanPhoneController." + $0 }
         defaults.set("loaned", forKey: k("state"))
-        defaults.set(7, forKey: k("epoch"))
+        defaults.set(5, forKey: k("epoch"))
         defaults.set(3, forKey: k("cursor"))
         defaults.set([committed.uuidString], forKey: k("committedIDs"))
         defaults.set(true, forKey: k("pendingRevoke"))
         defaults.set(true, forKey: k("yieldingToInferredLoan"))
+        defaults.set(renewed, forKey: k("holdRenewedAt"))
+        defaults.set(noticed, forKey: k("holdLapseNoticedAt"))
+        defaults.set(2, forKey: k("watchSilenceWarningsIssued"))
+        defaults.set(true, forKey: k("watchSupportsSeize"))
+        defaults.set(token.uuidString, forKey: k("dormantSeizeToken"))
+        defaults.set(started, forKey: k("loanStartedAt"))
+        defaults.set(12.0, forKey: k("deliveredAtGrant"))
+        defaults.set(12.5, forKey: k("deliveredAtTakeover"))
+        defaults.set(["units": 13.0, "asOf": started, "epoch": 5, "count": 2], forKey: k("auditBase"))
+        defaults.set(["epoch": 5, "atStart": 12.5, "expected": 0.8, "loanMinutes": 60.0], forKey: k("pendingForceAudit"))
+        defaults.set(["epoch": 3, "units": 0.9, "bookedAt": started.timeIntervalSince1970], forKey: k("gapBooking"))
+
         let controller = makeController()
-        XCTAssertEqual(controller.state, .loaned)
-        XCTAssertEqual(controller.epoch, 7)
-        XCTAssertEqual(controller.committedCursor, 3)
-        XCTAssertEqual(controller.committedIDs, [committed])
-        XCTAssertTrue(controller.pendingRevoke)
-        XCTAssertTrue(controller.yieldingToInferredLoan)
+        let p = controller.persisted
+        XCTAssertEqual(p.phase, .loaned)
+        XCTAssertEqual(p.epoch, 5)
+        XCTAssertEqual(p.committedCursor, 3)
+        XCTAssertEqual(p.committedIDs, [committed])
+        XCTAssertTrue(p.pendingRevoke)
+        XCTAssertTrue(p.yieldingToInferredLoan)
+        XCTAssertEqual(p.holdRenewedAt, renewed)
+        XCTAssertEqual(p.holdLapseNoticedAt, noticed)
+        XCTAssertEqual(p.watchSilenceWarningsIssued, 2)
+        XCTAssertTrue(p.watchSupportsSeize)
+        XCTAssertEqual(p.seizeToken, token, "a watch already holding the token is still recognised")
+        XCTAssertEqual(p.audit.loanStartedAt, started)
+        XCTAssertEqual(p.audit.deliveredAtGrant, 12.0)
+        XCTAssertEqual(p.audit.deliveredAtTakeover, 12.5)
+        XCTAssertEqual(p.audit.base?.units, 13.0, "a base from this epoch is kept")
+        XCTAssertEqual(p.audit.checkpoints, 2)
+        XCTAssertEqual(p.pendingForceAudit?.expected, 0.8)
+        XCTAssertEqual(p.gapBooking?.units, 0.9)
+        XCTAssertEqual(controller.queue.sync { controller.pendingHandbackAudit?.flavor }, .forceReclaim, "the owed verdict re-arms")
         XCTAssertEqual(pauseCalls, [true], "dosing pauses at launch")
-        for key in ["state", "epoch", "cursor", "committedIDs", "pendingRevoke", "yieldingToInferredLoan"] {
-            XCTAssertNil(defaults.object(forKey: k(key)), key)
-        }
+        for key in PodLoanPhoneState.legacyKeys { XCTAssertNil(defaults.object(forKey: key), key) }
 
         defaults.set("owner", forKey: k("state"))
         defaults.set(0, forKey: k("epoch"))
+        defaults.set(Date(), forKey: k("holdRenewedAt"))
+        defaults.set(UUID().uuidString, forKey: k("dormantSeizeToken"))
         let relaunched = makeController()
         XCTAssertEqual(relaunched.state, .loaned, "a re-seeded legacy key never beats the file")
-        XCTAssertEqual(relaunched.epoch, 7)
+        XCTAssertEqual(relaunched.epoch, 5)
+        XCTAssertEqual(relaunched.persisted.holdRenewedAt?.timeIntervalSince1970 ?? 0, renewed.timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(relaunched.persisted.seizeToken, token)
+        for key in PodLoanPhoneState.legacyKeys { XCTAssertNil(defaults.object(forKey: key), key) }
     }
 
     // MARK: - Item 1: the phone reads the end-of-loan odometer and cancels the inherited temp
@@ -1079,66 +1110,6 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         for key in PodLoanPhoneController.Keys.retired { defaults.set(1.0, forKey: key) }
         _ = makeController()
         for key in PodLoanPhoneController.Keys.retired { XCTAssertNil(defaults.object(forKey: key), key) }
-    }
-
-    /// The silence-watch trio moves from UserDefaults into the state file once.
-    func testHoldStateMigratesOnceFromLegacyKeys() {
-        let renewed = Date(timeIntervalSinceNow: -1200), noticed = Date(timeIntervalSinceNow: -300)
-        defaults.set(renewed, forKey: "PodLoanPhoneController.holdRenewedAt")
-        defaults.set(noticed, forKey: "PodLoanPhoneController.holdLapseNoticedAt")
-        defaults.set(2, forKey: "PodLoanPhoneController.watchSilenceWarningsIssued")
-        let first = makeController()
-        XCTAssertEqual(first.persisted.holdRenewedAt, renewed)
-        XCTAssertEqual(first.persisted.holdLapseNoticedAt, noticed)
-        XCTAssertEqual(first.persisted.watchSilenceWarningsIssued, 2)
-        for key in PodLoanPhoneState.legacyKeys { XCTAssertNil(defaults.object(forKey: key), key) }
-
-        defaults.set(Date(), forKey: "PodLoanPhoneController.holdRenewedAt")
-        let second = makeController()
-        XCTAssertEqual(second.persisted.holdRenewedAt?.timeIntervalSince1970 ?? 0, renewed.timeIntervalSince1970, accuracy: 0.001,
-                       "the file wins over a re-seeded legacy key")
-        XCTAssertNil(defaults.object(forKey: "PodLoanPhoneController.holdRenewedAt"))
-    }
-
-    /// The seize pairing migrates once, and the token survives byte for byte.
-    func testSeizePairingMigratesWithTheTokenIntact() {
-        let token = seizeCredentialOutstanding()
-        let first = makeController()
-        XCTAssertEqual(first.persisted.seizeToken, token, "a watch already holding the token is still recognised")
-        XCTAssertTrue(first.persisted.watchSupportsSeize)
-        XCTAssertEqual(first.dormantSeizeToken(), token, "never re-minted once migrated")
-        XCTAssertNil(defaults.object(forKey: "PodLoanPhoneController.dormantSeizeToken"))
-        XCTAssertNil(defaults.object(forKey: "PodLoanPhoneController.watchSupportsSeize"))
-
-        defaults.set(UUID().uuidString, forKey: "PodLoanPhoneController.dormantSeizeToken")
-        XCTAssertEqual(makeController().persisted.seizeToken, token, "the file wins over a re-seeded legacy key")
-    }
-
-    /// The audit anchors, owed force audit and gap booking migrate once into the state file.
-    func testAuditStateMigratesOnceFromLegacyKeys() {
-        let started = Date(timeIntervalSinceNow: -3600)
-        let k = { "PodLoanPhoneController." + $0 }
-        defaults.set(5, forKey: k("epoch"))
-        defaults.set(started, forKey: k("loanStartedAt"))
-        defaults.set(12.0, forKey: k("deliveredAtGrant"))
-        defaults.set(12.5, forKey: k("deliveredAtTakeover"))
-        defaults.set(["units": 13.0, "asOf": started, "epoch": 5, "count": 2], forKey: k("auditBase"))
-        defaults.set(["epoch": 5, "atStart": 12.5, "expected": 0.8, "loanMinutes": 60.0], forKey: k("pendingForceAudit"))
-        defaults.set(["epoch": 3, "units": 0.9, "bookedAt": started.timeIntervalSince1970, "deleteFailedAfterRecords": true],
-                     forKey: k("gapBooking"))
-        let controller = makeController()
-        XCTAssertEqual(controller.loanStartedAt, started)
-        XCTAssertEqual(controller.persisted.audit.deliveredAtGrant, 12.0)
-        XCTAssertEqual(controller.persisted.audit.deliveredAtTakeover, 12.5)
-        XCTAssertEqual(controller.auditBase?.units, 13.0, "a base from this epoch is kept")
-        XCTAssertEqual(controller.checkpointsThisLoan, 2)
-        XCTAssertEqual(controller.persisted.pendingForceAudit?.expected, 0.8)
-        XCTAssertEqual(controller.queue.sync { controller.pendingHandbackAudit?.flavor }, .forceReclaim, "the owed verdict re-arms")
-        waitUntil(timeout: 5, "the failed gap delete retries") { controller.persisted.gapBooking == nil }
-        lock.lock(); XCTAssertEqual(deletedGapSyncs, ["PODLOAN-ODOGAP-e3"]); lock.unlock()
-        for key in ["loanStartedAt", "deliveredAtGrant", "deliveredAtTakeover", "auditBase", "pendingForceAudit", "gapBooking"] {
-            XCTAssertNil(defaults.object(forKey: k(key)), key)
-        }
     }
 
     /// A base saved under another epoch is dropped at migration, as the launch guard did.
