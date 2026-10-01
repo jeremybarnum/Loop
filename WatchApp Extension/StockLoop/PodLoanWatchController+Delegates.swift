@@ -17,7 +17,7 @@ import os.log
 extension PodLoanWatchController: PumpManagerDelegate {
     /// Saved on every update; its presence tells the next launch the loan was live.
     func pumpManagerDidUpdateState(_ pumpManager: PumpManager) {
-        defaults.set(pumpManager.rawState, forKey: Keys.pumpState)
+        pumpStateStore.wrappedValue = pumpManager.rawState
     }
 
     /// Book, complete, then journal. On a failed write nothing is acked or journaled; the pod

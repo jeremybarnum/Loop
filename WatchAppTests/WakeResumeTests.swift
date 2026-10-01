@@ -129,6 +129,19 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertNil(second.lastIdleNote)
     }
 
+    /// The pump state moves from UserDefaults to its file once; a later launch reads only the file.
+    func testPumpStateMigratesOnceToItsFile() async {
+        let c = await relaunch(phase: .active, savedState: readablePumpState)
+        XCTAssertNotNil(c.pumpManager, "a loan saved by the old build resumes after the update")
+        XCTAssertEqual(c.pumpStateStore.wrappedValue?["controllerId"] as? UInt32, 0x1234_5678)
+        XCTAssertNil(defaults.object(forKey: PodLoanWatchController.Keys.pumpState))
+
+        defaults.set(["garbage": 1], forKey: PodLoanWatchController.Keys.pumpState)
+        let again = await makeController()
+        XCTAssertNotNil(again.pumpStateStore.wrappedValue?["controllerId"], "the file wins over a re-seeded legacy key")
+        XCTAssertNil(defaults.object(forKey: PodLoanWatchController.Keys.pumpState))
+    }
+
     func testActiveLoanWithSavedPodStateResumes() async {
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         XCTAssertEqual(c.phase, .active, "an active loan with saved pod state resumes — not drained")
@@ -141,7 +154,7 @@ final class WakeResumeTests: XCTestCase {
                         "the granted therapy settings came back from disk (bench 2026-09-18: blank IOB, no schedule)")
         XCTAssertTrue(c.phoneSupportsInterimHandback,
                       "the phone's hand-back capability comes back with the grant payload (bench 2026-09-18: resumed loan handed back single-phase)")
-        XCTAssertNotNil(defaults.dictionary(forKey: PodLoanWatchController.Keys.pumpState),
+        XCTAssertNotNil(c.pumpStateStore.wrappedValue,
                         "the saved state stays on disk — the next relaunch resumes the same way")
     }
 
@@ -150,7 +163,7 @@ final class WakeResumeTests: XCTestCase {
         let c = await relaunch(phase: .active, savedState: readablePumpState, granted: false)
         XCTAssertEqual(c.phase, .recoveredDrain)
         XCTAssertNil(c.pumpManager)
-        XCTAssertNil(defaults.dictionary(forKey: PodLoanWatchController.Keys.pumpState))
+        XCTAssertNil(c.pumpStateStore.wrappedValue)
     }
 
     func testActiveLoanWithoutSavedStateStillDrains() async {
@@ -164,7 +177,7 @@ final class WakeResumeTests: XCTestCase {
         let c = await relaunch(phase: .active, savedState: ["garbage": 1])
         XCTAssertEqual(c.phase, .recoveredDrain, "unreadable state returns the pod, as a relaunch always did")
         XCTAssertNil(c.pumpManager)
-        XCTAssertNil(defaults.dictionary(forKey: PodLoanWatchController.Keys.pumpState), "and the bad state is discarded")
+        XCTAssertNil(c.pumpStateStore.wrappedValue, "and the bad state is discarded")
     }
 
     func testOnlyAnActiveLoanResumes() async {
@@ -438,7 +451,7 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertNotNil(c.pumpManager)
         c.queue.sync { c.teardownPump() }
         XCTAssertNil(c.pumpManager)
-        XCTAssertNil(defaults.dictionary(forKey: PodLoanWatchController.Keys.pumpState),
+        XCTAssertNil(c.pumpStateStore.wrappedValue,
                      "no pod held, nothing to resume — a relaunch now sees an ordinary closed loan")
     }
 }
