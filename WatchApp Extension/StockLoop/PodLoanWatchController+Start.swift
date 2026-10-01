@@ -552,7 +552,7 @@ extension PodLoanWatchController {
         defaults.set(manager.rawState, forKey: Keys.pumpState)
 
         // The copy's view, captured first; on a phoneless start it can be half an hour old.
-        if let units = manager.podLoanInsulinDelivered, let asOf = manager.podLoanInsulinDeliveredAt {
+        if let units = manager.lentDeviceInsulinDelivered, let asOf = manager.podLoanInsulinDeliveredAt {
             takeoverCopyTotal = (units, asOf)
         } else {
             takeoverCopyTotal = nil
@@ -630,7 +630,7 @@ extension PodLoanWatchController {
     /// re-checked every iteration and expiry outranks a good status.
     func attemptTakeoverRead(manager: OmniPumpManager, grant: LoanGrant, attempt: Int, driver: String = "initial") {
         let maxAttempts = 14
-        manager.podLoanReadStatus { [weak self] success in
+        manager.refreshLentDeviceStatus { [weak self] success in
             guard let self = self else { return }
             self.queue.async {
                 // Superseded while the read was out; nothing doses on a stale epoch.
@@ -654,7 +654,7 @@ extension PodLoanWatchController {
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "grant expired mid-takeover")))
                     return
                 }
-                if success, let delivered = manager.podLoanInsulinDelivered {
+                if success, let delivered = manager.lentDeviceInsulinDelivered {
                     // The base for every later audit of this loan.
                     self.revokeCapturedDelivered = nil
                     self.revokeCapturedDeliveredAt = nil

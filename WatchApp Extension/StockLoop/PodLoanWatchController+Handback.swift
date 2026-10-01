@@ -164,11 +164,11 @@ extension PodLoanWatchController {
             }
             // Read the odometer only over a link already up; otherwise a read dials the pod.
             if manager.isConnectionReady {
-                manager.podLoanReadStatus { first in
-                    let delivered = manager.podLoanInsulinDelivered
+                manager.refreshLentDeviceStatus { first in
+                    let delivered = manager.lentDeviceInsulinDelivered
                     // A total equal to the takeover reading is probably stale: read once more.
                     if first, delivered != nil, delivered == self.deliveredAtTakeover {
-                        manager.podLoanReadStatus { second in finalize(second) }
+                        manager.refreshLentDeviceStatus { second in finalize(second) }
                     } else {
                         finalize(first)
                     }
@@ -187,7 +187,7 @@ extension PodLoanWatchController {
         // After a revoke's teardown, use the total captured before it.
         var odometer: LoanOdometerSnapshot?
         if let start = deliveredAtTakeover,
-           let latest = pumpManager?.podLoanInsulinDelivered ?? revokeCapturedDelivered {
+           let latest = pumpManager?.lentDeviceInsulinDelivered ?? revokeCapturedDelivered {
             odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest, freshenSucceeded: freshened,
                                             asOf: pumpManager?.podLoanInsulinDeliveredAt ?? revokeCapturedDeliveredAt)
         }
@@ -351,7 +351,7 @@ extension PodLoanWatchController {
         HandbackStuckAlert.disarm()
 
         // Capture the odometer before the teardown frees the pod for the phone.
-        revokeCapturedDelivered = pumpManager?.podLoanInsulinDelivered
+        revokeCapturedDelivered = pumpManager?.lentDeviceInsulinDelivered
         revokeCapturedDeliveredAt = pumpManager?.podLoanInsulinDeliveredAt
         loopManager.pumpManager = nil
         teardownPump()
@@ -414,7 +414,7 @@ extension PodLoanWatchController {
     func currentPodStatus() -> LoanPodStatus {
         LoanPodStatus(
             timestamp: self.now(),
-            deliveredUnits: pumpManager?.podLoanInsulinDelivered,
+            deliveredUnits: pumpManager?.lentDeviceInsulinDelivered,
             reservoirLevel: nil,
             isSuspended: false,
             faultCode: pumpManager?.podLoanFaultDescription)
