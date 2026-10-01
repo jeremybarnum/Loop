@@ -43,6 +43,10 @@ struct SportComplicationView: View {
     private var snapshot: SportComplicationSnapshot { entry.snapshot ?? SportComplicationSnapshot() }
 
     var body: some View {
+        content.sportContainerBackground()
+    }
+
+    @ViewBuilder private var content: some View {
         switch family {
         case .accessoryInline:
             Text(snapshot.line(kind, at: entry.date))
@@ -107,6 +111,18 @@ struct SportComplicationView: View {
         switch kind {
         case .glucoseToEventual: return "→\(snapshot.eventualText(at: entry.date) ?? SportComplicationSnapshot.dash)"
         default: return cornerCenter
+        }
+    }
+}
+
+extension View {
+    /// watchOS 10+ draws a "!" placeholder in place of any widget that does not declare a
+    /// container background — every family but inline (wrist, 2026-09-30: both corners blank).
+    @ViewBuilder func sportContainerBackground() -> some View {
+        if #available(watchOS 10.0, *) {
+            containerBackground(for: .widget) { Color.clear }
+        } else {
+            self
         }
     }
 }
