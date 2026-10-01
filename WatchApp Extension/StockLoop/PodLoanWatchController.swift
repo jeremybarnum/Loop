@@ -426,8 +426,6 @@ final class PodLoanWatchController {
     var revokeCapturedDelivered: Double?
 
     var revokeCapturedDeliveredAt: Date?
-    /// Recorded before matching the epoch, so any grant at or below it is refused.
-    var lastRevokedEpoch: Int?
 
     /// Main-readable mirrors, written from the queue.
     let loanActiveMirrorLock = NSLock()

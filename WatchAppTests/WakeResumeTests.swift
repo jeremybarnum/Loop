@@ -195,6 +195,26 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertEqual(c.persisted.highWaterEpoch, 9)
     }
 
+    /// A revoke recorded before a relaunch still refuses a grant at or below it afterwards; in
+    /// memory only, the relaunched watch could take a pod the phone had already asked back.
+    func testARecordedRevokeSurvivesARelaunch() async throws {
+        let c = await makeController()
+        c.handleIncoming(userInfo: try LoanMessage.revoke(Revoke(epoch: 8)).transportDictionary(), channel: .urgent)
+        c.queue.sync { }
+
+        let relaunched = await makeController()
+        var failures: [String] = []
+        relaunched.send = { dict in
+            if case .takeoverFailed(let f)? = try? LoanMessage.decode(fromTransport: dict) { failures.append(f.reason) }
+        }
+        let grant = LoanGrant(epoch: 8, expiresAt: Date().addingTimeInterval(300), pumpManagerRawState: Data([1, 2, 3]),
+                              podAddress: 0, therapySettingsRaw: Data([4, 5]), settingsTimeZoneID: "GMT", doseHistory: [],
+                              therapySettingsSupplementRaw: nil)
+        relaunched.queue.sync { relaunched.handleGrant(grant) }
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertTrue(failures.first?.contains("last revoke") == true, "refused for the revoke, got: \(failures)")
+    }
+
     func testActiveLoanWithSavedPodStateResumes() async {
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         XCTAssertEqual(c.phase, .active, "an active loan with saved pod state resumes — not drained")
