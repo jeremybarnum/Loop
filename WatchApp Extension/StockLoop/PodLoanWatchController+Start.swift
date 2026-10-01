@@ -429,6 +429,7 @@ extension PodLoanWatchController {
         }
         loopManager.settings = decodedSettings!
         Task { @MainActor [loopManager] in loopManager.configureGlucoseAlerts(from: grant.glucoseAlertSettings) }
+        WatchAlertPresenter.logAuthorization("loan start, epoch \(grant.epoch)")
 
         if let raw = grant.activeOverrideRaw {
             if let plist = (try? PropertyListSerialization.propertyList(from: raw, options: [], format: nil)) as? TemporaryScheduleOverride.RawValue,

@@ -52,10 +52,11 @@ final class WatchAlertPresenterTests: XCTestCase {
         XCTAssertNil(request?.trigger, "an immediate alert fires now, not on a timer")
     }
 
-    /// A pod fault is not something to sleep through.
+    /// A pod fault is not something to sleep through: the highest level the watch is entitled to.
     func testUrgencySurvivesTheTrip() {
         WatchAlertPresenter.present(alert(level: .critical))
-        XCTAssertEqual(scheduler.pending.first?.content.interruptionLevel, .critical)
+        XCTAssertEqual(scheduler.pending.first?.content.interruptionLevel, .timeSensitive,
+                       "no Critical Alerts entitlement on the watch; time-sensitive breaks through a Focus")
         XCTAssertNotNil(scheduler.pending.first?.content.sound, "a critical alert makes a noise")
 
         scheduler = RecordingWristAlertScheduler(); WristAlerts.scheduler = scheduler
@@ -103,6 +104,13 @@ final class WatchAlertPresenterTests: XCTestCase {
 
         XCTAssertTrue(ladder.isSubset(of: scheduler.identifiers),
                       "every dead-man rung survives a pod alert being taken back")
+    }
+
+    /// Every Loop-Failure rung breaks through a Focus, the stock critical ones included.
+    func testTheDeadManLadderIsTimeSensitive() {
+        LoopStallWatchdog.refresh()
+        XCTAssertEqual(scheduler.pending.count, LoopStallWatchdog.rungs.count)
+        XCTAssertTrue(scheduler.pending.allSatisfy { $0.content.interruptionLevel == .timeSensitive })
     }
 
     /// The notification centre silently drops a repeating trigger under a minute, so a driver

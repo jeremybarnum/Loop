@@ -118,7 +118,7 @@ final class StockLoopSession {
                 os_log("Loan active: starting G7 transport", log: self.log, type: .default)
 
                 LoopStallWatchdog.refresh()
-                SportLog.event("deadman", "ladder ARMED — 20/40m timeSensitive + 1/2h critical rungs [deadman]")
+                SportLog.event("deadman", "ladder ARMED — 20/40m + 1/2h rungs, time-sensitive [deadman]")
 
                 NotificationCenter.default.post(name: .podLoanPhaseDidChange, object: nil)
 

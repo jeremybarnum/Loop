@@ -11,15 +11,14 @@ import UserNotifications
 
 /// The phone's Loop-Failure ladder on the wrist; only one of the two ladders is armed at a time.
 enum LoopStallWatchdog {
-    static let rungs: [(interval: TimeInterval, isCritical: Bool)] = [
-        (20 * 60, false), (40 * 60, false), (60 * 60, true), (120 * 60, true),
-    ]
+    /// Stock's ladder; its 1 h and 2 h rungs are critical on the phone, time-sensitive here.
+    static let rungs: [TimeInterval] = [20 * 60, 40 * 60, 60 * 60, 120 * 60]
 
     /// The first rung — the single number for anything that reasons about "the" deadline.
-    static let interval: TimeInterval = rungs[0].interval
+    static let interval: TimeInterval = rungs[0]
 
     private static let identifier = "com.loopkit.Loop.watch.loopStallWatchdog"
-    private static var rungIdentifiers: [String] { rungs.map { "\(identifier).\(Int($0.interval))" } }
+    private static var rungIdentifiers: [String] { rungs.map { "\(identifier).\(Int($0))" } }
 
     /// Re-adds each rung under its own identifier, which replaces the pending one: that is the
     /// dead-man.
@@ -33,14 +32,14 @@ enum LoopStallWatchdog {
             let content = UNMutableNotificationContent()
             content.title = NSLocalizedString("Loop Failure", comment: "The notification title for a loop failure")
             content.body = String(format: NSLocalizedString("Loop has not completed successfully in %@", comment: "The notification alert describing a long-lasting loop failure. The substitution parameter is the time interval since the last loop"),
-                                  formatter.string(from: rung.interval)?.localizedLowercase ?? "\(Int(rung.interval / 60)) minutes")
+                                  formatter.string(from: rung)?.localizedLowercase ?? "\(Int(rung / 60)) minutes")
 
-            // Without the Critical Alerts entitlement a .critical rung arrives time-sensitive.
-            content.interruptionLevel = rung.isCritical ? .critical : .timeSensitive
-            content.sound = rung.isCritical ? .defaultCritical : .default
+            // Time-sensitive is the highest level the watch is entitled to; no Critical Alerts.
+            content.interruptionLevel = .timeSensitive
+            content.sound = .default
             content.threadIdentifier = identifier
-            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: rung.interval, repeats: false)
-            center.add(UNNotificationRequest(identifier: "\(identifier).\(Int(rung.interval))",
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: rung, repeats: false)
+            center.add(UNNotificationRequest(identifier: "\(identifier).\(Int(rung))",
                                              content: content, trigger: trigger))
         }
     }

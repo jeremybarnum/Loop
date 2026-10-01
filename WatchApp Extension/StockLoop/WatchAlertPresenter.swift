@@ -34,12 +34,9 @@ enum WatchAlertPresenter {
         content.userInfo = [LoopNotificationUserInfoKey.managerIDForAlert.rawValue: alert.identifier.managerIdentifier,
                             LoopNotificationUserInfoKey.alertTypeID.rawValue: alert.identifier.alertIdentifier]
 
-        // Without the Critical Alerts entitlement a .critical request arrives time-sensitive.
+        // The watch has the time-sensitive entitlement, not Critical Alerts: that is its highest level.
         switch alert.interruptionLevel {
-        case .critical:
-            content.interruptionLevel = .critical
-            content.sound = .defaultCritical
-        case .timeSensitive:
+        case .critical, .timeSensitive:
             content.interruptionLevel = .timeSensitive
             content.sound = .default
         case .active:
@@ -106,6 +103,30 @@ enum WatchAlertPresenter {
             SportLog.event("alert", "acknowledge FAILED for \(identifier.value) — \(error) — alert put back")
             WristAlerts.scheduler.add(UNNotificationRequest(identifier: requestIdentifier(for: identifier),
                                                             content: content, trigger: nil))
+        }
+    }
+
+    /// What the wrist may present with, logged at loan start: during a loan it is the only alarm.
+    static func logAuthorization(_ context: String) {
+        UNUserNotificationCenter.current().getNotificationSettings { s in
+            func name(_ setting: UNNotificationSetting) -> String {
+                switch setting {
+                case .enabled: return "on"
+                case .disabled: return "OFF"
+                case .notSupported: return "n/a"
+                @unknown default: return "?"
+                }
+            }
+            let status: String
+            switch s.authorizationStatus {
+            case .authorized: status = "authorized"
+            case .denied: status = "DENIED"
+            case .notDetermined: status = "NOT DETERMINED"
+            case .provisional: status = "provisional"
+            case .ephemeral: status = "ephemeral"
+            @unknown default: status = "unknown"
+            }
+            SportLog.event("alert", "notification authorization (\(context)): \(status) · alerts \(name(s.alertSetting)) · sound \(name(s.soundSetting)) · time-sensitive \(name(s.timeSensitiveSetting)) · critical \(name(s.criticalAlertSetting))")
         }
     }
 }

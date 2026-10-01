@@ -92,7 +92,8 @@ final class WristGlucoseAlertTests: XCTestCase {
 
         await manager.evaluateGlucoseAlerts([reading(50)]).value
 
-        XCTAssertNotNil(request(GlucoseAlertManager.urgentLowAlertIdentifier))
+        XCTAssertEqual(request(GlucoseAlertManager.urgentLowAlertIdentifier)?.content.interruptionLevel, .timeSensitive,
+                       "the highest level the watch is entitled to")
         XCTAssertNil(request(GlucoseAlertManager.lowAlertIdentifier), "stock surfaces only the more severe of the two")
     }
 
