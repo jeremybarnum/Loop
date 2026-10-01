@@ -22,31 +22,27 @@ extension PodLoanPhoneController {
     /// The phone warns only if its own sensor reading is this fresh, i.e. it is near the user.
     static let nearTheBodyWindow: TimeInterval = .minutes(11)
 
-    private enum HoldKeys {
-        static let renewedAt = "PodLoanPhoneController.holdRenewedAt"
-        static let noticedAt = "PodLoanPhoneController.holdLapseNoticedAt"
-        static let warningsIssued = "PodLoanPhoneController.watchSilenceWarningsIssued"
-    }
-
     /// When the watch last reported a cycle. Persisted, so a relaunch is not read as silence.
     var holdRenewedAt: Date? {
-        get { deps.defaults.object(forKey: HoldKeys.renewedAt) as? Date }
-        set { deps.defaults.set(newValue, forKey: HoldKeys.renewedAt) }
+        get { persisted.holdRenewedAt }
+        set { updateState { $0.holdRenewedAt = newValue } }
     }
 
     /// When the silence was noticed; clearing it also resets the warning count.
     var holdLapseNoticedAt: Date? {
-        get { deps.defaults.object(forKey: HoldKeys.noticedAt) as? Date }
+        get { persisted.holdLapseNoticedAt }
         set {
-            deps.defaults.set(newValue, forKey: HoldKeys.noticedAt)
-            if newValue == nil { deps.defaults.removeObject(forKey: HoldKeys.warningsIssued) }
+            updateState {
+                $0.holdLapseNoticedAt = newValue
+                if newValue == nil { $0.watchSilenceWarningsIssued = 0 }
+            }
         }
     }
 
     /// How many of the warnings have gone out for this stretch of silence.
     private var watchSilenceWarningsIssued: Int {
-        get { deps.defaults.integer(forKey: HoldKeys.warningsIssued) }
-        set { deps.defaults.set(newValue, forKey: HoldKeys.warningsIssued) }
+        get { persisted.watchSilenceWarningsIssued }
+        set { updateState { $0.watchSilenceWarningsIssued = newValue } }
     }
 
     /// An audit describes one loan, so every path that ends a loan clears its anchors.
