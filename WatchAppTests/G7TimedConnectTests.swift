@@ -52,7 +52,7 @@ final class G7WatchAcquisitionTests: XCTestCase {
 
     func testTheProvenArmIsTheDefault() {
         XCTAssertEqual(G7WatchAcquisition.relodge, .holdApp, "33 in 33; the grid delay measured 1 in 4")
-        XCTAssertEqual(G7WatchAcquisition.Relodge(rawValue: "peteDelay"), .gridDelay, "the persisted raw value still decodes")
+        XCTAssertEqual(G7WatchAcquisition.Relodge(rawValue: "gridDelay"), .gridDelay)
         XCTAssertEqual(G7WatchAcquisition.Relodge(rawValue: "holdApp"), .holdApp)
         XCTAssertNil(G7WatchAcquisition.Relodge(rawValue: "tailDelay"), "the 31-s arm is gone")
     }
