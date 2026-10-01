@@ -432,6 +432,10 @@ class LoopAppManager: NSObject {
             settingsProvider: temporaryPresetsManager,
             bolusStateProvider: deviceDataManager
         )
+        // PODLOAN: held with the Loop-Failure ladder while the watch holds the pod.
+        mealDetectionManager.loanSuppressionGate = { [weak alertManager] in
+            alertManager?.loopNotRunningSuppressionGate?() == true
+        }
 
         loopDataManager.deliveryDelegate = deviceDataManager
         loopDataManager.isPumpConnectionReleased = { [weak deviceDataManager] in

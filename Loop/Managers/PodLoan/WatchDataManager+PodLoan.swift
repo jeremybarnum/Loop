@@ -17,12 +17,13 @@ import LoopCore
 
 extension WatchDataManager {
 
-    /// Wires the Loop-Failure suppression gate to the loan state, once.
+    /// Wires the Loop-Failure suppression gate to the loan state, once; predicted low shares it.
     func wireLoopFailureSuppressionGate() {
         guard FeatureFlags.sportModeEnabled else { return }
         deviceManager.alertManager?.loopNotRunningSuppressionGate = { [weak self] in
             self?.podLoanController.isLoanedOutForUI ?? false
         }
+        deviceManager.glucoseAlertManager.predictedLowSuppressionGate = deviceManager.alertManager?.loopNotRunningSuppressionGate
         Self.loanLadderSweep = { [weak self] in
             self?.deviceManager.alertManager?.sweepLoopNotRunningNotificationsDuringLoan()
         }

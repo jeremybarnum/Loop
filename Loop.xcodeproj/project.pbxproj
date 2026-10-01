@@ -107,6 +107,7 @@
 		C0D6128D55F7237079C42112 /* WatchDeviceManagers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD49ED34A3CE3A86BEFB048E /* WatchDeviceManagers.swift */; };
 		33644743F20B3706E3107FAC /* mood_synth.caf in Resources */ = {isa = PBXBuildFile; fileRef = BEC0BA802BE613F144AC3A70 /* mood_synth.caf */; };
 		37F9E89015084C8ABF4404FB /* LoanProtocolV2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1368A70B6E347BCB432DF4D /* LoanProtocolV2Tests.swift */; };
+		0A25ECBEFCE3F3FDA109F55E /* LoanHeldAlertsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F99A092492A6A42ADB45503 /* LoanHeldAlertsTests.swift */; };
 		3BD58D425AE24815B134F3E1 /* LoanBooksHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF6006BAC6EA4034BFD67C0E /* LoanBooksHarnessTests.swift */; };
 		3ED3198A2EB659E600820BCF /* GlucoseLiveActivityConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3ED319882EB659E600820BCF /* GlucoseLiveActivityConfiguration.swift */; };
 		3ED3198B2EB659E600820BCF /* ChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3ED319872EB659E600820BCF /* ChartView.swift */; };
@@ -1612,6 +1613,7 @@
 		8FF10EA3BB7642DAE19471F6 /* LoanMessages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LoanMessages.swift"; path = "LoopCore/PodLoan/LoanMessages.swift"; sourceTree = SOURCE_ROOT; };
 		FBC4D5290F0F35E6B66B7227 /* LoanRecords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LoanRecords.swift"; path = "LoopCore/PodLoan/LoanRecords.swift"; sourceTree = SOURCE_ROOT; };
 		D1368A70B6E347BCB432DF4D /* LoanProtocolV2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LoanProtocolV2Tests.swift; path = LoopTests/LoanProtocolV2Tests.swift; sourceTree = SOURCE_ROOT; };
+		8F99A092492A6A42ADB45503 /* LoanHeldAlertsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LoanHeldAlertsTests.swift"; path = "LoopTests/LoanHeldAlertsTests.swift"; sourceTree = SOURCE_ROOT; };
 		DD0291A8F31C4B68ACE34BFC /* LoopUpdateContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LoopUpdateContext.swift; path = Loop/Managers/LoopUpdateContext.swift; sourceTree = SOURCE_ROOT; };
 		DD3DBD282A33AFE9000F8B5B /* IntegralRetrospectiveCorrectionSelectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegralRetrospectiveCorrectionSelectionView.swift; sourceTree = "<group>"; };
 		DDC389F52A2B61750066E2E8 /* ApplicationFactorStrategy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationFactorStrategy.swift; sourceTree = "<group>"; };
@@ -2650,6 +2652,7 @@
 				FF6006BAC6EA4034BFD67C0E /* LoanBooksHarnessTests.swift */,
 				97C8F1C82896495CA6E8AF8F /* PodLoanPhoneControllerTests.swift */,
 				D1368A70B6E347BCB432DF4D /* LoanProtocolV2Tests.swift */,
+				8F99A092492A6A42ADB45503 /* LoanHeldAlertsTests.swift */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -4313,6 +4316,7 @@
 				3BD58D425AE24815B134F3E1 /* LoanBooksHarnessTests.swift in Sources */,
 				2595BA7C7FB24296BCB3601A /* PodLoanPhoneControllerTests.swift in Sources */,
 				37F9E89015084C8ABF4404FB /* LoanProtocolV2Tests.swift in Sources */,
+				0A25ECBEFCE3F3FDA109F55E /* LoanHeldAlertsTests.swift in Sources */,
 				A9DF02CB24F72B9E00B7C988 /* CriticalEventLogTests.swift in Sources */,
 				1D80313D24746274002810DF /* AlertStoreTests.swift in Sources */,
 				C1777A6625A125F100595963 /* ManualEntryDoseViewModelTests.swift in Sources */,

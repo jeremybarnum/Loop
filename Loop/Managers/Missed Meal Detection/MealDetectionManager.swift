@@ -54,6 +54,9 @@ class MealDetectionManager {
 
     private lazy var cancellables = Set<AnyCancellable>()
 
+    /// PODLOAN: true while the watch holds the pod; its carbs reach the store only at hand-back.
+    var loanSuppressionGate: (() -> Bool)?
+
     // For testing only
     var test_currentDate: Date?
 
@@ -76,6 +79,7 @@ class MealDetectionManager {
     }
 
     func run() async {
+        guard loanSuppressionGate?() != true else { return }
         let algoState = await algorithmStateProvider.algorithmState
         guard let input = algoState.input, let output = algoState.output else {
             self.log.debug("Skipping run with missing algorithm input/output")
