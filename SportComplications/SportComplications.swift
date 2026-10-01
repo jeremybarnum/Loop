@@ -55,7 +55,7 @@ struct SportComplicationView: View {
             // 2026-09-30: widgetCurvesContent rendered flat on the Utility face). So the whole
             // value rides the label and the tip stays empty — no symbol needed.
             Color.clear
-                .widgetLabel { Text(snapshot.curved(kind, at: entry.date)) }
+                .widgetLabel { cornerLabel }
         case .accessoryCircular:
             ZStack {
                 AccessoryWidgetBackground()
@@ -77,6 +77,17 @@ struct SportComplicationView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         default:
             Text(snapshot.short(kind, at: entry.date))
+        }
+    }
+
+    /// The curved text. BG asks for a bigger, bolder face — on the wrist it read small beside the
+    /// system's own corner text (2026-10-01); the system may cap a label's size.
+    @ViewBuilder private var cornerLabel: some View {
+        if kind == .glucose {
+            Text(snapshot.curved(kind, at: entry.date))
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+        } else {
+            Text(snapshot.curved(kind, at: entry.date))
         }
     }
 
