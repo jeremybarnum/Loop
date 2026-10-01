@@ -57,6 +57,7 @@ enum StockLoopStack {
         cgmManager.cgmManagerDelegate = loopManager
 
         loopManager.g7Manager = cgmManager
+        loopManager.seedLastDirectG7At(cgmManager.latestReadingTimestamp)
 
         return Stack(cgmManager: cgmManager, loopManager: loopManager)
     }

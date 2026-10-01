@@ -86,6 +86,20 @@ final class WakeResumeTests: XCTestCase {
         for key in PodLoanWatchController.retiredKeys { XCTAssertNil(defaults.object(forKey: key), key) }
     }
 
+    /// The direct-reading clock is memory, seeded at launch from the sensor; the old key goes.
+    func testDirectReadingClockIsSeededNotReadFromDefaults() async {
+        defaults.set(Date(), forKey: WatchLoopManager.lastDirectG7DefaultsKey)
+        let c = await makeController()
+        XCTAssertNil(defaults.object(forKey: WatchLoopManager.lastDirectG7DefaultsKey), "the retired key is swept")
+        XCTAssertNil(c.loopManager.lastGlucoseSourceStamps.direct, "a stored stamp no longer feeds the clock")
+
+        let reading = Date().addingTimeInterval(-300)
+        c.loopManager.seedLastDirectG7At(reading)
+        XCTAssertEqual(c.loopManager.lastGlucoseSourceStamps.direct, reading)
+        c.loopManager.seedLastDirectG7At(reading.addingTimeInterval(-600))
+        XCTAssertEqual(c.loopManager.lastGlucoseSourceStamps.direct, reading, "a seed never moves the clock back")
+    }
+
     func testActiveLoanWithSavedPodStateResumes() async {
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         XCTAssertEqual(c.phase, .active, "an active loan with saved pod state resumes — not drained")

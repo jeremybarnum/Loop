@@ -425,6 +425,7 @@ final class WatchLoopManager {
         self._closedLoopEnabled = closed
         self._closedLoopMirror = closed
         self.integralRetrospectiveCorrectionEnabled = defaults.bool(forKey: Self.integralRCDefaultsKey)
+        defaults.removeObject(forKey: Self.lastDirectG7DefaultsKey)
 
         // The store asks us for the scheduled basal it nets doses against; see the
         // `DoseStoreDelegate` conformance.
@@ -520,8 +521,15 @@ final class WatchLoopManager {
     /// written once per episode rather than on every state update.
     var lastPersistedSensorID: String?
 
-    /// Persisted, so a relaunch does not reset the stranded-sensor clock.
+    /// Retired: the clock is memory, seeded at launch from the sensor's own last reading.
     static let lastDirectG7DefaultsKey = "SportMode.lastDirectG7At"
+
+    /// Launch seed, so a relaunch does not reset the stranded-sensor clock; never moves it back.
+    func seedLastDirectG7At(_ date: Date?) {
+        bgSourceLock.lock()
+        if let date, date > (_lastDirectG7At ?? .distantPast) { _lastDirectG7At = date }
+        bgSourceLock.unlock()
+    }
 
     /// Record WHERE a reading came from, so the wrist can answer "am I standing on my own right
     /// now?". Stamped on arrival by the ingest paths — see `processCGMReadingResult`.
@@ -529,9 +537,6 @@ final class WatchLoopManager {
         bgSourceLock.lock()
         if directG7 { _lastDirectG7At = self.now() } else { _lastPhoneRelayAt = self.now() }
         bgSourceLock.unlock()
-        if directG7 {
-            defaults.set(self.now(), forKey: Self.lastDirectG7DefaultsKey)
-        }
 
         refreshGlanceData()
     }
@@ -549,14 +554,11 @@ final class WatchLoopManager {
         return "g7direct=\(age(stamps.direct)) phoneRelay=\(age(stamps.phone))"
     }
 
-    /// Only the direct stamp persists; a phone relay says nothing about the watch's radio.
+    /// A phone relay says nothing about the watch's radio, so the two are kept apart.
     var lastGlucoseSourceStamps: (direct: Date?, phone: Date?) {
         bgSourceLock.lock()
-        let mem = (_lastDirectG7At, _lastPhoneRelayAt)
-        bgSourceLock.unlock()
-
-        let direct = mem.0 ?? defaults.object(forKey: Self.lastDirectG7DefaultsKey) as? Date
-        return (direct, mem.1)
+        defer { bgSourceLock.unlock() }
+        return (_lastDirectG7At, _lastPhoneRelayAt)
     }
 
     /// The basal schedule with the override applied; net rates must use this, not the raw schedule.
