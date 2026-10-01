@@ -149,7 +149,6 @@ extension PodLoanPhoneController {
 
         // This loan's origin; the previous loan's takeover reading is cleared with it.
         let deliveredAtGrant = lendable.lentDeviceInsulinDelivered
-        worstWindowThisLoan = 0
 
         let releaseEpoch = epoch + 1
         handbackDiag(releaseEpoch, "GRANT — releasing pod BLE (wasReleased=\(lendable.isConnectionReleased))")

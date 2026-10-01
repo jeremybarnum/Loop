@@ -248,28 +248,6 @@ extension PodLoanPhoneController {
         }
     }
 
-    /// Diagnostic series of clean hand-back residuals; nothing reads it back.
-    func bankResidual(_ residual: Double, worstWindow: Double, epoch: Int) {
-        // Bounded to recent loans.
-        var history = (deps.defaults.array(forKey: Keys.residualHistory) as? [Double]) ?? []
-        history.append(residual)
-        if history.count > 40 { history.removeFirst(history.count - 40) }
-        deps.defaults.set(history, forKey: Keys.residualHistory)
-
-        var windows = (deps.defaults.array(forKey: Keys.windowWorstHistory) as? [Double]) ?? []
-        windows.append(worstWindow)
-        if windows.count > 40 { windows.removeFirst(windows.count - 40) }
-        deps.defaults.set(windows, forKey: Keys.windowWorstHistory)
-
-        let mean = history.reduce(0, +) / Double(history.count)
-        let worst = history.map(abs).max() ?? 0
-        handbackDiag(epoch, String(format:
-            "residual bank: n=%d mean=%+.3f worst=|%.3f| min=%+.3f max=%+.3f · window-worst this loan |%.3f| (series n=%d max |%.3f|) — diagnostics only, R32 closed 2026-08-27 (window verdict ±%.2f U)",
-            history.count, mean, worst, history.min() ?? 0, history.max() ?? 0,
-            worstWindow, windows.count, windows.map(abs).max() ?? 0,
-            Self.openLoopPositiveResidual))
-    }
-
     /// Blocking; never from the controller's queue or a UI draw path.
     var isPodLoanedOut: Bool {
         return queue.sync { state != .owner || yieldingToInferredLoan }
@@ -320,7 +298,6 @@ extension PodLoanPhoneController {
         let residual = ((delivered - expected) * 1000).rounded() / 1000
         if abs(residual) <= Self.checkpointBand {
             checkpointsThisLoan += 1
-            worstWindowThisLoan = max(worstWindowThisLoan, abs(residual))
             auditBase = AuditBase(units: snap.deliveredLatest, asOf: asOf)
             os_log("Checkpoint ACCEPTED (%{public}@): window %.1f min reconciled (delivered %.3f expected %.3f residual %+.3f) — base → %.3f U",
                    log: log, type: .default, context, asOf.timeIntervalSince(base.asOf) / 60,

@@ -60,17 +60,13 @@ extension PodLoanPhoneController {
         }
     }
 
-    /// UserDefaults keys still in use; the loan's state lives in `PodLoanPhoneState`.
+    /// UserDefaults keys; the loan's state lives in `PodLoanPhoneState`.
     enum Keys {
-        /// Rolling diagnostic series. Nothing reads these back to change behaviour.
-        static let residualHistory = "PodLoanPhoneController.residualHistory"
-
-        static let windowWorstHistory = "PodLoanPhoneController.windowResidualWorst"
-
         /// Written by earlier builds and read by nothing now; removed at launch.
         static let retired = ["deliveredAuthoritative", "residualHistoryPurged.2026-08-13", "expectedUnits",
                               "watchAuditRan", "lastHandledForeignSessionAt", "rebidAt",
-                              "firstContactSinceRebid", "inferredLoanYieldDisabled"].map { "PodLoanPhoneController." + $0 }
+                              "firstContactSinceRebid", "inferredLoanYieldDisabled",
+                              "residualHistory", "windowResidualWorst"].map { "PodLoanPhoneController." + $0 }
     }
 
     enum NotificationID {

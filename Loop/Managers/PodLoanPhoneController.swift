@@ -322,8 +322,6 @@ final class PodLoanPhoneController {
 
     var hasWarnedProtocolMismatch = false
 
-    var worstWindowThisLoan: Double = 0
-
     /// One write at a time: `committedIDs` updates only in a write's completion.
     var commitInFlight = false
 

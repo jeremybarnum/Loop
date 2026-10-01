@@ -1088,23 +1088,6 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertTrue(notices.isEmpty, "a normal loan must produce no notice at all, got \(notices)")
     }
 
-    /// Residuals are banked as diagnostics, with the worst-window series.
-    func testResidualsAreBankedAsDiagnosticsWithTheWorstWindowSeries() throws {
-        defaults.removeObject(forKey: "PodLoanPhoneController.residualHistory")
-        defaults.removeObject(forKey: "PodLoanPhoneController.windowResidualWorst")
-        let controller = makeController()
-        try runLoanToAudit(controller, deliveredDuringLoan: 0.10)
-
-        let bank = diagMatching("residual bank:")
-        XCTAssertNotNil(bank, "each audit must bank its residual and say how many exist")
-        XCTAssertTrue(bank!.contains("n=1"), "got: \(bank!)")
-        XCTAssertTrue(bank!.contains("window-worst"), "the worst-window series is the review data now: \(bank!)")
-        XCTAssertTrue(bank!.contains("R32 closed"), "the line states the ruling, not a demand for one: \(bank!)")
-        XCTAssertFalse(bank!.contains("RE-REVIEW DUE"), "the review happened — no nag: \(bank!)")
-        XCTAssertEqual((defaults.array(forKey: "PodLoanPhoneController.residualHistory") as? [Double])?.count, 1)
-        XCTAssertEqual((defaults.array(forKey: "PodLoanPhoneController.windowResidualWorst") as? [Double])?.count, 1)
-    }
-
     /// Keys no build reads any more are removed at launch.
     func testRetiredKeysAreSweptAtLaunch() {
         for key in PodLoanPhoneController.Keys.retired { defaults.set(1.0, forKey: key) }

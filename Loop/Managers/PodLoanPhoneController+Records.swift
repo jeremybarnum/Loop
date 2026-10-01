@@ -97,7 +97,6 @@ extension PodLoanPhoneController {
                 $0.audit.loanStartedAt = anchor
             }
             stateDidChange(from: previous)
-            worstWindowThisLoan = 0
         }
 
         // An offer ahead of this phone's epoch cannot be committed.

@@ -227,10 +227,6 @@ extension PodLoanPhoneController {
             }
             switch pending.flavor {
             case .handback:
-                // Only clean hand-backs feed the residual statistics.
-                bankResidual(loanResidual ?? residual,
-                             worstWindow: max(worstWindowThisLoan, abs(residual)),
-                             epoch: pending.epoch)
                 applyReconciliationVerdict(residual: residual, epoch: pending.epoch)
             case .forceReclaim:
                 applyForceReclaimVerdict(residual: residual, epoch: pending.epoch)
