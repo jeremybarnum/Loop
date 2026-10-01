@@ -17,6 +17,8 @@ struct PodLoanWatchState: RawRepresentable {
     var epoch: Int?
     /// The highest epoch ever accepted; never cleared, so a spent epoch is never reused.
     var highWaterEpoch = 0
+    /// The newest revoke heard; any grant at or below it is refused, across relaunches too.
+    var lastRevokedEpoch: Int?
 
     /// What a resume needs from the grant: the settings, and the phone's capability flags.
     struct GrantedSettings {
@@ -38,6 +40,7 @@ struct PodLoanWatchState: RawRepresentable {
         phase = (rawValue["phase"] as? String).flatMap(PodLoanWatchController.Phase.init(rawValue:)) ?? .idle
         epoch = rawValue["epoch"] as? Int
         highWaterEpoch = rawValue["highWaterEpoch"] as? Int ?? 0
+        lastRevokedEpoch = rawValue["lastRevokedEpoch"] as? Int
         grantedSettings = (rawValue["grantedSettings"] as? [String: Any]).flatMap(Self.grantedSettings(from:))
         deliveredAtTakeover = rawValue["deliveredAtTakeover"] as? Double
         seizeToken = (rawValue["seizeToken"] as? String).flatMap(UUID.init(uuidString:))
@@ -46,6 +49,7 @@ struct PodLoanWatchState: RawRepresentable {
     var rawValue: [String: Any] {
         var raw: [String: Any] = ["version": Self.version, "phase": phase.rawValue, "highWaterEpoch": highWaterEpoch]
         raw["epoch"] = epoch
+        raw["lastRevokedEpoch"] = lastRevokedEpoch
         raw["grantedSettings"] = grantedSettings.map {
             var d: [String: Any] = ["raw": $0.therapySettingsRaw, "interim": $0.supportsInterimHandback,
                                     "overrideRecords": $0.supportsOverrideRecords]
@@ -132,6 +136,12 @@ extension PodLoanWatchController {
     var epoch: Int? {
         get { persisted.epoch }
         set { updateState { $0.epoch = newValue } }
+    }
+
+    /// Recorded before matching the epoch, so any grant at or below it is refused.
+    var lastRevokedEpoch: Int? {
+        get { persisted.lastRevokedEpoch }
+        set { updateState { $0.lastRevokedEpoch = newValue } }
     }
 
     var deliveredAtTakeover: Double? {
