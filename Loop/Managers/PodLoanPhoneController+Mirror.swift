@@ -152,7 +152,7 @@ extension PodLoanPhoneController {
                 newestForeignLoanEvidence = (report.epoch, deps.now())
             }
             // Only a watch holding this phone's seize credential could have started a session.
-            let hasCredential = deps.defaults.string(forKey: Keys.dormantSeizeToken) != nil
+            let hasCredential = persisted.seizeToken != nil
             switch state {
             case .owner where hasCredential:
                 engageInferredLoanYield(evidence: "statusReport — watch holds the pod on e\(report.epoch)")
