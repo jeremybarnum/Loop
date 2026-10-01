@@ -51,10 +51,18 @@ struct SportComplicationView: View {
         case .accessoryInline:
             Text(snapshot.line(kind, at: entry.date))
         case .accessoryCorner:
-            Text(cornerCenter)
-                .font(.system(size: 24, weight: .semibold, design: .rounded))
-                .minimumScaleFactor(0.6).lineLimit(1)
-                .widgetLabel { Text(cornerLabel) }
+            // One line curved along the bezel, like the system's own corner text (wrist,
+            // 2026-09-30: a number at the tip with a separate curved label read as two things).
+            if #available(watchOS 10.0, *) {
+                Text(snapshot.curved(kind, at: entry.date))
+                    .widgetCurvesContent()
+                    .widgetAccentable()
+            } else {
+                Text(cornerCenter)
+                    .font(.system(size: 24, weight: .semibold, design: .rounded))
+                    .minimumScaleFactor(0.6).lineLimit(1)
+                    .widgetLabel { Text(cornerLabel) }
+            }
         case .accessoryCircular:
             ZStack {
                 AccessoryWidgetBackground()

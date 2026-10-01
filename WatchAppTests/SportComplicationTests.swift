@@ -34,6 +34,14 @@ final class SportComplicationTests: XCTestCase {
         XCTAssertEqual(s.line(.glucoseToEventual, at: now), "BG 120 → 128")
     }
 
+    func testCornerTextIsOneCurvedLine() {
+        let s = snapshot()
+        XCTAssertEqual(s.curved(.iob, at: now), "IOB 1.2")
+        XCTAssertEqual(s.curved(.cob, at: now), "COB 24")
+        XCTAssertEqual(s.curved(.eventual, at: now), "EVENTUAL 128")
+        XCTAssertEqual(s.curved(.glucoseToEventual, at: now), "120 → 128")
+    }
+
     /// A stale loop must not leave old insulin on the wrist as if it were current.
     func testAStaleLoopShowsDashes() {
         let s = snapshot(loopAge: 20 * 60)

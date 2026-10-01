@@ -97,6 +97,16 @@ struct SportComplicationSnapshot: Codable, Equatable {
         }
     }
 
+    /// One line for a corner, curved along the bezel: "IOB 0.2", "COB 0", "EVENTUAL 240", "173 → 240".
+    func curved(_ kind: Kind, at date: Date) -> String {
+        switch kind {
+        case .iob: return "IOB \(iobText(at: date) ?? Self.dash)"
+        case .cob: return "COB \(cobText(at: date) ?? Self.dash)"
+        case .eventual: return "EVENTUAL \(eventualText(at: date) ?? Self.dash)"
+        case .glucoseToEventual: return "\(currentText(at: date) ?? Self.dash) → \(eventualText(at: date) ?? Self.dash)"
+        }
+    }
+
     /// The moments after `date` at which something turns to a dash — the timeline's later entries.
     func staleMoments(after date: Date) -> [Date] {
         [loopDate, glucoseDate].compactMap { $0?.addingTimeInterval(Self.recency + 1) }.filter { $0 > date }.sorted()
