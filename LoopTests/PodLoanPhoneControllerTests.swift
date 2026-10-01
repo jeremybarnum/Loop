@@ -91,8 +91,6 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     private let lock = NSLock()
     /// Called for every non-diag send, before it is recorded: lets a test inspect disk at send time.
     var onSend: ((LoanMessage) -> Void)?
-    var suiteName: String!
-    var defaults: UserDefaults!
     var stateDir: URL!
     /// What `Dependencies.glucoseAlertSettings` hands the grant.
     var glucoseAlertSettings: Data?
@@ -105,17 +103,14 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     }()
 
     override func tearDown() {
-        defaults.removePersistentDomain(forName: suiteName)
         try? FileManager.default.removeItem(at: stateDir)
         super.tearDown()
     }
 
     override func setUp() {
         super.setUp()
-        // Every test gets fresh storage: its own defaults suite and state folder.
+        // Every test gets a fresh state folder.
         PhoneLog.directoryOverride = Self.phoneLogDirectory
-        suiteName = "PodLoanPhoneControllerTests-\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)!
         stateDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         MockPumpManager.testForcedReadCount = 0
@@ -154,6 +149,14 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             carbRatioSchedule: CarbRatioSchedule(unit: .gram, dailyItems: [RepeatingScheduleValue(startTime: 0, value: 10.0)], timeZone: timeZone),
             maximumBasalRatePerHour: 3.0,
             maximumBolus: 5.0)
+    }
+
+    /// Writes the controller's state file as a previous launch left it.
+    func saveState(_ change: (inout PodLoanPhoneState) -> Void) {
+        var store = PersistedProperty<[String: Any]>(key: PodLoanPhoneController.stateFileKey, directory: stateDir)
+        var state = store.wrappedValue.flatMap(PodLoanPhoneState.init(rawValue:)) ?? PodLoanPhoneState()
+        change(&state)
+        store.wrappedValue = state.rawValue
     }
 
     /// The reclaim-ladder inputs are fixed at the tap; defaults reproduce the dead branch.
@@ -247,7 +250,6 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             lastWatchContactAt: lastWatchContact,
             latestGlucoseDate: latestGlucose ?? { now() },   // by default the phone is beside the body: a reading just now
             now: now,
-            defaults: defaults,
             stateDirectory: stateDir,
             addNotification: { _ in },
             removeNotifications: { _ in }
@@ -772,29 +774,25 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(savedAtAck?.committedCursor, 1)
     }
 
-    /// Every legacy key moves into the state file once; a mid-loan relaunch pauses dosing at once.
-    func testLegacyKeysMigrateOnceIntoTheStateFile() {
+    /// A loan saved mid-flight restores field for field; the relaunch pauses dosing at once.
+    func testASavedLoanRestoresAndPausesDosing() {
         let committed = UUID(), token = UUID()
         let started = Date(timeIntervalSinceNow: -3600), renewed = Date(timeIntervalSinceNow: -1200)
-        let noticed = Date(timeIntervalSinceNow: -300)
-        let k = { "PodLoanPhoneController." + $0 }
-        defaults.set("loaned", forKey: k("state"))
-        defaults.set(5, forKey: k("epoch"))
-        defaults.set(3, forKey: k("cursor"))
-        defaults.set([committed.uuidString], forKey: k("committedIDs"))
-        defaults.set(true, forKey: k("pendingRevoke"))
-        defaults.set(true, forKey: k("yieldingToInferredLoan"))
-        defaults.set(renewed, forKey: k("holdRenewedAt"))
-        defaults.set(noticed, forKey: k("holdLapseNoticedAt"))
-        defaults.set(2, forKey: k("watchSilenceWarningsIssued"))
-        defaults.set(true, forKey: k("watchSupportsSeize"))
-        defaults.set(token.uuidString, forKey: k("dormantSeizeToken"))
-        defaults.set(started, forKey: k("loanStartedAt"))
-        defaults.set(12.0, forKey: k("deliveredAtGrant"))
-        defaults.set(12.5, forKey: k("deliveredAtTakeover"))
-        defaults.set(["units": 13.0, "asOf": started, "epoch": 5, "count": 2], forKey: k("auditBase"))
-        defaults.set(["epoch": 5, "atStart": 12.5, "expected": 0.8, "loanMinutes": 60.0], forKey: k("pendingForceAudit"))
-        defaults.set(["epoch": 3, "units": 0.9, "bookedAt": started.timeIntervalSince1970], forKey: k("gapBooking"))
+        var saved = PodLoanPhoneState()
+        saved.phase = .loaned
+        saved.epoch = 5
+        saved.committedCursor = 3
+        saved.committedIDs = [committed]
+        saved.holdRenewedAt = renewed
+        saved.watchSupportsSeize = true
+        saved.seizeToken = token
+        saved.audit.loanStartedAt = started
+        saved.audit.deliveredAtGrant = 12.0
+        saved.audit.base = .init(units: 13.0, asOf: started)
+        saved.audit.baseEpoch = 5
+        saved.audit.checkpoints = 2
+        saved.pendingForceAudit = .init(epoch: 5, deliveredAtStart: 12.5, expected: 0.8, loanMinutes: 60)
+        saveState { $0 = saved }
 
         let controller = makeController()
         let p = controller.persisted
@@ -802,34 +800,13 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(p.epoch, 5)
         XCTAssertEqual(p.committedCursor, 3)
         XCTAssertEqual(p.committedIDs, [committed])
-        XCTAssertTrue(p.pendingRevoke)
-        XCTAssertTrue(p.yieldingToInferredLoan)
         XCTAssertEqual(p.holdRenewedAt, renewed)
-        XCTAssertEqual(p.holdLapseNoticedAt, noticed)
-        XCTAssertEqual(p.watchSilenceWarningsIssued, 2)
         XCTAssertTrue(p.watchSupportsSeize)
-        XCTAssertEqual(p.seizeToken, token, "a watch already holding the token is still recognised")
-        XCTAssertEqual(p.audit.loanStartedAt, started)
-        XCTAssertEqual(p.audit.deliveredAtGrant, 12.0)
-        XCTAssertEqual(p.audit.deliveredAtTakeover, 12.5)
+        XCTAssertEqual(p.seizeToken, token)
         XCTAssertEqual(p.audit.base?.units, 13.0, "a base from this epoch is kept")
         XCTAssertEqual(p.audit.checkpoints, 2)
-        XCTAssertEqual(p.pendingForceAudit?.expected, 0.8)
-        XCTAssertEqual(p.gapBooking?.units, 0.9)
         XCTAssertEqual(controller.queue.sync { controller.pendingHandbackAudit?.flavor }, .forceReclaim, "the owed verdict re-arms")
         XCTAssertEqual(pauseCalls, [true], "dosing pauses at launch")
-        for key in PodLoanPhoneState.legacyKeys { XCTAssertNil(defaults.object(forKey: key), key) }
-
-        defaults.set("owner", forKey: k("state"))
-        defaults.set(0, forKey: k("epoch"))
-        defaults.set(Date(), forKey: k("holdRenewedAt"))
-        defaults.set(UUID().uuidString, forKey: k("dormantSeizeToken"))
-        let relaunched = makeController()
-        XCTAssertEqual(relaunched.state, .loaned, "a re-seeded legacy key never beats the file")
-        XCTAssertEqual(relaunched.epoch, 5)
-        XCTAssertEqual(relaunched.persisted.holdRenewedAt?.timeIntervalSince1970 ?? 0, renewed.timeIntervalSince1970, accuracy: 0.001)
-        XCTAssertEqual(relaunched.persisted.seizeToken, token)
-        for key in PodLoanPhoneState.legacyKeys { XCTAssertNil(defaults.object(forKey: key), key) }
     }
 
     // MARK: - Item 1: the phone reads the end-of-loan odometer and cancels the inherited temp
@@ -1118,17 +1095,14 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertTrue(notices.isEmpty, "a normal loan must produce no notice at all, got \(notices)")
     }
 
-    /// Keys no build reads any more are removed at launch.
-    func testRetiredKeysAreSweptAtLaunch() {
-        for key in PodLoanPhoneController.Keys.retired { defaults.set(1.0, forKey: key) }
-        _ = makeController()
-        for key in PodLoanPhoneController.Keys.retired { XCTAssertNil(defaults.object(forKey: key), key) }
-    }
-
-    /// A base saved under another epoch is dropped at migration, as the launch guard did.
-    func testAMigratedBaseFromAnotherEpochIsDropped() {
-        defaults.set(5, forKey: "PodLoanPhoneController.epoch")
-        defaults.set(["units": 13.0, "asOf": Date(), "epoch": 4, "count": 2], forKey: "PodLoanPhoneController.auditBase")
+    /// A base saved under another epoch is dropped at launch.
+    func testASavedBaseFromAnotherEpochIsDropped() {
+        var saved = PodLoanPhoneState()
+        saved.epoch = 5
+        saved.audit.base = .init(units: 13.0, asOf: Date())
+        saved.audit.baseEpoch = 4
+        saved.audit.checkpoints = 2
+        saveState { $0 = saved }
         let controller = makeController()
         XCTAssertNil(controller.auditBase)
         XCTAssertEqual(controller.checkpointsThisLoan, 0)
@@ -1725,9 +1699,7 @@ extension PodLoanPhoneControllerTests {
     /// A launch retries the placeholder delete only when it failed after the watch's records
     /// committed (`deleteFailedAfterRecords`).
     func testPersistedGapDeleteRetriesOnFreshLaunch() throws {
-        defaults.set(["epoch": 7, "units": 1.75, "bookedAt": Date().timeIntervalSince1970,
-                                   "deleteFailedAfterRecords": true],
-                                  forKey: "PodLoanPhoneController.gapBooking")
+        saveState { $0.gapBooking = .init(epoch: 7, units: 1.75, bookedAt: Date(), deleteFailedAfterRecords: true) }
 
         // Held for the test's duration — init's retry runs on a `[weak self]` queue.async, so an
         // unretained controller can deallocate before its own retry fires.
@@ -1745,9 +1717,7 @@ extension PodLoanPhoneControllerTests {
 
     /// Launch-time store work waits for protected data (reboot before first unlock).
     func testLaunchStoreWorkWaitsForProtectedData() throws {
-        defaults.set(["epoch": 9, "units": 1.0, "bookedAt": Date().timeIntervalSince1970,
-                                   "deleteFailedAfterRecords": true],
-                                  forKey: "PodLoanPhoneController.gapBooking")
+        saveState { $0.gapBooking = .init(epoch: 9, units: 1.0, bookedAt: Date(), deleteFailedAfterRecords: true) }
         var unlock: (() -> Void)?
         let controller = makeController(whenProtectedDataAvailable: { work in unlock = work })
         _ = controller
@@ -1768,9 +1738,7 @@ extension PodLoanPhoneControllerTests {
     /// The failure side of the same path: launch retry fails again, state must survive for yet
     /// another attempt rather than being dropped or silently swallowed.
     func testPersistedGapDeleteThatFailsAgainAtLaunchKeepsState() throws {
-        defaults.set(["epoch": 3, "units": 0.9, "bookedAt": Date().timeIntervalSince1970,
-                                   "deleteFailedAfterRecords": true],
-                                  forKey: "PodLoanPhoneController.gapBooking")
+        saveState { $0.gapBooking = .init(epoch: 3, units: 0.9, bookedAt: Date(), deleteFailedAfterRecords: true) }
         lock.lock(); gapDeleteSucceeds = false; lock.unlock()
 
         let controller = makeController()
@@ -1783,8 +1751,7 @@ extension PodLoanPhoneControllerTests {
 
     /// A placeholder nothing explained survives launch: the insulin is still in the body.
     func testPersistedGapWithoutRecordsSurvivesLaunch() throws {
-        defaults.set(["epoch": 11, "units": 0.85, "bookedAt": Date().timeIntervalSince1970],
-                                  forKey: "PodLoanPhoneController.gapBooking")
+        saveState { $0.gapBooking = .init(epoch: 11, units: 0.85, bookedAt: Date()) }
 
         let controller = makeController()   // the next app launch
         _ = controller
@@ -2191,7 +2158,7 @@ extension PodLoanPhoneControllerTests {
 
     /// The refresh throttle stamps at enqueue, so a burst yields one refresh.
     func testDormantRefreshBurstYieldsOneRefresh() {
-        defaults.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
+        saveState { $0.watchSupportsSeize = true }
         let controller = makeController()
 
         let firstRefresh = expectSend()
@@ -2210,8 +2177,10 @@ extension PodLoanPhoneControllerTests {
 
     private func seizeCredentialOutstanding() -> UUID {
         let token = UUID()
-        defaults.set(token.uuidString, forKey: "PodLoanPhoneController.dormantSeizeToken")
-        defaults.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
+        saveState {
+            $0.seizeToken = token
+            $0.watchSupportsSeize = true
+        }
         return token
     }
 
@@ -2328,7 +2297,7 @@ extension PodLoanPhoneControllerTests {
     /// Every epoch advance re-issues the dormant credential.
     func testEpochAdvanceRefreshesTheDormantCredential() throws {
         let token = seizeCredentialOutstanding()
-        defaults.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
+        saveState { $0.watchSupportsSeize = true }
         let controller = makeController()
 
         let first = expectSend()
@@ -2758,7 +2727,7 @@ extension PodLoanPhoneControllerTests {
 
     /// The standing copy refreshes on a bolus or carb, collapses bursts, and loses nothing.
     func testTheStandingCopyFollowsTheBook() {
-        defaults.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
+        saveState { $0.watchSupportsSeize = true }
         let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
         func copies() -> Int {
             lock.lock(); defer { lock.unlock() }

@@ -1376,8 +1376,6 @@ private final class PhoneOverrideHarness {
 
     private let lock = NSLock()
     private var controller: PodLoanPhoneController!
-    private let suiteName = "LoanBooksHarness-\(UUID().uuidString)"
-    private lazy var defaults = UserDefaults(suiteName: suiteName)!
     private let stateDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
 
     init(epoch: Int = 1) {
@@ -1385,8 +1383,11 @@ private final class PhoneOverrideHarness {
         try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         // Persisted-state derivation is how this controller boots: write LOANED at `epoch` and
         // it comes up mid-loan, ready to receive the hand-back offer.
-        defaults.set("loaned", forKey: "PodLoanPhoneController.state")
-        defaults.set(epoch, forKey: "PodLoanPhoneController.epoch")
+        var saved = PodLoanPhoneState()
+        saved.phase = .loaned
+        saved.epoch = epoch
+        var store = PersistedProperty<[String: Any]>(key: PodLoanPhoneController.stateFileKey, directory: stateDir)
+        store.wrappedValue = saved.rawValue
 
         var settings = LoopSettings()
         settings.basalRateSchedule = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 1.0)])!
@@ -1409,7 +1410,6 @@ private final class PhoneOverrideHarness {
             },
             doseHistory: { _, completion in completion([]) },
             issueNotice: { _, _ in },
-            defaults: defaults,
             stateDirectory: stateDir,
             addNotification: { _ in },
             removeNotifications: { _ in }))
@@ -1425,7 +1425,6 @@ private final class PhoneOverrideHarness {
 
     func tearDown() {
         controller = nil
-        defaults.removePersistentDomain(forName: suiteName)
         try? FileManager.default.removeItem(at: stateDir)
     }
 }

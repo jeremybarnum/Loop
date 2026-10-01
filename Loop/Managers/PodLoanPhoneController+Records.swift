@@ -415,7 +415,6 @@ extension PodLoanPhoneController {
     /// The final records are in: take the link back, resume dosing, clear staging.
     private func finishLoanAfterCommit() {
         cancelReclaimLadder()
-        cancelNotification(id: NotificationID.duration)
         cancelNotification(id: NotificationID.paused)
 
         // A force deferred behind this commit is satisfied by the close.

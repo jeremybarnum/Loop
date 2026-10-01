@@ -101,8 +101,6 @@ final class PodLoanWatchController {
         d < 1 ? String(format: "%.2fs", d) : String(format: "%.0fs", d)
     }
 
-    var defaults: UserDefaults = .standard
-
     /// Where state files live; nil in the app (Documents).
     let stateDirectory: URL?
 
@@ -246,37 +244,16 @@ final class PodLoanWatchController {
     var isWatchAppActive: () -> Bool = { RuntimeStateLog.appStateName() == "active" }
     var playTakeoverNudge: () -> Void = { WKInterfaceDevice.current().play(.notification) }
 
-    /// Legacy UserDefaults keys, migrated once into the state files.
-    enum Keys {
-        static let phase = "PodLoanWatchController.phase"
-        static let epoch = "PodLoanWatchController.epoch"
-
-        /// Legacy home of the pump state, migrated once into `pumpStateStore`.
-        static let pumpState = "PodLoanWatchController.pumpState"
-
-        static let deliveredAtTakeover = "PodLoanWatchController.deliveredAtTakeover"
-
-        static let grantedTherapySettings = "PodLoanWatchController.grantedTherapySettings"
-
-        /// Never cleared, so a closed loan's epoch is never reused.
-        static let highWaterEpoch = "PodLoanWatchController.highWaterEpoch"
-    }
-
     /// From persisted state alone: resume (rebuilt later in `resumeIfNeeded`), drain, or idle.
     init(loopManager: WatchLoopManager, journal: LoanEventJournal = LoanEventJournal(),
-         defaults: UserDefaults = .standard, stateDirectory: URL? = nil) {
+         stateDirectory: URL? = nil) {
         self.loopManager = loopManager
         self.journal = journal
-        self.defaults = defaults
         self.stateDirectory = stateDirectory
-        Self.retiredKeys.forEach(defaults.removeObject(forKey:))
-        self.dormantGrantStore = Self.migratedStore("PodLoanDormantGrant", in: stateDirectory,
-                                                    legacyKey: DormantKeys.envelope, defaults: defaults)
-        self.pumpStateStore = Self.migratedStore("PumpManagerState", in: stateDirectory,
-                                                 legacyKey: Keys.pumpState, defaults: defaults)
-        var store = stateDirectory.map { PersistedProperty<[String: Any]>(key: "PodLoanWatchState", directory: $0) }
-            ?? PersistedProperty(key: "PodLoanWatchState")
-        self._persisted = Self.loadState(from: &store, legacy: defaults)
+        self.dormantGrantStore = Self.fileStore("PodLoanDormantGrant", in: stateDirectory)
+        self.pumpStateStore = Self.fileStore("PumpManagerState", in: stateDirectory)
+        let store: PersistedProperty<[String: Any]> = Self.fileStore("PodLoanWatchState", in: stateDirectory)
+        self._persisted = store.wrappedValue.flatMap(PodLoanWatchState.init(rawValue:)) ?? PodLoanWatchState()
         self.stateStore = store
 
         // Normalised without the phase observers, then saved once below.

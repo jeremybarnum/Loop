@@ -36,6 +36,12 @@ final class WakeResumeTests: XCTestCase {
         store.wrappedValue = state.rawValue
     }
 
+    /// Writes the saved pump manager state as a previous run left it.
+    private func savePumpState(_ state: [String: Any]) {
+        var store = PersistedProperty<[String: Any]>(key: "PumpManagerState", directory: journalDir)
+        store.wrappedValue = state
+    }
+
     /// The grant's settings payload on disk, including the supplement's basal schedule.
     private func persistGrantedSettings() {
         let basal = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 1.0)])!
@@ -67,7 +73,7 @@ final class WakeResumeTests: XCTestCase {
                                        defaults: defaults, stateDirectory: journalDir)
         return PodLoanWatchController(loopManager: manager,
                                       journal: LoanEventJournal(directory: journalDir),
-                                      defaults: defaults, stateDirectory: journalDir)
+                                      stateDirectory: journalDir)
     }
 
     /// The smallest pump state the watch's registry restores: the Omnipod manager's identifier, a
@@ -85,48 +91,23 @@ final class WakeResumeTests: XCTestCase {
             $0.phase = phase
             $0.epoch = epoch
         }
-        if let savedState { defaults.set(savedState, forKey: PodLoanWatchController.Keys.pumpState) }
+        if let savedState { savePumpState(savedState) }
         let c = await makeController()
         c.resumeIfNeeded()   // what the session does once the hooks are wired
         c.queue.sync { }     // the resume is built on the queue; wait for it
         return c
     }
 
-    /// Keys no build reads any more are removed at launch.
-    func testRetiredKeysAreSweptAtLaunch() async {
-        for key in PodLoanWatchController.retiredKeys { defaults.set(true, forKey: key) }
-        _ = await makeController()
-        for key in PodLoanWatchController.retiredKeys { XCTAssertNil(defaults.object(forKey: key), key) }
-    }
-
-    /// The direct-reading clock is memory, seeded at launch from the sensor; the old key goes.
-    func testDirectReadingClockIsSeededNotReadFromDefaults() async {
-        defaults.set(Date(), forKey: WatchLoopManager.lastDirectG7DefaultsKey)
+    /// The direct-reading clock is memory, seeded at launch from the sensor.
+    func testDirectReadingClockIsSeededAtLaunch() async {
         let c = await makeController()
-        XCTAssertNil(defaults.object(forKey: WatchLoopManager.lastDirectG7DefaultsKey), "the retired key is swept")
-        XCTAssertNil(c.loopManager.lastGlucoseSourceStamps.direct, "a stored stamp no longer feeds the clock")
+        XCTAssertNil(c.loopManager.lastGlucoseSourceStamps.direct)
 
         let reading = Date().addingTimeInterval(-300)
         c.loopManager.seedLastDirectG7At(reading)
         XCTAssertEqual(c.loopManager.lastGlucoseSourceStamps.direct, reading)
         c.loopManager.seedLastDirectG7At(reading.addingTimeInterval(-600))
         XCTAssertEqual(c.loopManager.lastGlucoseSourceStamps.direct, reading, "a seed never moves the clock back")
-    }
-
-    /// The G7 state moves from UserDefaults to its file once; a later launch reads only the file.
-    func testCGMStateMigratesOnceToItsFile() async {
-        let activated = Date().addingTimeInterval(-.hours(24))
-        defaults.set(["sensorID": "DXCMqL", "activatedAt": activated], forKey: WatchLoopManager.cgmStateDefaultsKey)
-        let first = await makeController()
-        XCTAssertEqual(first.loopManager.cgmManagerState.wrappedValue?["sensorID"] as? String, "DXCMqL")
-        XCTAssertEqual(first.loopManager.cgmManagerState.wrappedValue?["activatedAt"] as? Date, activated)
-        XCTAssertNil(defaults.object(forKey: WatchLoopManager.cgmStateDefaultsKey), "the legacy key goes once the file holds it")
-
-        defaults.set(["sensorID": "STALE"], forKey: WatchLoopManager.cgmStateDefaultsKey)
-        let second = await makeController()
-        XCTAssertEqual(second.loopManager.cgmManagerState.wrappedValue?["sensorID"] as? String, "DXCMqL",
-                       "a re-seeded legacy key never overrides the file")
-        XCTAssertNil(defaults.object(forKey: WatchLoopManager.cgmStateDefaultsKey))
     }
 
     /// An interrupted start is reported once: the next relaunch is plain idle, not a second
@@ -140,60 +121,6 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertNil(second.epoch)
         XCTAssertNil(second.pendingInterruptedTakeoverEpoch, "the normalised phase was saved, so nothing is re-reported")
         XCTAssertNil(second.lastIdleNote)
-    }
-
-    /// The pump state moves from UserDefaults to its file once; a later launch reads only the file.
-    func testPumpStateMigratesOnceToItsFile() async {
-        let c = await relaunch(phase: .active, savedState: readablePumpState)
-        XCTAssertNotNil(c.pumpManager, "a loan saved by the old build resumes after the update")
-        XCTAssertEqual((c.pumpStateStore.wrappedValue?["state"] as? [String: Any])?["controllerId"] as? UInt32, 0x1234_5678)
-        XCTAssertNil(defaults.object(forKey: PodLoanWatchController.Keys.pumpState))
-
-        defaults.set(["garbage": 1], forKey: PodLoanWatchController.Keys.pumpState)
-        let again = await makeController()
-        XCTAssertNotNil(again.pumpStateStore.wrappedValue?["managerIdentifier"], "the file wins over a re-seeded legacy key")
-        XCTAssertNil(defaults.object(forKey: PodLoanWatchController.Keys.pumpState))
-    }
-
-    /// A loan saved by the old build migrates field for field, capability flags included.
-    func testControllerStateMigratesOnceFromLegacyKeys() async {
-        let token = UUID()
-        let basal = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 1.0)])!
-        let raw = try! PropertyListSerialization.data(fromPropertyList: LoopSettings().rawValue, format: .binary, options: 0)
-        let supplement = try! PropertyListSerialization.data(fromPropertyList: ["basalRateSchedule": basal.rawValue], format: .binary, options: 0)
-        typealias K = PodLoanWatchController.Keys
-        defaults.set(PodLoanWatchController.Phase.active.rawValue, forKey: K.phase)
-        defaults.set(7, forKey: K.epoch)
-        defaults.set(9, forKey: K.highWaterEpoch)
-        defaults.set(["raw": raw, "supplement": supplement, "interim": true, "overrideRecords": true], forKey: K.grantedTherapySettings)
-        defaults.set(12.5, forKey: K.deliveredAtTakeover)
-        defaults.set(token.uuidString, forKey: PodLoanWatchController.DormantKeys.activeToken)
-        defaults.set(readablePumpState, forKey: K.pumpState)
-        let c = await makeController()
-        c.resumeIfNeeded()
-        c.queue.sync { }
-        XCTAssertEqual(c.phase, .active, "the live loan resumes after the update")
-        XCTAssertEqual(c.epoch, 7)
-        XCTAssertEqual(c.persisted.highWaterEpoch, 9)
-        XCTAssertTrue(c.phoneSupportsInterimHandback, "the capability flags move with the settings")
-        XCTAssertTrue(c.phoneSupportsOverrideRecords)
-        XCTAssertEqual(c.deliveredAtTakeover, 12.5)
-        XCTAssertEqual(c.persisted.seizeToken, token, "a seized loan keeps its reunion token")
-        for key in PodLoanWatchState.legacyKeys { XCTAssertNil(defaults.object(forKey: key), key) }
-
-        defaults.set(PodLoanWatchController.Phase.idle.rawValue, forKey: K.phase)
-        defaults.set(1, forKey: K.highWaterEpoch)
-        let again = await makeController()
-        XCTAssertEqual(again.persisted.phase, .active, "the file wins over a re-seeded legacy key")
-        XCTAssertEqual(again.persisted.highWaterEpoch, 9)
-    }
-
-    /// An idle watch keeps its high-water mark across the migration.
-    func testHighWaterSurvivesMigrationOnAnIdleWatch() async {
-        defaults.set(9, forKey: PodLoanWatchController.Keys.highWaterEpoch)
-        let c = await makeController()
-        XCTAssertEqual(c.phase, .idle)
-        XCTAssertEqual(c.persisted.highWaterEpoch, 9)
     }
 
     /// A revoke recorded before a relaunch still refuses a grant at or below it afterwards; in
@@ -336,26 +263,6 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertTrue(c.isLoanActiveNonBlocking, "the live-loan mirror")
     }
 
-    /// Loop mode, correction model and last cycle move from UserDefaults to one state file, once.
-    func testLoopStateMigratesOnceFromLegacyKeys() async {
-        let completed = Date(timeIntervalSinceNow: -240)
-        defaults.set(true, forKey: WatchLoopManager.closedLoopDefaultsKey)
-        defaults.set(true, forKey: WatchLoopManager.integralRCDefaultsKey)
-        defaults.set(completed, forKey: WatchLoopManager.lastLoopCompletedKey)
-        let first = await makeController()
-        XCTAssertTrue(first.loopManager.closedLoopEnabledNonBlocking)
-        XCTAssertTrue(first.loopManager.isIntegralRetrospectiveCorrectionEnabled)
-        XCTAssertEqual(first.loopManager.lastLoopCompleted, completed)
-        for key in [WatchLoopManager.closedLoopDefaultsKey, WatchLoopManager.integralRCDefaultsKey, WatchLoopManager.lastLoopCompletedKey] {
-            XCTAssertNil(defaults.object(forKey: key), "\(key) is removed once the file holds it")
-        }
-
-        defaults.set(false, forKey: WatchLoopManager.closedLoopDefaultsKey)
-        let second = await makeController()
-        XCTAssertTrue(second.loopManager.closedLoopEnabledNonBlocking, "the file wins over a re-seeded legacy key")
-        XCTAssertNil(defaults.object(forKey: WatchLoopManager.closedLoopDefaultsKey))
-    }
-
     func testClosedLoopDoesNotOutliveItsLoan() async {
         let live = await makeController()
         live.loopManager.setClosedLoopEnabled(true, reason: "test")
@@ -434,7 +341,7 @@ final class WakeResumeTests: XCTestCase {
             $0.phase = .active
             $0.epoch = 7
         }
-        defaults.set(readablePumpState, forKey: PodLoanWatchController.Keys.pumpState)
+        savePumpState(readablePumpState)
         let c = await makeController()
         XCTAssertTrue(c.isLoanActiveNonBlocking, "live from the moment the saved session is found")
         XCTAssertTrue(c.isResumingNonBlocking, "and known to be rebuilding — what the glance shows instead of nothing")
@@ -451,7 +358,7 @@ final class WakeResumeTests: XCTestCase {
             $0.phase = .active
             $0.epoch = 7
         }
-        defaults.set(readablePumpState, forKey: PodLoanWatchController.Keys.pumpState)
+        savePumpState(readablePumpState)
         let c = await makeController()          // no granted settings on disk: the rebuild must fail
         c.resumeIfNeeded()
         c.queue.sync { }

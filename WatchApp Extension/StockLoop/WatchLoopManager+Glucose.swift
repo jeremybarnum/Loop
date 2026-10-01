@@ -236,9 +236,6 @@ extension WatchLoopManager: CGMManagerDelegate {
         log.default("CGM manager requested deletion (ignored on watch)")
     }
 
-    /// Retired: the state now lives in `cgmManagerState`, migrated once at launch.
-    static let cgmStateDefaultsKey = "g7.cgmManagerRawState"
-
     /// Persisted as stock persists a CGM manager, with the configuration it was built from.
     func cgmManagerDidUpdateState(_ manager: CGMManager) {
         guard (manager as AnyObject) === (cgmManager as AnyObject?) else { return }

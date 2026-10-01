@@ -46,7 +46,7 @@ final class FirstContactNoteTests: XCTestCase {
         let manager = WatchLoopManager(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore,
                                        defaults: defaults, stateDirectory: dir)
         return PodLoanWatchController(loopManager: manager, journal: LoanEventJournal(directory: dir),
-                                      defaults: defaults, stateDirectory: dir)
+                                      stateDirectory: dir)
     }
 
     /// The phone's standing copy of a DASH pod, as its export puts it on the wire.

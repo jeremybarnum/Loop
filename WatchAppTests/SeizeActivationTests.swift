@@ -60,7 +60,7 @@ final class SeizeActivationTests: XCTestCase {
                                        defaults: defaults, stateDirectory: journalDir)
         return PodLoanWatchController(loopManager: manager,
                                       journal: LoanEventJournal(directory: journalDir),
-                                      defaults: defaults, stateDirectory: journalDir)
+                                      stateDirectory: journalDir)
     }
 
     /// A dormant credential as the phone builds it (expiresAt == issuedAt). `completeSettings` gets
@@ -136,21 +136,6 @@ final class SeizeActivationTests: XCTestCase {
     }
 
     // MARK: - The entry gate
-
-    /// The stored credential moves from UserDefaults to its own file once, byte for byte.
-    func testTheDormantCredentialMigratesOnceToItsFile() async throws {
-        let token = UUID()
-        let legacy = try LoanProtocol.encoder.encode(fixtureDormant(issuedAt: Date(), token: token))
-        defaults.set(legacy, forKey: PodLoanWatchController.DormantKeys.envelope)
-        let first = await makeController()
-        XCTAssertEqual(first.storedDormantGrant()?.seizeToken, token)
-        XCTAssertEqual(first.dormantGrantStore.wrappedValue, legacy)
-        XCTAssertNil(defaults.object(forKey: PodLoanWatchController.DormantKeys.envelope))
-
-        defaults.set(try LoanProtocol.encoder.encode(fixtureDormant(issuedAt: Date())), forKey: PodLoanWatchController.DormantKeys.envelope)
-        let second = await makeController()
-        XCTAssertEqual(second.storedDormantGrant()?.seizeToken, token, "the file wins over a re-seeded legacy key")
-    }
 
     /// A seized loan's phase and reunion token are saved together: a kill right after the phase
     /// lands can no longer leave an active seized loan the phone cannot retro-acknowledge.

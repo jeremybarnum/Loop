@@ -2,8 +2,7 @@
 //  PhoneLog.swift
 //  Loop
 //
-//  The phone's loan log, beside the watch's SportLog: appended locally at once, mirrored to
-//  iCloud (as g7phone-*.log) at most once a minute.
+//  The phone's loan log, beside the watch's SportLog, appended to a file in Documents.
 //
 
 import Foundation
@@ -12,12 +11,8 @@ import os.log
 enum PhoneLog {
     private static let oslog = OSLog(subsystem: "com.loopkit.Loop", category: "PhoneLog")
 
-    /// Serial: concurrent mirrors can leave the mirrored file missing.
+    /// Serial, so lines land in order.
     private static let queue = DispatchQueue(label: "com.loopkit.Loop.phoneLog", qos: .utility)
-    private static var lastMirror = Date.distantPast
-
-    /// `flush()` overrides it.
-    private static let mirrorInterval: TimeInterval = 60
 
     private static let stamp: DateFormatter = {
         let f = DateFormatter()
@@ -31,22 +26,10 @@ enum PhoneLog {
         let line = "\(stamp.string(from: Date())) [\(category)] \(message)"
         queue.async {
             appendLocally(line)
-            if Date().timeIntervalSince(lastMirror) > mirrorInterval {
-                lastMirror = Date()
-                mirrorToICloud()
-            }
         }
     }
 
-    /// Mirror now, ignoring the throttle.
-    static func flush() {
-        queue.async {
-            lastMirror = Date()
-            mirrorToICloud()
-        }
-    }
-
-    /// Tests point the log at their own folder, which also skips the iCloud mirror.
+    /// Tests point the log at their own folder.
     static var directoryOverride: URL?
 
     private static var localURL: URL? {
@@ -79,22 +62,5 @@ enum PhoneLog {
         // Drop the partial first line so the file always starts on a record boundary.
         if let nl = slice.firstIndex(of: 0x0a) { slice = slice[slice.index(after: nl)...] }
         try? Data(slice).write(to: url)
-    }
-
-    private static func mirrorToICloud() {
-        guard directoryOverride == nil else { return }
-        let fm = FileManager.default
-        guard let local = localURL, fm.fileExists(atPath: local.path) else { return }
-        guard let container = fm.url(forUbiquityContainerIdentifier: nil) else { return }
-        let dir = container.appendingPathComponent("Documents", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-
-        // Copy then replace, so the container is never without a log.
-        let cloudLatest = dir.appendingPathComponent("g7phone-latest.log")
-        let tmp = dir.appendingPathComponent(".g7phone-latest.tmp")
-        try? fm.removeItem(at: tmp)
-        if (try? fm.copyItem(at: local, to: tmp)) != nil {
-            _ = try? fm.replaceItemAt(cloudLatest, withItemAt: tmp)
-        }
     }
 }

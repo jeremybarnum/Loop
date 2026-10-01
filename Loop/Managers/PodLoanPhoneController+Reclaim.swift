@@ -60,19 +60,8 @@ extension PodLoanPhoneController {
         }
     }
 
-    /// UserDefaults keys; the loan's state lives in `PodLoanPhoneState`.
-    enum Keys {
-        /// Written by earlier builds and read by nothing now; removed at launch.
-        static let retired = ["deliveredAuthoritative", "residualHistoryPurged.2026-08-13", "expectedUnits",
-                              "watchAuditRan", "lastHandledForeignSessionAt", "rebidAt",
-                              "firstContactSinceRebid", "inferredLoanYieldDisabled",
-                              "residualHistory", "windowResidualWorst"].map { "PodLoanPhoneController." + $0 }
-    }
-
     enum NotificationID {
         static let t1 = "podloan.t1"
-        /// Retired. Kept only so an upgrade from a build that armed them can cancel them.
-        static let duration = "podloan.6h"
         static let paused = "podloan.paused1h"
 
         static let openLoop = "podloan.openloop"
@@ -217,7 +206,6 @@ extension PodLoanPhoneController {
         }
         cancelReclaimLadder()
         cancelNotification(id: NotificationID.paused)
-        cancelNotification(id: NotificationID.duration)
 
         // Salvage everything uncommitted, as a final hand-back stamped now.
         let events = staged.values

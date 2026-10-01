@@ -116,7 +116,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
         loopManager = manager
         return PodLoanWatchController(loopManager: manager,
                                       journal: LoanEventJournal(directory: journalDir),
-                                      defaults: defaults, stateDirectory: journalDir)
+                                      stateDirectory: journalDir)
     }
 
     /// Waits for armings; `drain` alone races the controller's queue on a loaded machine.

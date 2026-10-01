@@ -135,7 +135,7 @@ final class HandbackDrainStateTests: XCTestCase {
                                        defaults: defaults, stateDirectory: journalDir)
         return PodLoanWatchController(loopManager: manager,
                                       journal: LoanEventJournal(directory: journalDir),
-                                      defaults: defaults, stateDirectory: journalDir)
+                                      stateDirectory: journalDir)
     }
 
     /// A drain that gives up must leave nothing behind for the next session to inherit.

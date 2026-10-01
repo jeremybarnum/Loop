@@ -133,8 +133,7 @@ final class PodLoanPhoneController {
         var latestGlucoseDate: () -> Date? = { nil }
         var now: () -> Date = { Date() }
 
-        /// Storage seams for tests. A nil directory keeps each file in its app location.
-        var defaults: UserDefaults = .standard
+        /// Storage seam for tests. A nil directory keeps each file in its app location.
         var stateDirectory: URL? = nil
 
         /// The scheduled reminders' notification centre; tests replace both so nothing reaches the app.
@@ -250,7 +249,7 @@ final class PodLoanPhoneController {
         self.deps = dependencies
         var store = dependencies.stateDirectory.map { PersistedProperty<[String: Any]>(key: Self.stateFileKey, directory: $0) }
             ?? PersistedProperty(key: Self.stateFileKey)
-        self._persisted = Self.loadState(from: &store, legacy: dependencies.defaults)
+        self._persisted = store.wrappedValue.flatMap(PodLoanPhoneState.init(rawValue:)) ?? PodLoanPhoneState()
         self.stateStore = store
         loadStaged()
 
@@ -261,7 +260,6 @@ final class PodLoanPhoneController {
             stateStore.wrappedValue = _persisted.rawValue
         }
         installPodLinkCensus()
-        Keys.retired.forEach(dependencies.defaults.removeObject(forKey:))
 
         // Re-arm an unruled force-reclaim audit.
         if let saved = _persisted.pendingForceAudit {

@@ -154,7 +154,7 @@ extension WatchDataManager {
     }
 
     /// The watch's log files. Copied at once (the system deletes the file on return) to Documents,
-    /// for AirDrop from the phone, and mirrored to iCloud.
+    /// for AirDrop from the phone.
     nonisolated func session(_ session: WCSession, didReceive file: WCSessionFile) {
         guard FeatureFlags.sportModeEnabled else { return }
         lockedLastWatchContact.value = Date()   // the log pulse is the loan's heartbeat
@@ -176,8 +176,6 @@ extension WatchDataManager {
                 try? FileManager.default.removeItem(at: old)
             }
         }
-        // Mirror from the durable copy; file.fileURL is gone by then.
-        Self.mirrorLogToICloud(from: stamped)
         log.default("Watch log received: %{public}@", stamped.lastPathComponent)
     }
 
@@ -200,33 +198,6 @@ extension WatchDataManager {
         }
         t.resume()
         Self.linkCensusTimer = t
-    }
-
-    nonisolated private static let mirrorQueue = DispatchQueue(label: "com.loopkit.Loop.logMirror", qos: .utility)
-
-    nonisolated private static func mirrorLogToICloud(from localStamped: URL) {
-        mirrorQueue.async {
-            let fm = FileManager.default
-            guard let container = fm.url(forUbiquityContainerIdentifier: nil) else { return }   // iCloud off / not signed in
-            let dir = container.appendingPathComponent("Documents", isDirectory: true)
-            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-            try? fm.copyItem(at: localStamped, to: dir.appendingPathComponent(localStamped.lastPathComponent))
-            let cloudLatest = dir.appendingPathComponent("g7watch-latest.log")
-            // Atomic replace, so latest.log is never missing.
-            let tmp = dir.appendingPathComponent(".g7watch-latest.tmp")
-            try? fm.removeItem(at: tmp)
-            if (try? fm.copyItem(at: localStamped, to: tmp)) != nil {
-                _ = try? fm.replaceItemAt(cloudLatest, withItemAt: tmp)
-            }
-            if let entries = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
-                let stampedLogs = entries
-                    .filter { $0.pathExtension == "log" && $0.lastPathComponent.hasPrefix("g7watch-") && $0.lastPathComponent != "g7watch-latest.log" }
-                    .sorted { $0.lastPathComponent > $1.lastPathComponent }
-                for old in stampedLogs.dropFirst(20) {
-                    try? fm.removeItem(at: old)
-                }
-            }
-        }
     }
 
     // MARK: - Watch state transitions

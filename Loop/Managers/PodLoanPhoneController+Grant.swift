@@ -162,7 +162,6 @@ extension PodLoanPhoneController {
             if control.isControlReady {
                 self.handbackDiag(releaseEpoch, "GRANT +3s — ** STILL CONNECTED after release — the watch's takeover will be refused (single-central pod) **")
             }
-            PhoneLog.flush()
         }
 
         // New epoch, empty dedup state, this loan's anchors: one save, before the grant goes out.

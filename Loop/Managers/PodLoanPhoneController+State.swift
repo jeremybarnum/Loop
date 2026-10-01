@@ -123,7 +123,7 @@ struct PodLoanPhoneState: RawRepresentable {
         return raw
     }
 
-    /// The dictionary shapes the legacy keys used, kept for the file.
+    /// Dictionary shapes in the state file.
     static func forceAudit(from d: [String: Any]) -> ForceAudit? {
         guard let e = d["epoch"] as? Int, let atStart = d["atStart"] as? Double,
               let expected = d["expected"] as? Double, let minutes = d["loanMinutes"] as? Double else { return nil }
@@ -135,57 +135,10 @@ struct PodLoanPhoneState: RawRepresentable {
         return GapBooking(epoch: e, units: units, bookedAt: (d["bookedAt"] as? TimeInterval).map(Date.init(timeIntervalSince1970:)),
                           deleteFailedAfterRecords: d["deleteFailedAfterRecords"] as? Bool ?? false)
     }
-
-    /// Every key the state's fields came from, removed once the file holds them.
-    static let legacyKeys = ["holdRenewedAt", "holdLapseNoticedAt", "watchSilenceWarningsIssued",
-                             "watchSupportsSeize", "dormantSeizeToken",
-                             "loanStartedAt", "deliveredAtGrant", "deliveredAtTakeover", "auditBase",
-                             "pendingForceAudit", "gapBooking",
-                             "state", "epoch", "cursor", "committedIDs", "pendingRevoke", "yieldingToInferredLoan"]
-        .map { "PodLoanPhoneController." + $0 }
-
-    /// Field for field what the legacy keys held.
-    init(legacy defaults: UserDefaults) {
-        let key = { "PodLoanPhoneController." + $0 }
-        phase = defaults.string(forKey: key("state")).flatMap(PodLoanPhoneController.State.init(rawValue:)) ?? .owner
-        epoch = defaults.object(forKey: key("epoch")) as? Int ?? 0
-        committedCursor = defaults.object(forKey: key("cursor")) as? Int ?? 0
-        committedIDs = Set((defaults.array(forKey: key("committedIDs")) as? [String] ?? []).compactMap(UUID.init(uuidString:)))
-        pendingRevoke = defaults.bool(forKey: key("pendingRevoke"))
-        yieldingToInferredLoan = defaults.bool(forKey: key("yieldingToInferredLoan"))
-        holdRenewedAt = defaults.object(forKey: key("holdRenewedAt")) as? Date
-        holdLapseNoticedAt = defaults.object(forKey: key("holdLapseNoticedAt")) as? Date
-        watchSilenceWarningsIssued = defaults.integer(forKey: key("watchSilenceWarningsIssued"))
-        watchSupportsSeize = defaults.bool(forKey: key("watchSupportsSeize"))
-        seizeToken = defaults.string(forKey: key("dormantSeizeToken")).flatMap(UUID.init(uuidString:))
-        audit.loanStartedAt = defaults.object(forKey: key("loanStartedAt")) as? Date
-        audit.deliveredAtGrant = defaults.object(forKey: key("deliveredAtGrant")) as? Double
-        audit.deliveredAtTakeover = defaults.object(forKey: key("deliveredAtTakeover")) as? Double
-        if let d = defaults.dictionary(forKey: key("auditBase")),
-           let units = d["units"] as? Double, let asOf = d["asOf"] as? Date {
-            audit.base = .init(units: units, asOf: asOf)
-            audit.baseEpoch = d["epoch"] as? Int
-            audit.checkpoints = d["count"] as? Int ?? 0
-        }
-        pendingForceAudit = defaults.dictionary(forKey: key("pendingForceAudit")).flatMap(Self.forceAudit(from:))
-        gapBooking = defaults.dictionary(forKey: key("gapBooking")).flatMap(Self.gapBooking(from:))
-    }
 }
 
 extension PodLoanPhoneController {
     static let stateFileKey = "PodLoanPhoneState"
-
-    /// The file if present, else the legacy keys: written to the file first, then removed.
-    static func loadState(from store: inout PersistedProperty<[String: Any]>, legacy defaults: UserDefaults) -> PodLoanPhoneState {
-        if let saved = store.wrappedValue.flatMap(PodLoanPhoneState.init(rawValue:)) {
-            PodLoanPhoneState.legacyKeys.forEach(defaults.removeObject(forKey:))
-            return saved
-        }
-        let state = PodLoanPhoneState(legacy: defaults)
-        store.wrappedValue = state.rawValue
-        if store.wrappedValue != nil { PodLoanPhoneState.legacyKeys.forEach(defaults.removeObject(forKey:)) }
-        return state
-    }
 
     /// The persisted state, readable from any queue.
     var persisted: PodLoanPhoneState {

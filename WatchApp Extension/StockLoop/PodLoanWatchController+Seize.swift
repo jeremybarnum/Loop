@@ -236,14 +236,6 @@ extension PodLoanWatchController {
         startNote = (at, String(format: NSLocalizedString("%.2f U the watch had no record of — counted as insulin on board", comment: "Glance: unexplained insulin booked at takeover (1: units)"), unexplained))
     }
 
-    enum DormantKeys {
-        /// Legacy home of the stored credential, migrated once into `dormantGrantStore`.
-        static let envelope = "PodLoanWatchController.dormantGrant"
-
-        /// Legacy home of the reunion token, migrated once into `PodLoanWatchState`.
-        static let activeToken = "PodLoanWatchController.activeSeizeToken"
-    }
-
     /// For log tags, from activation until the loan closes.
     var seizeMarkerActive: Bool {
         pendingSeizeToken != nil || persisted.seizeToken != nil
@@ -251,10 +243,6 @@ extension PodLoanWatchController {
 
     /// Bounds the handshake, not the credential.
     static let seizeActivationLease: TimeInterval = 5 * 60
-
-    /// Written by earlier builds and read by nothing now; removed at launch.
-    static let retiredKeys = ["seizeAutoHandbackDisabled", "dormantGrantIssuedAt", "dormantGrantToken"]
-        .map { "PodLoanWatchController." + $0 }
 
     /// The phone's reconciliation band.
     static let unexplainedInsulinBand = 0.20

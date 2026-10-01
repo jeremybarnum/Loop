@@ -60,7 +60,7 @@ final class PodLoanTimerSeamTests: XCTestCase {
                                        defaults: defaults, stateDirectory: journalDir)
         return PodLoanWatchController(loopManager: manager,
                                       journal: LoanEventJournal(directory: journalDir),
-                                      defaults: defaults, stateDirectory: journalDir)
+                                      stateDirectory: journalDir)
     }
 
     /// The 60 s request timeout crosses the seam.

@@ -233,11 +233,6 @@ final class WatchLoopManager {
         return _closedLoopMirror
     }
 
-    /// Legacy keys, migrated into `WatchLoopState` once at launch.
-    static let closedLoopDefaultsKey = "WatchLoopManager.closedLoopEnabled"
-    static let integralRCDefaultsKey = "WatchLoopManager.integralRetrospectiveCorrection"
-    static let lastLoopCompletedKey = "WatchLoopManager.lastLoopCompleted"
-
     /// Saves one change to the persisted loop state; the whole value is written at once.
     func updateLoopState(_ change: (inout WatchLoopState) -> Void) {
         loopStateLock.lock()
@@ -430,13 +425,11 @@ final class WatchLoopManager {
          defaults: UserDefaults = .standard, stateDirectory: URL? = nil) {
         self.defaults = defaults
         self.stateDirectory = stateDirectory
-        var cgmState = stateDirectory.map { PersistedProperty<CGMManager.RawStateValue>(key: "CGMManagerState", directory: $0) }
+        self.cgmManagerState = stateDirectory.map { PersistedProperty<CGMManager.RawStateValue>(key: "CGMManagerState", directory: $0) }
             ?? PersistedProperty(key: "CGMManagerState")
-        Self.migrateLegacyCGMState(defaults: defaults, into: &cgmState)
-        self.cgmManagerState = cgmState
-        var stateStore = stateDirectory.map { PersistedProperty<[String: Any]>(key: "WatchLoopState", directory: $0) }
+        let stateStore = stateDirectory.map { PersistedProperty<[String: Any]>(key: "WatchLoopState", directory: $0) }
             ?? PersistedProperty(key: "WatchLoopState")
-        let loopState = WatchLoopState.load(from: &stateStore, legacy: defaults)
+        let loopState = stateStore.wrappedValue.flatMap(WatchLoopState.init(rawValue:)) ?? WatchLoopState()
         self.loopStateStore = stateStore
         self.loopState = loopState
         self.doseStore = doseStore
@@ -449,7 +442,6 @@ final class WatchLoopManager {
         self._closedLoopEnabled = loopState.closedLoopEnabled
         self._closedLoopMirror = loopState.closedLoopEnabled
         self.integralRetrospectiveCorrectionEnabled = loopState.integralRetrospectiveCorrectionEnabled
-        defaults.removeObject(forKey: Self.lastDirectG7DefaultsKey)
 
         // The store asks us for the scheduled basal it nets doses against; see the
         // `DoseStoreDelegate` conformance.
@@ -479,16 +471,6 @@ final class WatchLoopManager {
     /// The configuration `cgmManager` was built from, saved beside its state.
     var cgmBuiltFrom: [String: Any]?
     static let builtFromKey = "builtFromConfiguration"
-
-    /// Retired: the clock is memory, seeded at launch from the sensor's own last reading.
-    static let lastDirectG7DefaultsKey = "SportMode.lastDirectG7At"
-
-    /// One-time move of the G7 state out of UserDefaults; the key goes only once the file holds it.
-    static func migrateLegacyCGMState(defaults: UserDefaults, into store: inout PersistedProperty<CGMManager.RawStateValue>) {
-        guard let legacy = defaults.dictionary(forKey: cgmStateDefaultsKey) else { return }
-        if store.wrappedValue == nil { store.wrappedValue = legacy }
-        if store.wrappedValue != nil { defaults.removeObject(forKey: cgmStateDefaultsKey) }
-    }
 
     /// Launch seed, so a relaunch does not reset the stranded-sensor clock; never moves it back.
     func seedLastDirectG7At(_ date: Date?) {
@@ -652,21 +634,5 @@ struct WatchLoopState: RawRepresentable {
                                   "integralRetrospectiveCorrectionEnabled": integralRetrospectiveCorrectionEnabled]
         raw["lastLoopCompleted"] = lastLoopCompleted
         return raw
-    }
-
-    /// The file if present; otherwise the legacy keys, written to the file first, then removed.
-    static func load(from store: inout PersistedProperty<[String: Any]>, legacy defaults: UserDefaults) -> WatchLoopState {
-        let keys = [WatchLoopManager.closedLoopDefaultsKey, WatchLoopManager.integralRCDefaultsKey, WatchLoopManager.lastLoopCompletedKey]
-        if let saved = store.wrappedValue.flatMap(WatchLoopState.init(rawValue:)) {
-            keys.forEach(defaults.removeObject(forKey:))
-            return saved
-        }
-        var state = WatchLoopState()
-        state.closedLoopEnabled = defaults.bool(forKey: WatchLoopManager.closedLoopDefaultsKey)
-        state.integralRetrospectiveCorrectionEnabled = defaults.bool(forKey: WatchLoopManager.integralRCDefaultsKey)
-        state.lastLoopCompleted = defaults.object(forKey: WatchLoopManager.lastLoopCompletedKey) as? Date
-        store.wrappedValue = state.rawValue
-        if store.wrappedValue != nil { keys.forEach(defaults.removeObject(forKey:)) }
-        return state
     }
 }

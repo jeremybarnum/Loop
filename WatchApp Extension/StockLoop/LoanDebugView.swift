@@ -145,12 +145,6 @@ struct LoanDebugView: View {
 
                 NavigationLink("Logs") { LogView() }
                     .font(.caption)
-
-                // GLANCE_DEMO, not DEBUG: the demo numbers are invented.
-                #if GLANCE_DEMO
-                NavigationLink("Glance demo") { GlanceDemoView() }
-                    .font(.caption)
-                #endif
             }
         }
         }

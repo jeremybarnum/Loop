@@ -63,7 +63,7 @@ struct PodLoanWatchState: RawRepresentable {
         return raw
     }
 
-    /// The dictionary shape the legacy key used, kept for the file.
+    /// The settings' dictionary shape in the state file.
     static func grantedSettings(from d: [String: Any]) -> GrantedSettings? {
         guard let raw = d["raw"] as? Data else { return nil }
         return GrantedSettings(therapySettingsRaw: raw, supplementRaw: d["supplement"] as? Data,
@@ -72,43 +72,12 @@ struct PodLoanWatchState: RawRepresentable {
                                glucoseAlertSettings: d["glucoseAlerts"] as? Data)
     }
 
-    typealias Keys = PodLoanWatchController.Keys
-    static let legacyKeys = [Keys.phase, Keys.epoch, Keys.highWaterEpoch, Keys.grantedTherapySettings,
-                             Keys.deliveredAtTakeover, PodLoanWatchController.DormantKeys.activeToken]
-
-    /// Field for field what the legacy keys held.
-    init(legacy defaults: UserDefaults) {
-        phase = defaults.string(forKey: Keys.phase).flatMap(PodLoanWatchController.Phase.init(rawValue:)) ?? .idle
-        epoch = defaults.object(forKey: Keys.epoch) as? Int
-        highWaterEpoch = defaults.integer(forKey: Keys.highWaterEpoch)
-        grantedSettings = defaults.dictionary(forKey: Keys.grantedTherapySettings).flatMap(Self.grantedSettings(from:))
-        deliveredAtTakeover = defaults.object(forKey: Keys.deliveredAtTakeover) as? Double
-        seizeToken = defaults.string(forKey: PodLoanWatchController.DormantKeys.activeToken).flatMap(UUID.init(uuidString:))
-    }
 }
 
 extension PodLoanWatchController {
-    /// A file-backed value, seeded once from its legacy key; the key goes once the file holds it.
-    static func migratedStore<V>(_ key: String, in directory: URL?, legacyKey: String,
-                                 defaults: UserDefaults) -> PersistedProperty<V> {
-        var store = directory.map { PersistedProperty<V>(key: key, directory: $0) } ?? PersistedProperty(key: key)
-        if let legacy = defaults.object(forKey: legacyKey) as? V {
-            if store.wrappedValue == nil { store.wrappedValue = legacy }
-            if store.wrappedValue != nil { defaults.removeObject(forKey: legacyKey) }
-        }
-        return store
-    }
-
-    /// The file if present, else the legacy keys: written to the file first, then removed.
-    static func loadState(from store: inout PersistedProperty<[String: Any]>, legacy defaults: UserDefaults) -> PodLoanWatchState {
-        if let saved = store.wrappedValue.flatMap(PodLoanWatchState.init(rawValue:)) {
-            PodLoanWatchState.legacyKeys.forEach(defaults.removeObject(forKey:))
-            return saved
-        }
-        let state = PodLoanWatchState(legacy: defaults)
-        store.wrappedValue = state.rawValue
-        if store.wrappedValue != nil { PodLoanWatchState.legacyKeys.forEach(defaults.removeObject(forKey:)) }
-        return state
+    /// A file-backed value in `directory`, or in the app's default location.
+    static func fileStore<V>(_ key: String, in directory: URL?) -> PersistedProperty<V> {
+        directory.map { PersistedProperty<V>(key: key, directory: $0) } ?? PersistedProperty(key: key)
     }
 
     /// The persisted state, readable from any queue.
