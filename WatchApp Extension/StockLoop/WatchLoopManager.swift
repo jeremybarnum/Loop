@@ -406,6 +406,9 @@ final class WatchLoopManager {
     /// Where state files live; nil in the app (Documents).
     let stateDirectory: URL?
 
+    /// The G7 manager's `rawState`, in a file as stock keeps a CGM manager, replaced whole.
+    var cgmManagerState: PersistedProperty<CGMManager.RawStateValue>
+
     /// Restores the last cycle, loop mode and correction model, and subscribes to phone context
     /// (except in the simulator, which has its own ingest).
     init(doseStore: DoseStore, glucoseStore: GlucoseStore, carbStore: CarbStore,
@@ -414,6 +417,10 @@ final class WatchLoopManager {
          defaults: UserDefaults = .standard, stateDirectory: URL? = nil) {
         self.defaults = defaults
         self.stateDirectory = stateDirectory
+        var cgmState = stateDirectory.map { PersistedProperty<CGMManager.RawStateValue>(key: "CGMManagerState", directory: $0) }
+            ?? PersistedProperty(key: "CGMManagerState")
+        Self.migrateLegacyCGMState(defaults: defaults, into: &cgmState)
+        self.cgmManagerState = cgmState
         self.doseStore = doseStore
         self.glucoseStore = glucoseStore
         self.carbStore = carbStore
@@ -523,6 +530,13 @@ final class WatchLoopManager {
 
     /// Retired: the clock is memory, seeded at launch from the sensor's own last reading.
     static let lastDirectG7DefaultsKey = "SportMode.lastDirectG7At"
+
+    /// One-time move of the G7 state out of UserDefaults; the key goes only once the file holds it.
+    static func migrateLegacyCGMState(defaults: UserDefaults, into store: inout PersistedProperty<CGMManager.RawStateValue>) {
+        guard let legacy = defaults.dictionary(forKey: cgmStateDefaultsKey) else { return }
+        if store.wrappedValue == nil { store.wrappedValue = legacy }
+        if store.wrappedValue != nil { defaults.removeObject(forKey: cgmStateDefaultsKey) }
+    }
 
     /// Launch seed, so a relaunch does not reset the stranded-sensor clock; never moves it back.
     func seedLastDirectG7At(_ date: Date?) {

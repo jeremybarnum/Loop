@@ -37,16 +37,16 @@ enum StockLoopStack {
 
         // A restored identity past its life is dropped here, or the watch would auth-fail against it.
         let cgmManager: G7CGMManager
-        if let raw = UserDefaults.standard.dictionary(forKey: WatchLoopManager.cgmStateDefaultsKey),
+        if let raw = loopManager.cgmManagerState.wrappedValue,
            let restored = G7CGMManager(rawState: raw),
            !WatchLoopManager.persistedSensorIsPastLife(restored.sensorActivatedAt, reportedEnd: WatchLoopManager.reportedEnd(of: restored)) {
             cgmManager = restored
             SportLog.event("cgm", "G7 state RESTORED — sensor \(restored.sensorName ?? "none"), activated \(restored.sensorActivatedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "unknown")")
         } else {
             cgmManager = G7CGMManager()
-            if let raw = UserDefaults.standard.dictionary(forKey: WatchLoopManager.cgmStateDefaultsKey),
+            if let raw = loopManager.cgmManagerState.wrappedValue,
                let stale = G7CGMManager(rawState: raw) {
-                UserDefaults.standard.removeObject(forKey: WatchLoopManager.cgmStateDefaultsKey)
+                loopManager.cgmManagerState.wrappedValue = nil
                 SportLog.event("cgm", "G7 state DISCARDED at launch — sensor \(stale.sensorName ?? "none") is past its life; acquisition will run instead of auth-failing against a dead identity")
             } else {
                 SportLog.event("cgm", "G7 state fresh — no persisted sensor; acquisition will run (new install or pre-#101 build)")

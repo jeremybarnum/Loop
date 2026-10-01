@@ -100,6 +100,22 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertEqual(c.loopManager.lastGlucoseSourceStamps.direct, reading, "a seed never moves the clock back")
     }
 
+    /// The G7 state moves from UserDefaults to its file once; a later launch reads only the file.
+    func testCGMStateMigratesOnceToItsFile() async {
+        let activated = Date().addingTimeInterval(-.hours(24))
+        defaults.set(["sensorID": "DXCMqL", "activatedAt": activated], forKey: WatchLoopManager.cgmStateDefaultsKey)
+        let first = await makeController()
+        XCTAssertEqual(first.loopManager.cgmManagerState.wrappedValue?["sensorID"] as? String, "DXCMqL")
+        XCTAssertEqual(first.loopManager.cgmManagerState.wrappedValue?["activatedAt"] as? Date, activated)
+        XCTAssertNil(defaults.object(forKey: WatchLoopManager.cgmStateDefaultsKey), "the legacy key goes once the file holds it")
+
+        defaults.set(["sensorID": "STALE"], forKey: WatchLoopManager.cgmStateDefaultsKey)
+        let second = await makeController()
+        XCTAssertEqual(second.loopManager.cgmManagerState.wrappedValue?["sensorID"] as? String, "DXCMqL",
+                       "a re-seeded legacy key never overrides the file")
+        XCTAssertNil(defaults.object(forKey: WatchLoopManager.cgmStateDefaultsKey))
+    }
+
     func testActiveLoanWithSavedPodStateResumes() async {
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         XCTAssertEqual(c.phase, .active, "an active loan with saved pod state resumes — not drained")
