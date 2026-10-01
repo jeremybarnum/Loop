@@ -88,7 +88,7 @@ extension ExtensionDelegate {
         // Lifecycle breadcrumb.
         SportLog.event("lifecycle", "willResignActive [lifecycle-crumb]")
         NotificationCenter.default.post(name: Self.willResignActiveNotification, object: self)
-        if stockLoopSession?.stack.cgmManager.watchIsSearching == true {
+        if (stockLoopSession?.stack.loopManager.cgmManager as? G7CGMManager)?.watchIsSearching == true {
             SensorSearchAlert.arm()
         }
     }

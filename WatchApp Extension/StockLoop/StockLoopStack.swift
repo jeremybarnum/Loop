@@ -4,8 +4,8 @@
 //
 //  Copyright © 2026 LoopKit Authors. All rights reserved.
 //
-//  Assembles the watch's stores, override history, G7 manager and WatchLoopManager. The pump
-//  appears only with a loan.
+//  Assembles the watch's stores, override history and WatchLoopManager, and restores the CGM
+//  manager the phone's configuration last built. The pump appears only with a loan.
 //
 
 import Foundation
@@ -13,12 +13,11 @@ import HealthKit
 import LoopKit
 import LoopAlgorithm
 import LoopCore
-import G7SensorKit
 
 enum StockLoopStack {
-    /// Both outlive any loan.
+    /// Outlives any loan. The CGM manager lives on the loop manager, which rebuilds it when the
+    /// phone's configuration changes.
     struct Stack {
-        let cgmManager: G7CGMManager
         let loopManager: WatchLoopManager
     }
 
@@ -35,31 +34,16 @@ enum StockLoopStack {
             overrideHistory: stores.overrideHistory
         )
 
-        // A restored identity past its life is dropped here, or the watch would auth-fail against it.
-        let cgmManager: G7CGMManager
-        if let raw = loopManager.cgmManagerState.wrappedValue,
-           let restored = G7CGMManager(rawState: raw),
-           !WatchLoopManager.persistedSensorIsPastLife(restored.sensorActivatedAt, reportedEnd: WatchLoopManager.reportedEnd(of: restored)) {
-            cgmManager = restored
-            SportLog.event("cgm", "G7 state RESTORED — sensor \(restored.sensorName ?? "none"), activated \(restored.sensorActivatedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "unknown")")
+        // The phone's next context brings a configuration if nothing was saved.
+        if let saved = loopManager.cgmManagerState.wrappedValue, let restored = watchCGMManager(rawValue: saved) {
+            loopManager.installCGMManager(restored, builtFrom: saved[WatchLoopManager.builtFromKey] as? [String: Any])
+            SportLog.event("cgm", "CGM manager RESTORED (\(restored.pluginIdentifier))")
         } else {
-            cgmManager = G7CGMManager()
-            if let raw = loopManager.cgmManagerState.wrappedValue,
-               let stale = G7CGMManager(rawState: raw) {
-                loopManager.cgmManagerState.wrappedValue = nil
-                SportLog.event("cgm", "G7 state DISCARDED at launch — sensor \(stale.sensorName ?? "none") is past its life; acquisition will run instead of auth-failing against a dead identity")
-            } else {
-                SportLog.event("cgm", "G7 state fresh — no persisted sensor; acquisition will run (new install or pre-#101 build)")
-            }
+            SportLog.event("cgm", "no saved CGM manager — the phone's next context brings its configuration")
         }
         SportLog.event("session", "stack: cgm wired")
-        cgmManager.delegateQueue = loopManager.deviceQueue
-        cgmManager.cgmManagerDelegate = loopManager
 
-        loopManager.g7Manager = cgmManager
-        loopManager.seedLastDirectG7At(cgmManager.latestReadingTimestamp)
-
-        return Stack(cgmManager: cgmManager, loopManager: loopManager)
+        return Stack(loopManager: loopManager)
     }
 
     /// The watch's own stores. The directory name carries the LoopKit model version, since this

@@ -11,6 +11,12 @@ import HealthKit
 import LoopKit
 
 extension LoanGrant {
+    /// The pump's configuration, or nil if it does not decode.
+    public var sharedPumpConfiguration: SharedDeviceConfiguration? {
+        let plist = try? PropertyListSerialization.propertyList(from: pumpConfiguration, options: [], format: nil)
+        return (plist as? SharedDeviceConfiguration.RawValue).flatMap(SharedDeviceConfiguration.init(rawValue:))
+    }
+
     public func seedDoseEntries() -> [DoseEntry] {
         return doseHistory.enumerated().compactMap { index, record in
 
@@ -95,14 +101,15 @@ public struct DormantGrant: Codable, Equatable {
     }
 }
 
-/// The pod, the therapy settings, and enough history for the first cycle.
+/// The pump's configuration, the therapy settings, and enough history for the first cycle.
 public struct LoanGrant: Codable, Equatable {
     /// Increases with every grant; both sides refuse any other epoch.
     public let epoch: Int
 
     public let expiresAt: Date
 
-    public let pumpManagerRawState: Data
+    /// The pump's `SharedDeviceConfiguration`, as a binary property list.
+    public let pumpConfiguration: Data
 
     public let podAddress: UInt32
 
@@ -135,7 +142,7 @@ public struct LoanGrant: Codable, Equatable {
     /// Schedules and insulin model, which the settings blob drops.
     public let therapySettingsSupplementRaw: Data?
 
-    public init(epoch: Int, expiresAt: Date, pumpManagerRawState: Data, podAddress: UInt32,
+    public init(epoch: Int, expiresAt: Date, pumpConfiguration: Data, podAddress: UInt32,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
                 doseHistory: [LoanDoseRecord],
                 supportsInterimHandback: Bool? = nil,
@@ -150,7 +157,7 @@ public struct LoanGrant: Codable, Equatable {
                 lastLoopCompleted: Date? = nil) {
         self.epoch = epoch
         self.expiresAt = expiresAt
-        self.pumpManagerRawState = pumpManagerRawState
+        self.pumpConfiguration = pumpConfiguration
         self.podAddress = podAddress
         self.therapySettingsRaw = therapySettingsRaw
         self.settingsTimeZoneID = settingsTimeZoneID

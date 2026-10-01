@@ -218,7 +218,7 @@ extension WatchDataManager {
             // True for a pump that cannot be lent, which never settles.
             isConnectionReady: { [weak self] in
 
-                (self?.deviceManager.pumpManager as? PumpConnectionLendable)?.isConnectionReady ?? true
+                (self?.deviceManager.pumpManager as? ExclusiveDeviceControl)?.isControlReady ?? true
             },
             // End of a loan: cancel the temp the watch left running.
             cancelTempBasalAfterPodReturn: { [weak self] completion in

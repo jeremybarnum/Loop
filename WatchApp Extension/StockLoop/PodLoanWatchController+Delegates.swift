@@ -17,7 +17,7 @@ import os.log
 extension PodLoanWatchController: PumpManagerDelegate {
     /// Saved on every update; its presence tells the next launch the loan was live.
     func pumpManagerDidUpdateState(_ pumpManager: PumpManager) {
-        pumpStateStore.wrappedValue = pumpManager.rawState
+        pumpStateStore.wrappedValue = pumpManager.watchRawValue
     }
 
     /// Book, complete, then journal. On a failed write nothing is acked or journaled; the pod
@@ -143,12 +143,18 @@ extension PodLoanWatchController: DeviceManagerDelegate {
     func recordRetractedAlert(_ alert: LoopKit.Alert, at date: Date) {
         loopManager.recordRetractedAlert(alert, at: date)
     }
+
+    /// The pump's link is up and it has answered; arrives on the controller's queue.
+    func deviceManagerControlDidBecomeReady(_ manager: DeviceManager) {
+        guard (manager as AnyObject) === (pumpManager as AnyObject?) else { return }
+        pumpControlDidBecomeReady()
+    }
 }
 
 extension LoanGrant {
     /// A dormant grant is issued expired; a seize re-stamps the epoch and lease.
     func withEpoch(_ newEpoch: Int, leaseUntil: Date) -> LoanGrant {
-        LoanGrant(epoch: newEpoch, expiresAt: leaseUntil, pumpManagerRawState: pumpManagerRawState,
+        LoanGrant(epoch: newEpoch, expiresAt: leaseUntil, pumpConfiguration: pumpConfiguration,
                   podAddress: podAddress, therapySettingsRaw: therapySettingsRaw,
                   settingsTimeZoneID: settingsTimeZoneID, doseHistory: doseHistory,
                   supportsInterimHandback: supportsInterimHandback,

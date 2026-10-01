@@ -169,20 +169,4 @@ final class TakeoverDiscoveryHintTests: XCTestCase {
         XCTAssertFalse(PodLoanWatchController.shouldNudgeTakeover(podReached: false, appActive: false, nudgesSoFar: 2),
                        "twice at most")
     }
-
-    /// Production-line lesson 3: the phone sends `podAddress: 0` in every grant, and a fixture that
-    /// set a real one let a test pass while the device failed. This one is shaped like the phone's.
-    func testThePodAddressComesFromTheSnapshotNotTheWireField() throws {
-        let envelope: [String: Any] = ["state": ["podState": ["address": UInt32(0x17A6219A)]]]
-        let raw = try PropertyListSerialization.data(fromPropertyList: envelope, format: .binary, options: 0)
-        let asSent = LoanGrant(epoch: 1, expiresAt: Date(), pumpManagerRawState: raw, podAddress: 0,
-                               therapySettingsRaw: Data(), settingsTimeZoneID: "GMT", doseHistory: [],
-                               therapySettingsSupplementRaw: nil)
-        XCTAssertEqual(PodLoanWatchController.podAddress(in: asSent), 0x17A6219A)
-
-        let fieldOnly = LoanGrant(epoch: 1, expiresAt: Date(), pumpManagerRawState: Data([1, 2, 3]), podAddress: 0x1F0A2B3C,
-                                  therapySettingsRaw: Data(), settingsTimeZoneID: "GMT", doseHistory: [],
-                                  therapySettingsSupplementRaw: nil)
-        XCTAssertNil(PodLoanWatchController.podAddress(in: fieldOnly), "the wire field is never read")
-    }
 }

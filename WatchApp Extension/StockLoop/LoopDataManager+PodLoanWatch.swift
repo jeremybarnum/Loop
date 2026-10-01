@@ -2,15 +2,14 @@
 //  LoopDataManager+PodLoanWatch.swift
 //  WatchApp Extension
 //
-//  Sport Mode on the watch's LoopDataManager: the phone relay context, the G7 pairing code,
-//  phone contexts that arrive during a loan, and overrides on the wrist's dosing.
+//  Sport Mode on the watch's LoopDataManager: the phone relay context, the phone's CGM
+//  configuration, phone contexts that arrive during a loan, and overrides on the wrist's dosing.
 //
 
 import Foundation
 import LoopKit
 import LoopCore
 import WatchConnectivity
-import G7SensorKit   // direct-auth pairing codes arrive inside the phone's cgmManagerState
 
 extension LoopDataManager {
 
@@ -32,17 +31,11 @@ extension LoopDataManager {
         }
     }
 
-    /// Called from `updateContext(_:)`.
-    func podLoanReadPairingCode(from context: WatchContext) {
-        // The phone's G7 state rides in each context (wrapped under "state"); take the pairing code
-        // and let the manager adopt a sensor change by identity.
-        if !context.isWatchAuthored, let wrapped = context.cgmManagerState {
-            let raw = wrapped["state"] as? [String: Any] ?? wrapped
-            let code = raw["pairingCode"] as? String
-            let phoneSensor = raw["sensorID"] as? String
-            ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager
-                .receivePairingCode(code, phoneSensorID: phoneSensor)
-        }
+    /// Called from `updateContext(_:)`: the phone's CGM configuration rides in each context.
+    func podLoanAdoptCGMConfiguration(from context: WatchContext) {
+        guard !context.isWatchAuthored,
+              let configuration = context.cgmConfiguration.flatMap(SharedDeviceConfiguration.init(rawValue:)) else { return }
+        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.loopManager.adoptCGMConfiguration(configuration)
     }
 
     /// Called from `updateContext(_:)` when a phone context is refused mid-loan.

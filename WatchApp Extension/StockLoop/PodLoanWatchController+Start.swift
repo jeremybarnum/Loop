@@ -11,7 +11,6 @@ import HealthKit
 import LoopKit
 import LoopAlgorithm
 import LoopCore
-import OmnipodKit
 import WatchKit
 import os.log
 
@@ -264,22 +263,6 @@ extension PodLoanWatchController {
         SportLog.event("seize", "offline offer WITHDRAWN — \(reason) [seize]")
     }
 
-    /// The grant's `podAddress` is always 0 on the wire; the address is in the pump snapshot.
-    static func podAddress(in grant: LoanGrant) -> UInt32? {
-        let envelope = (try? PropertyListSerialization.propertyList(from: grant.pumpManagerRawState, options: [], format: nil)) as? [String: Any]
-        return ((envelope?["state"] as? [String: Any])?["podState"] as? [String: Any])?["address"] as? UInt32
-    }
-
-    /// Resting, with a known pod this watch holds no handle for: the next Start must find it.
-    func podFirstContactExpected() -> Bool {
-        guard phase == .idle || phase == .recoveredDrain, let address = currentPodAddress, address != 0 else { return false }
-        return PodLoanBleIdentifierCache.identifier(forPodAddress: address) == nil
-    }
-
-    static let firstContactStartNote = NSLocalizedString(
-        "New pod — keep your wrist up after Start",
-        comment: "Glance note above Start when this watch has never connected to the current pod")
-
     /// The hint under the takeover bar; only a first contact needs one.
     static func takeoverHint(firstContact: Bool, podReached: Bool, nudged: Bool) -> String? {
         guard firstContact else { return nil }
@@ -327,7 +310,7 @@ extension PodLoanWatchController {
     /// Builds the whole loan from a grant or refuses it, leaving Start working. Nothing touches
     /// the journal, epoch or pod until every check has passed.
     func handleGrant(_ grant: LoanGrant) {
-        SportLog.event("loan", "GRANT received — epoch \(grant.epoch), \(grant.pumpManagerRawState.count)B pod state")
+        SportLog.event("loan", "GRANT received — epoch \(grant.epoch), \(grant.pumpConfiguration.count)B pump configuration")
 
         // Any other grant retires a pending seize token.
         if !seizeActivationInFlight { pendingSeizeToken = nil }
@@ -431,11 +414,7 @@ extension PodLoanWatchController {
         attemptStartedAt = self.now()
         lastTakeoverReadAt = nil
         takeoverMaxReadGap = 0
-        // Connect counts tell "never linked" from "app suspended".
-        PodLoanConnectClock.reset()
-
-        // App state and timer lateness, so a suspension and an unreachable pod log differently.
-        PodLoanConnectClock.appStateProbe = { RuntimeStateLog.appStateName() }
+        // Timer lateness, so a suspension and an unreachable pod log differently.
         RuntimeStateLog.probeTimerDeferral("takeover-start")
         withdrawSeizeOffer(reason: "a grant was accepted")
         // Force-unwrapped only because the completeness check above has already returned on nil.
@@ -508,56 +487,28 @@ extension PodLoanWatchController {
             }
         }
 
-        // The pod's raw state is the "state" member; if it will not unwrap, fail and tell the phone.
-        guard let rawValue = (try? PropertyListSerialization.propertyList(from: grant.pumpManagerRawState, options: [], format: nil)) as? [String: Any],
-              var rawState = rawValue["state"] as? PumpManager.RawStateValue else {
+        // Built through the registry from the phone's export; the kit attaches this watch's own
+        // handle for the pump if it has one. A pump that can be loaned has control and an odometer.
+        SportLog.event("loan", "pump manager: building from the phone's configuration")
+        guard let configuration = grant.sharedPumpConfiguration,
+              let manager = watchPumpManager(adopting: configuration),
+              let control = manager as? ExclusiveDeviceControl, manager is PumpDeliveryOdometer else {
             teardownPump()
             returnToRestingPhase()
             lastIdleNote = NSLocalizedString("Couldn't read the pod from the phone. Try again.", comment: "Glance: pump snapshot rejected")
-            SportLog.event("loan", "grant FAILED — could not rebuild the pump from the phone's snapshot")
-            sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pump state snapshot rejected")))
+            SportLog.event("loan", "grant FAILED — could not build the pump from the phone's configuration")
+            sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pump configuration rejected")))
             return
         }
-
-        // Never remove `bleIdentifier`: PodState decodes it and the key in one `if let`, so dropping
-        // it drops the key. Substitute our cached handle when we have one.
-        takeoverCachedHandle = nil
-        var cachedHandle: String?
-        if var podRaw = rawState["podState"] as? [String: Any],
-           let address = podRaw["address"] as? UInt32 {
-            currentPodAddress = address
-            cachedHandle = PodLoanBleIdentifierCache.identifier(forPodAddress: address)
-            if let cachedHandle {
-                takeoverCachedHandle = (address, cachedHandle)
-                podRaw["bleIdentifier"] = cachedHandle
-                rawState["podState"] = podRaw
-            }
-            SportLog.event("loan", String(format: "handle for pod %08X: %@", address,
-                                          cachedHandle.map { "CACHED \($0) — skipping discovery" } ?? "none yet — will discover"))
-        }
-
-        // Serialized after release; left set, the driver drops the handle it just armed.
-        rawState["podConnectionReleased"] = false
-        guard let manager = OmniPumpManager(rawState: rawState) else {
-            teardownPump()
-            returnToRestingPhase()
-            lastIdleNote = NSLocalizedString("Couldn't read the pod from the phone. Try again.", comment: "Glance: pump snapshot rejected")
-            SportLog.event("loan", "grant FAILED — could not rebuild the pump from the phone's snapshot")
-            sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pump state snapshot rejected")))
-            return
-        }
+        SportLog.event("loan", "pump manager: built (\(configuration.managerIdentifier))")
 
         manager.pumpManagerDelegate = self
         manager.delegateQueue = queue
         pumpManager = manager
-        pumpStateStore.wrappedValue = manager.rawState
+        pumpStateStore.wrappedValue = manager.watchRawValue
 
-        // The copy's view, captured first; on a phoneless start it can be half an hour old.
-        if let units = manager.lentDeviceInsulinDelivered, let asOf = manager.podLoanInsulinDeliveredAt {
-            takeoverCopyTotal = (units, asOf)
-        } else {
-            takeoverCopyTotal = nil
-        }
+        // The export's header is the copy's view; on a phoneless start it can be half an hour old.
+        takeoverCopyTotal = configuration.deliveredUnits.map { (units: $0, asOf: configuration.asOf) }
         takeoverCopyRecords = grant.doseHistory
         guard ingestGrantHistory(grant) else {
             teardownPump()
@@ -568,8 +519,8 @@ extension PodLoanWatchController {
             return
         }
 
-        // Scan only when there is no cached handle; with one, the first read dials it directly.
-        let discover = takeoverCachedHandle == nil
+        // A pump this watch has never met must be found first, which needs the screen on.
+        let discover = control.takeControlNeedsSearch
         takeoverFirstContact = discover
         takeoverPodReached = false
         takeoverNudges = 0
@@ -588,8 +539,8 @@ extension PodLoanWatchController {
                 }
             }
         }
-        let armed = manager.podLoanBeginTakeover(discover: discover)
-        SportLog.event("loan", "pump rebuilt — \(armed ? (discover ? "takeover scan armed" : "cached handle — the first read dials") : "no pod address!")")
+        control.takeControl()
+        SportLog.event("loan", "pump adopted — \(discover ? "search armed" : "own handle — the first read dials")")
 
         SportLog.event("loan", String(format: "takeover ladder start — lease %+.0fs, epoch %d%@",
                                       grant.expiresAt.timeIntervalSince(now()), grant.epoch,
@@ -597,34 +548,30 @@ extension PodLoanWatchController {
         queue.async { [weak self] in self?.attemptTakeoverRead(manager: manager, grant: grant, attempt: 0) }
     }
 
-    /// The stack's session event drives the ladder (`CBPeripheral.state` is unreliable here);
-    /// the backstop covers no event at all.
+    /// Leaving the takeover cancels the readiness-driven retry and the backstop.
     func setTakeoverSessionListener(_ armed: Bool) {
-        guard armed else {
-            PodLoanConnectClock.podLoanOnSessionEstablished = nil
-            takeoverBackstop?.cancel()
-            takeoverBackstop = nil
-            takeoverRetryAction = nil
-            return
+        guard !armed else { return }
+        takeoverBackstop?.cancel()
+        takeoverBackstop = nil
+        takeoverRetryAction = nil
+    }
+
+    /// The pump's readiness drives the ladder (`CBPeripheral.state` is unreliable here); the
+    /// backstop covers no event at all. On `queue`.
+    func pumpControlDidBecomeReady() {
+        guard phase == .takingOver else { return }
+        // The pod has been reached: whatever is left of the takeover works with the wrist down.
+        if !takeoverPodReached {
+            takeoverPodReached = true
+            if takeoverFirstContact { notifyUI() }
         }
-        PodLoanConnectClock.podLoanOnSessionEstablished = { [weak self] in
-            guard let self = self else { return }
-            self.queue.async {
-                guard self.phase == .takingOver else { return }
-                // The pod has been reached: whatever is left of the takeover works with the wrist down.
-                if !self.takeoverPodReached {
-                    self.takeoverPodReached = true
-                    if self.takeoverFirstContact { self.notifyUI() }
-                }
-                guard let action = self.takeoverRetryAction else { return }
-                SportLog.event("loan", "takeover: pod session ESTABLISHED (stack event) — reading now instead of waiting for the backstop")
-                self.takeoverRetryAction = nil
-                self.takeoverBackstop?.cancel()
-                self.takeoverBackstop = nil
-                // Let the session finish coming up.
-                self.schedule(after: 0.25, label: "session-event-settle") { action() }
-            }
-        }
+        guard let action = takeoverRetryAction else { return }
+        SportLog.event("loan", "takeover: pump control READY (kit event) — reading now instead of waiting for the backstop")
+        takeoverRetryAction = nil
+        takeoverBackstop?.cancel()
+        takeoverBackstop = nil
+        // Let the session finish coming up.
+        schedule(after: 0.25, label: "session-event-settle") { action() }
     }
 
     /// The takeover's one save: odometer, `.active` and a seized loan's reunion token together.
@@ -644,9 +591,12 @@ extension PodLoanWatchController {
 
     /// Reads pod status until it answers (up to fourteen reads, 8 s backstop). The lease is
     /// re-checked every iteration and expiry outranks a good status.
-    func attemptTakeoverRead(manager: OmniPumpManager, grant: LoanGrant, attempt: Int, driver: String = "initial") {
+    func attemptTakeoverRead(manager: PumpManager, grant: LoanGrant, attempt: Int, driver: String = "initial") {
         let maxAttempts = 14
-        manager.refreshLentDeviceStatus { [weak self] success in
+        let control = manager as? ExclusiveDeviceControl
+        let odometer = manager as? PumpDeliveryOdometer
+        let refresh: (@escaping (Bool) -> Void) -> Void = odometer?.refreshDeliveredUnits ?? { completion in completion(false) }
+        refresh { [weak self] success in
             guard let self = self else { return }
             self.queue.async {
                 // Superseded while the read was out; nothing doses on a stale epoch.
@@ -660,7 +610,7 @@ extension PodLoanWatchController {
                     self.returnToRestingPhase()
 
                     // A silent pod versus a wedged watch Bluetooth stack.
-                    let wedged = PodLoanConnectClock.wedgeSignature(since: self.attemptStartedAt)
+                    let wedged = control?.hostRadioNeedsReset ?? false
                     if wedged {
                         self.lastIdleNote = NSLocalizedString("The pod didn't answer. Turn watch Bluetooth off and on, then try again.", comment: "Glance: takeover failed with the BLE-wedge signature")
                     } else {
@@ -670,7 +620,7 @@ extension PodLoanWatchController {
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "grant expired mid-takeover")))
                     return
                 }
-                if success, let delivered = manager.lentDeviceInsulinDelivered {
+                if success, let delivered = odometer?.deliveredUnits?.units {
                     // The base for every later audit of this loan.
                     self.revokeCapturedDelivered = nil
                     self.revokeCapturedDeliveredAt = nil
@@ -701,10 +651,9 @@ extension PodLoanWatchController {
                     // Early reads only: catches a ladder deferred from the start.
                     if attempt < 3 { RuntimeStateLog.probeTimerDeferral("ladder-read\(attempt + 1)") }
 
-                    SportLog.event("loan", String(format: "takeover read %d/%d driver=%@ (+%.1fs) — pod BLE state %@ · %@ · %@ · %@",
+                    SportLog.event("loan", String(format: "takeover read %d/%d driver=%@ (+%.1fs) — pump link %@ · %@ · %@",
                                                   attempt + 1, maxAttempts, driver, readElapsed,
-                                                  manager.podLoanConnectionStateDescription,
-                                                  PodLoanConnectClock.summary(since: self.attemptStartedAt),
+                                                  control?.connectionDiagnostics() ?? "no diagnostics",
                                                   self.g7StateForContention(),
                                                   RuntimeStateLog.snapshot()))
 
@@ -730,7 +679,7 @@ extension PodLoanWatchController {
 
                     // A long gap between reads means the app was suspended, not that the pod was unreachable.
                     let stalled = self.takeoverMaxReadGap > 20
-                    let wedged = !stalled && PodLoanConnectClock.wedgeSignature(since: self.attemptStartedAt)
+                    let wedged = !stalled && (control?.hostRadioNeedsReset ?? false)
                     if stalled {
                         self.lastIdleNote = String(format: NSLocalizedString(
                             "Sport Mode didn't start — the watch app stopped running mid-connect (%@). Your phone still has the pod. Keep the watch awake — wrist up or screen on — and try again.",
@@ -740,21 +689,15 @@ extension PodLoanWatchController {
                             "Sport Mode didn't start — the pod couldn't be reached. Your phone still has it and is still looping.",
                             comment: "Glance: takeover failed — the pod link never established")
                     }
-                    SportLog.event("loan", String(format: "TAKEOVER FAILED wedge=%@ — %@ after %d reads in %.1fs [takeover-timing], max inter-read gap %.1fs (event-driven; 8s backstop when no event fires), %@, final BLE state %@, %@, %@, epoch %d%@",
+                    SportLog.event("loan", String(format: "TAKEOVER FAILED wedge=%@ — %@ after %d reads in %.1fs [takeover-timing], max inter-read gap %.1fs (event-driven; 8s backstop when no event fires), %@, final pump link %@, %@, epoch %d%@",
                                                   wedged ? "YES" : "no",
                                                   stalled ? "ladder STALLED (our polling was deferred; see cb: for whether the link was up)" : "pod unreachable",
                                                   maxAttempts, failSecs, self.takeoverMaxReadGap, batteryTag(),
-                                                  manager.podLoanConnectionStateDescription,
-                                                  PodLoanConnectClock.summary(since: self.attemptStartedAt),
+                                                  control?.connectionDiagnostics() ?? "no diagnostics",
                                                   RuntimeStateLog.snapshot(), grant.epoch,
                                                   self.seizeMarkerActive ? " [seize]" : ""))
 
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: stalled ? "watch app suspended mid-takeover" : (wedged ? "watch Bluetooth wedged — toggle needed" : "couldn't establish the pod link"))))
-                    // Forget a cached handle that never connected.
-                    if let trusted = self.takeoverCachedHandle, PodLoanConnectClock.connectCount == 0 {
-                        PodLoanBleIdentifierCache.forget(podAddress: trusted.address)
-                        SportLog.event("loan", "takeover: cached handle \(trusted.handle) never connected — FORGOTTEN; the next Start discovers")
-                    }
                 }
             }
         }

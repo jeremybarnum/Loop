@@ -107,7 +107,7 @@ private final class LoanBooksDriver {
     func seed(_ records: [LoanDoseRecord], at instant: Date, epoch: Int = 1) {
         seedRecords = records
         let grant = LoanGrant(epoch: epoch, expiresAt: instant.addingTimeInterval(.minutes(5)),
-                              pumpManagerRawState: Data(), podAddress: 0,
+                              pumpConfiguration: Data(), podAddress: 0,
                               therapySettingsRaw: Data(), settingsTimeZoneID: TimeZone.current.identifier,
                               doseHistory: records)
         let split = grant.seedDoseEntries(finishedBy: instant)
@@ -1115,7 +1115,7 @@ final class LoanOverrideTests: XCTestCase {
         let grant = LoanGrant(
             epoch: 1,
             expiresAt: now.addingTimeInterval(.minutes(5)),
-            pumpManagerRawState: Data(),
+            pumpConfiguration: Data(),
             podAddress: 0,
             therapySettingsRaw: Data(),
             settingsTimeZoneID: TimeZone.current.identifier,
@@ -1142,7 +1142,7 @@ final class LoanOverrideTests: XCTestCase {
         let grant = LoanGrant(
             epoch: 1,
             expiresAt: Date().addingTimeInterval(.minutes(5)),
-            pumpManagerRawState: Data(),
+            pumpConfiguration: Data(),
             podAddress: 0,
             therapySettingsRaw: Data(),
             settingsTimeZoneID: TimeZone.current.identifier,

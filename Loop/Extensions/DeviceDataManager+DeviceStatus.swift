@@ -50,7 +50,7 @@ extension DeviceDataManager {
         } else if isPodTakeoverInProgress {
             // Grant out, not yet confirmed. Must precede the next branch: the link is already released.
             return DeviceDataManager.podHandingOverStatusHighlight
-        } else if (pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true || isPodLoanedToWatch {
+        } else if (pumpManager as? ExclusiveDeviceControl)?.isControlReleased == true || isPodLoanedToWatch {
             // On the watch: switch the tile at release rather than waiting for signal loss.
             return DeviceDataManager.podOnWatchStatusHighlight
         } else {

@@ -8,8 +8,6 @@
 
 import Foundation
 import LoopCore
-import OmnipodKit
-import G7SensorKit
 import WatchConnectivity
 import os.log
 
@@ -35,8 +33,6 @@ final class StockLoopSession {
         guard let assembled = await StockLoopStack.assemble() else { return nil }
         stack = assembled
         loanController = PodLoanWatchController(loopManager: stack.loopManager)
-
-        PodLoanConnectClock.podLoanLogSink = { line in SportLog.event("pod-ble", line) }
 
         RuntimeStateLog.startMainStallDetector()
 
@@ -99,10 +95,6 @@ final class StockLoopSession {
                 SportLog.event("wc", "urgent send FAILED (\(error.localizedDescription)) — falling back to the queued path")
                 enqueueSuperseding(dictionary)
             })
-        }
-
-        stack.loopManager.podBeepsOnManualBolusProbe = { [weak self] in
-            self?.loanController.podBeepsOnManualBolus ?? false
         }
 
         // Runtime for the whole takeover, bracketed by log snapshots.

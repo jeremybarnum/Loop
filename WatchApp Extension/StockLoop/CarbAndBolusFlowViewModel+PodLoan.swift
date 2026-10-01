@@ -97,8 +97,7 @@ extension CarbAndBolusFlowViewModel {
                     Self.notifyBolusFailure(units: units,
                                             carbGrams: carbEntry?.quantity.doubleValue(for: .gram),
                                             error: error)
-                } else if !session.stack.loopManager.podBeepsOnManualBolus {
-                    // Only when the pod will not beep.
+                } else {
                     WKInterfaceDevice.current().play(.success)
                 }
             }

@@ -11,7 +11,6 @@ import HealthKit
 import LoopKit
 import LoopAlgorithm
 import LoopCore
-import OmnipodKit
 import WatchKit
 import os.log
 
@@ -110,7 +109,7 @@ extension PodLoanWatchController {
             mode: currentMode(),
             lastDirectGlucoseAge: loopManager.latestGlucoseAge,
             lastEventSeq: journal.lastEventSeq,
-            podFault: pumpManager?.podLoanFaultDescription,
+            podFault: pumpFaultDescription,
             holdsPod: true,
             knowsGrant: true)))
         SportLog.event("seize", "statusReport sent — holdsPod e\(current) (\(reason)) [seize]")
@@ -159,13 +158,11 @@ extension PodLoanWatchController {
             return
         }
         dormantGrantStore.wrappedValue = data
-        let podAddress = Self.podAddress(in: dormant.grant)
-        currentPodAddress = podAddress
-        SportLog.event("seize", String(format: "dormant grant refreshed — issued %@, %d dose record(s), token …%@, pod %@ [seize]",
+        SportLog.event("seize", String(format: "dormant grant refreshed — issued %@, %d dose record(s), token …%@, pump %@ [seize]",
                                        DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .none, timeStyle: .medium),
                                        dormant.grant.doseHistory.count,
                                        String(dormant.seizeToken.uuidString.suffix(8)),
-                                       podAddress.map { String(format: "%08X", $0) } ?? "unknown"))
+                                       dormant.grant.sharedPumpConfiguration?.managerIdentifier ?? "unknown"))
     }
 
     /// nil if absent or undecodable.

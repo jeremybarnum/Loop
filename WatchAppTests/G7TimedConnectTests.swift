@@ -27,7 +27,8 @@ final class G7AdoptedSensorActivationTests: XCTestCase {
 
     func testAnAdoptedSensorLatchesItsActivationOnTheFirstReading() {
         var state = G7CGMManagerState()
-        state.sensorID = "DXCMQj"            // adopted: identity known, activation not
+        state.sensorID = "DXCMQj"            // passed in: identity known, activation not
+        state.configuredByAnotherController = true
         let sensor = G7Sensor(mode: .direct, credentials: state.sensorCredentials, bluetoothManager: TestBluetoothManager())
         let manager = G7CGMManager(state: state, sensor: sensor)
         XCTAssertNil(manager.state.activatedAt)

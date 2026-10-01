@@ -32,7 +32,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         let messages: [LoanMessage] = [
             .request(LoanRequest(watchBuild: "77")),
             .grant(LoanGrant(epoch: 5, expiresAt: now.addingTimeInterval(300),
-                             pumpManagerRawState: Data([1, 2, 3]), podAddress: 0x1F0A2B3C,
+                             pumpConfiguration: Data([1, 2, 3]), podAddress: 0x1F0A2B3C,
                              therapySettingsRaw: Data([4, 5]), settingsTimeZoneID: "America/New_York",
                              doseHistory: [LoanDoseRecord(kind: .tempBasal, startDate: now, endDate: now.addingTimeInterval(1800), unitsPerHour: 0.8)])),
             .takeoverComplete(TakeoverComplete(epoch: 5, firstPodStatus: status)),
@@ -60,7 +60,7 @@ final class LoanProtocolV2Tests: XCTestCase {
                                   syncVersion: 1, startDate: now, grams: 25, absorptionTime: .hours(3),
                                   foodType: "🍕", userCreatedDate: now, userUpdatedDate: nil)
         let grant = LoanGrant(epoch: 7, expiresAt: now.addingTimeInterval(300),
-                              pumpManagerRawState: Data([1]), podAddress: 0,
+                              pumpConfiguration: Data([1]), podAddress: 0,
                               therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
                               doseHistory: [], carbHistory: [carb])
         guard case .grant(let g) = try roundTrip(.grant(grant)) else { return XCTFail("not a grant") }
@@ -68,7 +68,7 @@ final class LoanProtocolV2Tests: XCTestCase {
 
         // Backward compat: an older phone sends no carbHistory; it must decode as nil, not [].
         let old = LoanGrant(epoch: 7, expiresAt: now.addingTimeInterval(300),
-                            pumpManagerRawState: Data([1]), podAddress: 0,
+                            pumpConfiguration: Data([1]), podAddress: 0,
                             therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
                             doseHistory: [])
         guard case .grant(let g2) = try roundTrip(.grant(old)) else { return XCTFail("not a grant") }
@@ -80,7 +80,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         let sample = LoanGlucoseRecord(syncIdentifier: "g-1", startDate: now, valueMgdl: 120,
                                        trendRateMgdlPerMin: 1.5, isDisplayOnly: false, wasUserEntered: false)
         let grant = LoanGrant(epoch: 8, expiresAt: now.addingTimeInterval(300),
-                              pumpManagerRawState: Data([1]), podAddress: 0,
+                              pumpConfiguration: Data([1]), podAddress: 0,
                               therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
                               doseHistory: [], glucoseHistory: [sample])
         guard case .grant(let g) = try roundTrip(.grant(grant)) else { return XCTFail("not a grant") }
@@ -88,7 +88,7 @@ final class LoanProtocolV2Tests: XCTestCase {
 
         // Backward compat: an older phone sends no glucoseHistory; it must decode as nil, not [].
         let old = LoanGrant(epoch: 8, expiresAt: now.addingTimeInterval(300),
-                            pumpManagerRawState: Data([1]), podAddress: 0,
+                            pumpConfiguration: Data([1]), podAddress: 0,
                             therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
                             doseHistory: [])
         guard case .grant(let g2) = try roundTrip(.grant(old)) else { return XCTFail("not a grant") }
@@ -104,7 +104,7 @@ final class LoanProtocolV2Tests: XCTestCase {
             iobUnits: 1.5, iobDate: now.addingTimeInterval(-60), cobGrams: 0,
             momentumPointCount: 5, rcDiscrepancyCount: 7, enabledEffectsRaw: 15)
         let grant = LoanGrant(epoch: 9, expiresAt: now.addingTimeInterval(300),
-                              pumpManagerRawState: Data([1]), podAddress: 0,
+                              pumpConfiguration: Data([1]), podAddress: 0,
                               therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
                               doseHistory: [], predictionSnapshot: snap)
         guard case .grant(let g) = try roundTrip(.grant(grant)) else { return XCTFail("not a grant") }
@@ -112,11 +112,47 @@ final class LoanProtocolV2Tests: XCTestCase {
 
         // Backward compat: an older phone sends no snapshot; it must decode as nil, not a default.
         let old = LoanGrant(epoch: 9, expiresAt: now.addingTimeInterval(300),
-                            pumpManagerRawState: Data([1]), podAddress: 0,
+                            pumpConfiguration: Data([1]), podAddress: 0,
                             therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
                             doseHistory: [])
         guard case .grant(let g2) = try roundTrip(.grant(old)) else { return XCTFail("not a grant") }
         XCTAssertNil(g2.predictionSnapshot)
+    }
+
+    /// The grant carries the pump's exported configuration whole; the watch reads only its header.
+    func testGrantCarriesThePumpsSharedConfiguration() throws {
+        let asOf = Date(timeIntervalSince1970: 1_784_338_000)
+        let configuration = SharedDeviceConfiguration(managerIdentifier: "Pump", asOf: asOf, deliveredUnits: 41.25,
+                                                      state: ["opaque": ["nested": Data([9])]])
+        let data = try PropertyListSerialization.data(fromPropertyList: configuration.rawValue, format: .binary, options: 0)
+        let grant = LoanGrant(epoch: 4, expiresAt: asOf.addingTimeInterval(300), pumpConfiguration: data, podAddress: 0,
+                              therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC", doseHistory: [])
+        guard case .grant(let received) = try roundTrip(.grant(grant)) else { return XCTFail("not a grant") }
+
+        let decoded = try XCTUnwrap(received.sharedPumpConfiguration)
+        XCTAssertEqual(decoded.managerIdentifier, "Pump")
+        XCTAssertEqual(decoded.asOf, asOf)
+        XCTAssertEqual(decoded.deliveredUnits, 41.25)
+        XCTAssertEqual((decoded.state["opaque"] as? [String: Any])?["nested"] as? Data, Data([9]))
+    }
+
+    func testAGrantWithoutAConfigurationDecodesToNil() {
+        let grant = LoanGrant(epoch: 4, expiresAt: Date(), pumpConfiguration: Data([1, 2, 3]), podAddress: 0,
+                              therapySettingsRaw: Data(), settingsTimeZoneID: "UTC", doseHistory: [])
+        XCTAssertNil(grant.sharedPumpConfiguration)
+    }
+
+    /// Version 3 changed the grant's pump field; a version-2 peer is refused, never guessed at.
+    func testAVersion2PeerIsRefused() throws {
+        XCTAssertEqual(LoanProtocol.version, 3)
+        var dict = try LoanMessage.revoke(Revoke(epoch: 1)).transportDictionary()
+        var json = try JSONSerialization.jsonObject(with: dict[LoanProtocol.userInfoKey] as! Data) as! [String: Any]
+        json["protocolVersion"] = 2
+        dict[LoanProtocol.userInfoKey] = try JSONSerialization.data(withJSONObject: json)
+        XCTAssertThrowsError(try LoanMessage.decode(fromTransport: dict)) { error in
+            guard case LoanProtocolError.undecodable(let seen) = error else { return XCTFail() }
+            XCTAssertEqual(seen, 2)
+        }
     }
 
     func testForeignPayloadIsNotOurs() throws {
@@ -381,7 +417,7 @@ final class LoanProtocolV2Tests: XCTestCase {
                                           endDate: now.addingTimeInterval(-1800), unitsPerHour: 2.0)
         let runningTemp = LoanDoseRecord(kind: .tempBasal, startDate: now.addingTimeInterval(-600),
                                          endDate: now.addingTimeInterval(1200), unitsPerHour: 2.0)
-        let grant = LoanGrant(epoch: 9, expiresAt: now.addingTimeInterval(60), pumpManagerRawState: Data(),
+        let grant = LoanGrant(epoch: 9, expiresAt: now.addingTimeInterval(60), pumpConfiguration: Data(),
                               podAddress: 0x1F0F, therapySettingsRaw: Data(), settingsTimeZoneID: "UTC",
                               doseHistory: [finishedBolus, finishedTemp, runningTemp])
 

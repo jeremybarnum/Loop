@@ -76,8 +76,7 @@ struct GlanceUIState {
 
     var startingStageText: String? = nil
 
-    /// First contact with a new pod needs the screen on: the Start note, then the takeover hint.
-    var firstContactNote: String? = nil
+    /// First contact with a new pod needs the screen on: the takeover hint says so.
     var takeoverHint: String? = nil
     var takeoverHintDone: Bool = false
 
@@ -346,8 +345,8 @@ final class GlanceViewModel: ObservableObject {
         // early. A refresh that skipped it would leave the page with no way to notice ageing.
         defer { armFreshnessBoundaryRepaint() }
 
-        let cgm = session.stack.cgmManager
-        let sensorNote = G7WatchDirectRead.needsCodeNote(for: cgm.watchNeedsCodeFor) ?? G7WatchDirectRead.searchingNote(cgm.watchIsSearching)
+        let cgm = session.stack.loopManager.cgmManager as? G7CGMManager
+        let sensorNote = G7WatchDirectRead.needsCodeNote(for: cgm?.watchNeedsCodeFor) ?? G7WatchDirectRead.searchingNote(cgm?.watchIsSearching ?? false)
 
         switch snap.phase {
         case .idle:
@@ -364,7 +363,6 @@ final class GlanceViewModel: ObservableObject {
                 f.unitsStyle = .abbreviated
                 idle.seizeOfferAgeText = f.string(from: Date().timeIntervalSince(issued)) ?? "?"
             }
-            if snap.podFirstContactExpected { idle.firstContactNote = PodLoanWatchController.firstContactStartNote }
             state = idle
         // One UI phase for both, so a slow takeover does not look like a failure.
         case .requested, .takingOver:
@@ -403,7 +401,6 @@ final class GlanceViewModel: ObservableObject {
                 f.unitsStyle = .abbreviated
                 restIdle.seizeOfferAgeText = f.string(from: Date().timeIntervalSince(issued)) ?? "?"
             }
-            if snap.podFirstContactExpected { restIdle.firstContactNote = PodLoanWatchController.firstContactStartNote }
             state = restIdle
         // The phone took the pod back. Nothing is left to offer the user and nothing is
         // cancellable — only the records are still owed — so the page says exactly that.

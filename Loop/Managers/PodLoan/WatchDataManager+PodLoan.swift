@@ -74,6 +74,12 @@ extension WatchDataManager {
 
     private static var lastOnboardingKey = ""   // [onboarding-gate] dedupe
 
+    /// The CGM's configuration, so a watch can read the sensor itself.
+    func podLoanShareCGMConfiguration(_ context: WatchContext) {
+        guard FeatureFlags.sportModeEnabled else { return }
+        context.cgmConfiguration = (deviceManager.cgmManager as? DeviceConfigurationSharing)?.exportConfiguration().rawValue
+    }
+
     func podLoanLogOnboardingContext(_ context: WatchContext) {
         guard FeatureFlags.sportModeEnabled else { return }
         // Logged on change; pairs with the watch's [onboarding-gate] lines.

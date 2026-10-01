@@ -70,11 +70,12 @@ final class WakeResumeTests: XCTestCase {
                                       defaults: defaults, stateDirectory: journalDir)
     }
 
-    /// The smallest raw state `OmniPumpManager(rawState:)` accepts: a basal schedule, and a
-    /// controller id so it takes the DASH path the watch uses. No pod — nothing to connect to.
+    /// The smallest pump state the watch's registry restores: the Omnipod manager's identifier, a
+    /// basal schedule, and a controller id so it takes the DASH path the watch uses. No pod.
     private var readablePumpState: [String: Any] {
-        ["basalSchedule": ["entries": [["rate": 1.0, "startTime": 0.0]]],
-         "controllerId": UInt32(0x1234_5678), "podId": UInt32(0x1234_5679)]
+        ["managerIdentifier": "Omni",
+         "state": ["basalSchedule": ["entries": [["rate": 1.0, "startTime": 0.0]]],
+                   "controllerId": UInt32(0x1234_5678), "podId": UInt32(0x1234_5679)] as [String: Any]]
     }
 
     private func relaunch(phase: PodLoanWatchController.Phase, epoch: Int = 7, savedState: [String: Any]?,
@@ -145,12 +146,12 @@ final class WakeResumeTests: XCTestCase {
     func testPumpStateMigratesOnceToItsFile() async {
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         XCTAssertNotNil(c.pumpManager, "a loan saved by the old build resumes after the update")
-        XCTAssertEqual(c.pumpStateStore.wrappedValue?["controllerId"] as? UInt32, 0x1234_5678)
+        XCTAssertEqual((c.pumpStateStore.wrappedValue?["state"] as? [String: Any])?["controllerId"] as? UInt32, 0x1234_5678)
         XCTAssertNil(defaults.object(forKey: PodLoanWatchController.Keys.pumpState))
 
         defaults.set(["garbage": 1], forKey: PodLoanWatchController.Keys.pumpState)
         let again = await makeController()
-        XCTAssertNotNil(again.pumpStateStore.wrappedValue?["controllerId"], "the file wins over a re-seeded legacy key")
+        XCTAssertNotNil(again.pumpStateStore.wrappedValue?["managerIdentifier"], "the file wins over a re-seeded legacy key")
         XCTAssertNil(defaults.object(forKey: PodLoanWatchController.Keys.pumpState))
     }
 
@@ -207,7 +208,7 @@ final class WakeResumeTests: XCTestCase {
         relaunched.send = { dict in
             if case .takeoverFailed(let f)? = try? LoanMessage.decode(fromTransport: dict) { failures.append(f.reason) }
         }
-        let grant = LoanGrant(epoch: 8, expiresAt: Date().addingTimeInterval(300), pumpManagerRawState: Data([1, 2, 3]),
+        let grant = LoanGrant(epoch: 8, expiresAt: Date().addingTimeInterval(300), pumpConfiguration: Data([1, 2, 3]),
                               podAddress: 0, therapySettingsRaw: Data([4, 5]), settingsTimeZoneID: "GMT", doseHistory: [],
                               therapySettingsSupplementRaw: nil)
         relaunched.queue.sync { relaunched.handleGrant(grant) }
@@ -242,6 +243,14 @@ final class WakeResumeTests: XCTestCase {
     func testActiveLoanWithoutSavedStateStillDrains() async {
         // A loan from before this build has no saved state: the pre-existing behaviour holds.
         let c = await relaunch(phase: .active, savedState: nil)
+        XCTAssertEqual(c.phase, .recoveredDrain)
+        XCTAssertNil(c.pumpManager)
+    }
+
+    /// State saved before it carried its manager's identifier cannot be routed: drain, as for any
+    /// unreadable state.
+    func testStateSavedWithoutItsManagersIdentifierFallsBackToDrain() async {
+        let c = await relaunch(phase: .active, savedState: readablePumpState["state"] as? [String: Any])
         XCTAssertEqual(c.phase, .recoveredDrain)
         XCTAssertNil(c.pumpManager)
     }

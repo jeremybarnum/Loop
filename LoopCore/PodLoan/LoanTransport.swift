@@ -13,7 +13,8 @@ import LoopKit
 /// Wire constants shared by both apps.
 public enum LoanProtocol {
     /// Bumped only for a change the other side could not survive; additive changes use optional fields.
-    public static let version = 2
+    /// 3: the grant carries the pump's SharedDeviceConfiguration instead of its raw state.
+    public static let version = 3
 
     public static let userInfoKey = "podLoanV2"
 

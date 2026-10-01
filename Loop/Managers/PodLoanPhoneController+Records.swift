@@ -52,10 +52,10 @@ extension PodLoanPhoneController {
     /// The phone's half of the periodic pod-link census, logged regardless of traffic.
     func installPodLinkCensus() {
         WatchDataManager.podLinkCensus = { [weak self] in
-            guard let self, let lendable = self.deps.pumpManager() as? PumpConnectionLendable else {
+            guard let self, let control = self.deps.pumpManager() as? ExclusiveDeviceControl else {
                 return "no pump manager"
             }
-            return "released=\(lendable.isConnectionReleased) \(lendable.connectionDiagnostics() ?? "no diagnostics")"
+            return "released=\(control.isControlReleased) \(control.connectionDiagnostics() ?? "no diagnostics")"
         }
     }
 

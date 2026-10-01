@@ -14,29 +14,41 @@ import LoopCore
 import MockKit
 @testable import Loop
 
-/// Test-only lendable conformance so the full grant path runs against MockKit's pump.
-extension MockPumpManager: PumpConnectionLendable {
+/// The test pump's hand-off state, shared by every instance.
+extension MockPumpManager {
     static var testConnectionReleased = false
-    /// Item 1: the odometer the PHONE reads on its reclaim round-trip. nil = pump reports none.
+    /// The odometer the PHONE reads on its reclaim round-trip. nil = pump reports none.
     static var testOdometer: Double?
     /// PHONE MIRROR: the books-dirty primitive (SQN-resync stamp) the inferred-loan
     /// detector reads. nil = no foreign sessions observed.
     static var testForeignSessionAt: Date?
-    public var isConnectionReleased: Bool { Self.testConnectionReleased }
-    public func releaseConnection() { Self.testConnectionReleased = true }
-    public func reclaimConnection() { Self.testConnectionReleased = false }
-    public var lentDeviceInsulinDelivered: Double? { Self.testOdometer }
-    public var podLoanLastForeignSessionAt: Date? { Self.testForeignSessionAt }
-    /// Counts escalations and, like the real one, lifts `podConnectionReleased`.
+    /// Counts escalations.
     static var testEscalations = 0
-    public func escalateConnectionReclaim() -> String? {
+    /// Counts forced reads, so a test can assert the settle forces without flooding the radio.
+    static var testForcedReadCount = 0
+}
+
+/// Test-only hand-off conformance so the full grant path runs against the test pump.
+final class LendableMockPumpManager: MockPumpManager, ExclusiveDeviceControl, PumpDeliveryOdometer {
+    func exportConfiguration() -> SharedDeviceConfiguration {
+        SharedDeviceConfiguration(managerIdentifier: pluginIdentifier, asOf: Date(), deliveredUnits: Self.testOdometer, state: rawState)
+    }
+    convenience init?(adopting configuration: SharedDeviceConfiguration) {
+        self.init()
+    }
+    var isConfiguredByAnotherController: Bool { false }
+    var isControlReleased: Bool { Self.testConnectionReleased }
+    func releaseControl() { Self.testConnectionReleased = true }
+    func takeControl() { Self.testConnectionReleased = false }
+    var deliveredUnits: (units: Double, at: Date)? { Self.testOdometer.map { ($0, Date()) } }
+    var lastForeignSessionAt: Date? { Self.testForeignSessionAt }
+    /// Like the real one, lifts the release.
+    func escalateTakeControl() -> String? {
         Self.testEscalations += 1
         Self.testConnectionReleased = false
         return "test escalation"
     }
-    /// Counts forced reads, so a test can assert the settle forces without flooding the radio.
-    static var testForcedReadCount = 0
-    public func refreshLentDeviceStatus(completion: @escaping (Bool) -> Void) {
+    func refreshDeliveredUnits(completion: @escaping (Bool) -> Void) {
         Self.testForcedReadCount += 1
         completion(true)
     }
@@ -117,7 +129,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         clock = Date()
         holdPumpEventWrites = false
         heldPumpEventWrite = nil
-        pump = MockPumpManager()
+        pump = LendableMockPumpManager()
         MockPumpManager.testConnectionReleased = false
         MockPumpManager.testOdometer = nil
         MockPumpManager.testEscalations = 0
@@ -322,7 +334,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(grant.epoch, 1)
         XCTAssertTrue(MockPumpManager.testConnectionReleased, "grant must release the pod connection")
         XCTAssertEqual(pauseCalls, [true], "dosing paused exactly once at grant")
-        XCTAssertFalse(grant.pumpManagerRawState.isEmpty)
+        XCTAssertEqual(grant.sharedPumpConfiguration?.managerIdentifier, pump.pluginIdentifier,
+                       "the grant carries the pump's exported configuration")
         XCTAssertFalse(grant.therapySettingsRaw.isEmpty)
         XCTAssertEqual(grant.settingsTimeZoneID, "GMT")
     }

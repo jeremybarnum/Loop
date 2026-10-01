@@ -11,7 +11,6 @@ import HealthKit
 import LoopKit
 import LoopAlgorithm
 import LoopCore
-import OmnipodKit
 import WatchKit
 import os.log
 
@@ -48,8 +47,6 @@ extension PodLoanWatchController {
         /// The wrist-up hint under the takeover bar, or nil; and whether it reports the pod reached.
         let takeoverHint: String?
         let takeoverPodReached: Bool
-        /// Resting: the next Start must find a pod this watch has never met.
-        let podFirstContactExpected: Bool
     }
 
     /// Blocking. Not for main — `isLoanActiveNonBlocking` is main's answer.
@@ -57,11 +54,6 @@ extension PodLoanWatchController {
         RuntimeStateLog.markBlockingIfMain("blocking.isLoanActive")
         defer { RuntimeStateLog.markBlockingIfMain("blocking.isLoanActive.done") }
         return queue.sync { phase == .active }
-    }
-
-    /// The glance skips its success haptic when the pod will beep.
-    var podBeepsOnManualBolus: Bool {
-        pumpManager?.podLoanBeepsOnManualBolus ?? false
     }
 
     /// Safe on main; mirrored in `phase.didSet`.
@@ -110,8 +102,8 @@ extension PodLoanWatchController {
                 epoch: epoch ?? journal.activeEpoch,
                 mode: currentMode(),
                 hasPumpManager: pumpManager != nil,
-                deliveredUnits: pumpManager?.lentDeviceInsulinDelivered,
-                podFault: pumpManager?.podLoanFaultDescription,
+                deliveredUnits: pumpOdometer?.deliveredUnits?.units,
+                podFault: pumpFaultDescription,
                 lastEventSeq: journal.lastEventSeq,
                 unackedCount: journal.unackedEvents().count,
                 lastIdleNote: lastIdleNote,
@@ -128,15 +120,14 @@ extension PodLoanWatchController {
                 takeoverHint: phase == .takingOver
                     ? Self.takeoverHint(firstContact: takeoverFirstContact, podReached: takeoverPodReached, nudged: takeoverNudges > 0)
                     : nil,
-                takeoverPodReached: phase == .takingOver && takeoverPodReached,
-                podFirstContactExpected: podFirstContactExpected())
+                takeoverPodReached: phase == .takingOver && takeoverPodReached)
     }
 
     /// nil: no pump manager, as opposed to a failed read.
     func debugReadStatus(completion: @escaping (Bool?) -> Void) {
         queue.async {
-            guard let manager = self.pumpManager else { completion(nil); return }
-            manager.refreshLentDeviceStatus { ok in completion(ok) }
+            guard let odometer = self.pumpOdometer else { completion(nil); return }
+            odometer.refreshDeliveredUnits { ok in completion(ok) }
         }
     }
 

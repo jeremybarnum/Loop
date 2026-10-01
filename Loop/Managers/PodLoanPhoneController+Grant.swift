@@ -87,7 +87,8 @@ extension PodLoanPhoneController {
             deny("No pump is set up on the phone.")
             return
         }
-        guard let lendable = pump as? PumpConnectionLendable else {
+        // Handing over needs exclusive control and the delivered total both sides audit against.
+        guard let control = pump as? ExclusiveDeviceControl, pump is PumpDeliveryOdometer else {
             deny("This pump can't be loaned to the watch (\(type(of: pump))).")
             return
         }
@@ -137,28 +138,28 @@ extension PodLoanPhoneController {
                     self.deny("The iPhone couldn't reach its pod (\(error.localizedDescription)). The phone kept the pod.")
                     return
                 }
-                self.continueGrant(settings: settings, loanSettings: loanSettings, pump: pump, lendable: lendable)
+                self.continueGrant(settings: settings, loanSettings: loanSettings, pump: pump, control: control)
             }
         }
     }
 
     /// One-way from here: odometer origin, link released, epoch advanced.
     private func continueGrant(settings: LoopSettings, loanSettings: LoopSettings,
-                               pump: PumpManager, lendable: PumpConnectionLendable) {
+                               pump: PumpManager, control: ExclusiveDeviceControl) {
                 let handedOverAt = deps.now()
 
         // This loan's origin; the previous loan's takeover reading is cleared with it.
-        let deliveredAtGrant = lendable.lentDeviceInsulinDelivered
+        let deliveredAtGrant = (pump as? PumpDeliveryOdometer)?.deliveredUnits?.units
 
         let releaseEpoch = epoch + 1
-        handbackDiag(releaseEpoch, "GRANT — releasing pod BLE (wasReleased=\(lendable.isConnectionReleased))")
-        lendable.releaseConnection()
+        handbackDiag(releaseEpoch, "GRANT — releasing pod BLE (wasReleased=\(control.isControlReleased))")
+        control.releaseControl()
         // A link still up here predicts a refused takeover (the pod accepts one central).
-        queue.asyncAfter(deadline: .now() + 3) { [weak self, weak lendable] in
-            guard let self = self, let lendable = lendable else { return }
+        queue.asyncAfter(deadline: .now() + 3) { [weak self, weak pump] in
+            guard let self = self, let control = pump as? ExclusiveDeviceControl else { return }
 
-            self.handbackDiag(releaseEpoch, "GRANT +3s — pod BLE released=\(lendable.isConnectionReleased) linkUp=\(lendable.isConnectionReady)")
-            if lendable.isConnectionReady {
+            self.handbackDiag(releaseEpoch, "GRANT +3s — pod BLE released=\(control.isControlReleased) linkUp=\(control.isControlReady)")
+            if control.isControlReady {
                 self.handbackDiag(releaseEpoch, "GRANT +3s — ** STILL CONNECTED after release — the watch's takeover will be refused (single-central pod) **")
             }
             PhoneLog.flush()
@@ -191,7 +192,7 @@ extension PodLoanPhoneController {
         // The lease bounds the handshake, not the loan.
         assembleGrant(epoch: grantEpoch, referenceDate: handedOverAt,
                       expiresAt: handedOverAt.addingTimeInterval(.minutes(5)),
-                      pumpRaw: pump.rawValue, loanSettingsRaw: loanSettings.rawValue,
+                      pumpConfiguration: control.exportConfiguration(), loanSettingsRaw: loanSettings.rawValue,
                       settings: settings) { [weak self] grant in
             guard let self = self else { return }
             // The loan moved on during assembly; drop the grant.
@@ -205,10 +206,10 @@ extension PodLoanPhoneController {
         }
     }
 
-    /// Pod state, therapy settings and history for the watch. One assembly for the live grant
-    /// and the dormant refresh.
+    /// The pump's configuration, therapy settings and history for the watch. One assembly for
+    /// the live grant and the dormant refresh.
     private func assembleGrant(epoch grantEpoch: Int, referenceDate: Date, expiresAt: Date,
-                               pumpRaw: [String: Any], loanSettingsRaw: [String: Any],
+                               pumpConfiguration: SharedDeviceConfiguration, loanSettingsRaw: [String: Any],
                                settings: LoopSettings,
                                completion: @escaping (LoanGrant?) -> Void) {
         // Past the insulin and carb durations.
@@ -222,7 +223,7 @@ extension PodLoanPhoneController {
                 self.deps.glucoseHistory(glucoseStart) { [weak self] glucose in
                     guard let self = self else { return }
                     self.queue.async {
-                        guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pumpRaw, format: .binary, options: 0),
+                        guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pumpConfiguration.rawValue, format: .binary, options: 0),
                               let settingsData = try? PropertyListSerialization.data(fromPropertyList: loanSettingsRaw, format: .binary, options: 0) else {
                             completion(nil)
                             return
@@ -267,7 +268,7 @@ extension PodLoanPhoneController {
                         let grant = LoanGrant(
                             epoch: grantEpoch,
                             expiresAt: expiresAt,
-                            pumpManagerRawState: stateData,
+                            pumpConfiguration: stateData,
                             podAddress: 0,
                             therapySettingsRaw: settingsData,
                             // The schedules' authoring time zone.
@@ -327,9 +328,8 @@ extension PodLoanPhoneController {
         // Only while this phone holds the pod, and only to a watch that said it can use this.
         guard state == .owner else { return }
         guard persisted.watchSupportsSeize else { return }
-        guard let pump = deps.pumpManager(),
-              let lendable = pump as? PumpConnectionLendable,
-              !lendable.isConnectionReleased else { return }
+        guard let control = deps.pumpManager() as? ExclusiveDeviceControl,
+              !control.isControlReleased else { return }
         let settings = deps.settings()
 
         guard settings.maximumBolus != nil, settings.maximumBasalRatePerHour != nil,
@@ -364,7 +364,7 @@ extension PodLoanPhoneController {
         lastDormantSettingsFingerprint = fingerprint
         // Issued already expired: a seize re-stamps the lease when it starts.
         assembleGrant(epoch: provisionalEpoch, referenceDate: issuedAt, expiresAt: issuedAt,
-                      pumpRaw: pump.rawValue, loanSettingsRaw: loanSettings.rawValue,
+                      pumpConfiguration: control.exportConfiguration(), loanSettingsRaw: loanSettings.rawValue,
                       settings: settings) { [weak self] grant in
             guard let self = self else { return }
             guard let grant = grant else {

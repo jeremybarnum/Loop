@@ -13,7 +13,6 @@ import HealthKit
 import LoopKit
 import LoopAlgorithm
 import LoopCore
-import G7SensorKit
 import WatchConnectivity
 import os.log
 
@@ -137,9 +136,6 @@ final class WatchLoopManager {
     /// asks "do we hold the pod?" asks it here, and it is set at takeover and cleared at teardown.
     var pumpManager: PumpManager?
 
-    /// The success haptic plays only when the pod is silent.
-    var podBeepsOnManualBolusProbe: (() -> Bool)?
-
     /// Fired by `loop()` only on a cycle that LANDED, which is what renews the phone's hold. A
     /// cycle that computed but could not reach the pod must not renew it.
     var onCycleLanded: (() -> Void)?
@@ -161,10 +157,6 @@ final class WatchLoopManager {
         readingArrivedWithoutPump = false
         return waited
     }
-    /// No probe means "assume the pod is silent", so the watch buzzes. A missing haptic is a
-    /// worse failure than one buzz too many.
-    var podBeepsOnManualBolus: Bool { podBeepsOnManualBolusProbe?() ?? false }
-
     /// Shared by the CGM and the pump managers, which log from several queues at once during a
     /// radio storm — the throttle has to be thread-safe on its own account.
     let deviceLogThrottle = DeviceLogThrottle()
@@ -426,7 +418,8 @@ final class WatchLoopManager {
     private(set) var loopState: WatchLoopState
     let loopStateLock = NSLock()
 
-    /// The G7 manager's `rawState`, in a file as stock keeps a CGM manager, replaced whole.
+    /// The CGM manager's `managerIdentifier` and `state`, and the configuration it was built from,
+    /// in a file as stock keeps a CGM manager, replaced whole.
     var cgmManagerState: PersistedProperty<CGMManager.RawStateValue>
 
     /// Restores the last cycle, loop mode and correction model, and subscribes to phone context
@@ -474,35 +467,18 @@ final class WatchLoopManager {
     private var _lastDirectG7At: Date?
     private var _lastPhoneRelayAt: Date?
 
-    /// The longest G7 session, 15 days plus the 12-hour grace: the bound when the sensor has not
-    /// reported its own session length.
-    static let longestSessionWithGrace: TimeInterval = .hours(15 * 24 + 12)
-
-    /// Past its end, a persisted identity is dead and the escapes that depend on this may honour a
-    /// cleared sensor. `reportedEnd` is the sensor's own end of session, when known. An unknown
-    /// activation date is NOT past its life — nil means unknown, and guessing would strand the sensor.
-    static func persistedSensorIsPastLife(_ activatedAt: Date?, reportedEnd: Date? = nil, now: Date = Date()) -> Bool {
-        guard let activatedAt else { return false }
-        if let reportedEnd {
-            return now > reportedEnd
-        }
-        return now.timeIntervalSince(activatedAt) > longestSessionWithGrace
-    }
-
-    static func reportedEnd(of manager: G7CGMManager?) -> Date? {
-        guard let manager, manager.sensorSessionLengthIsKnown else { return nil }
-        return manager.sensorEndsAt
-    }
-
     // MARK: - Glucose sources
 
-    /// Weak: `StockLoopStack` owns the manager and holds this object as its delegate, so a
-    /// strong reference here would close the cycle.
-    weak var g7Manager: G7CGMManager?
-
-    /// What the last persisted G7 state named, so the "manager forgot the sensor" notice is
-    /// written once per episode rather than on every state update.
-    var lastPersistedSensorID: String?
+    /// Built from the phone's configuration (or restored); the manager holds its delegate weakly.
+    var cgmManager: CGMManager? {
+        cgmLock.lock(); defer { cgmLock.unlock() }
+        return _cgmManager
+    }
+    let cgmLock = NSLock()
+    var _cgmManager: CGMManager?
+    /// The configuration `cgmManager` was built from, saved beside its state.
+    var cgmBuiltFrom: [String: Any]?
+    static let builtFromKey = "builtFromConfiguration"
 
     /// Retired: the clock is memory, seeded at launch from the sensor's own last reading.
     static let lastDirectG7DefaultsKey = "SportMode.lastDirectG7At"

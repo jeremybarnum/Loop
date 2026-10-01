@@ -11,7 +11,6 @@ import HealthKit
 import LoopKit
 import LoopAlgorithm
 import LoopCore
-import G7SensorKit
 import WatchConnectivity
 import os.log
 
@@ -239,33 +238,43 @@ extension WatchLoopManager: CGMManagerDelegate {
     /// Retired: the state now lives in `cgmManagerState`, migrated once at launch.
     static let cgmStateDefaultsKey = "g7.cgmManagerRawState"
 
-    /// Persists the G7 state as stock does, but a nil `sensorID` means unknown, not forget, until
-    /// the sensor is past its life (same escape as `StockLoopStack.assemble`).
+    /// Persisted as stock persists a CGM manager, with the configuration it was built from.
     func cgmManagerDidUpdateState(_ manager: CGMManager) {
-        guard manager is G7CGMManager else { return }
-        let raw = manager.rawState
-        let sensorID = raw["sensorID"] as? String
-
-        if sensorID == nil,
-           let stored = cgmManagerState.wrappedValue,
-           let storedID = stored["sensorID"] as? String {
-            let activated = stored["activatedAt"] as? Date
-            let expired = Self.persistedSensorIsPastLife(activated, reportedEnd: Self.reportedEnd(of: G7CGMManager(rawState: stored)), now: now())
-            if !expired {
-                if lastPersistedSensorID != nil {
-                    SportLog.event("cgm", "G7 state: manager forgot sensor \(storedID) — KEEPING the persisted identity (#104: nil means unknown, not forget)")
-                    lastPersistedSensorID = nil
-                }
-                return
-            }
-            SportLog.event("cgm", "G7 state: sensor \(storedID) is past its session end — honouring the clear")
-        }
-
+        guard (manager as AnyObject) === (cgmManager as AnyObject?) else { return }
+        var raw = manager.watchRawValue
+        raw[Self.builtFromKey] = cgmBuiltFrom
         cgmManagerState.wrappedValue = raw
-        if sensorID != lastPersistedSensorID {
-            lastPersistedSensorID = sensorID
-            SportLog.event("cgm", "G7 state persisted — sensor \(sensorID ?? "none") (survives relaunch/update)")
+    }
+
+    /// The phone's CGM configuration arrived. Build from it only when it differs from the one the
+    /// current manager was built from (a new sensor or code), so the watch keeps its own link.
+    func adoptCGMConfiguration(_ configuration: SharedDeviceConfiguration) {
+        if cgmManager != nil, let builtFrom = cgmBuiltFrom, (builtFrom as NSDictionary).isEqual(to: configuration.state) {
+            return
         }
+        guard let manager = watchCGMManager(adopting: configuration) else {
+            SportLog.event("cgm", "phone's CGM (\(configuration.managerIdentifier)) cannot be read from the watch — no CGM here")
+            return
+        }
+        SportLog.event("cgm", "CGM manager built from the phone's configuration (\(configuration.managerIdentifier))")
+        installCGMManager(manager, builtFrom: configuration.state)
+        cgmManagerDidUpdateState(manager)
+    }
+
+    /// The previous manager lets go of its device before the new one takes over.
+    func installCGMManager(_ manager: CGMManager, builtFrom: [String: Any]?) {
+        cgmLock.lock()
+        let previous = _cgmManager
+        _cgmManager = manager
+        cgmBuiltFrom = builtFrom
+        cgmLock.unlock()
+        if let previous {
+            previous.cgmManagerDelegate = nil
+            previous.delete {}
+        }
+        manager.delegateQueue = deviceQueue
+        manager.cgmManagerDelegate = self
+        seedLastDirectG7At(manager.cgmManagerStatus.lastCommunicationDate)
     }
 
     /// Constant, so a relaunch finds the stored credentials.
@@ -282,7 +291,7 @@ extension WatchLoopManager: CGMManagerDelegate {
     func deviceManager(_ manager: DeviceManager, logEventForDeviceIdentifier deviceIdentifier: String?, type: DeviceLogEntryType, message: String, completion: ((Error?) -> Void)?) {
         log.default("Device %{public}@: %{public}@", deviceIdentifier ?? "unknown", message)
 
-        let source = manager is G7CGMManager ? "cgm" : "pod-ble"
+        let source = manager is CGMManager ? "cgm" : "pod-ble"
 
         let line = "\(type) \(deviceIdentifier ?? "—"): \(message)"
         switch deviceLogThrottle.admit(line, at: now()) {

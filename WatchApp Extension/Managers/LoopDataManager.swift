@@ -150,7 +150,7 @@ extension LoopDataManager {
         dispatchPrecondition(condition: .onQueue(.main))
 
         podLoanNotePhoneRelayContext(context)
-        podLoanReadPairingCode(from: context)
+        podLoanAdoptCGMConfiguration(from: context)
 
         // During a loan the phone's context never replaces the watch's: `shouldReplace` compares only
         // glucoseDate with `>=`, so an equal-timestamp relay would discard the watch's prediction.

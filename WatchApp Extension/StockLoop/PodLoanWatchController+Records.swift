@@ -11,7 +11,6 @@ import HealthKit
 import LoopKit
 import LoopAlgorithm
 import LoopCore
-import OmnipodKit
 import WatchKit
 import os.log
 
@@ -28,8 +27,8 @@ extension PodLoanWatchController {
 
         // The pod's last-known total rides along for a mid-loan checkpoint; no read is made for it.
         var odometer: LoanOdometerSnapshot?
-        if let start = deliveredAtTakeover, let latest = pumpManager?.lentDeviceInsulinDelivered,
-           let asOf = pumpManager?.podLoanInsulinDeliveredAt {
+        if let start = deliveredAtTakeover, let reading = pumpOdometer?.deliveredUnits {
+            let latest = reading.units, asOf = reading.at
             odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest,
                                             freshenSucceeded: false, asOf: asOf)
         }

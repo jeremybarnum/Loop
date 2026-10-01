@@ -102,6 +102,7 @@
 		E9CE4D34237D89A408479D12 /* GlanceModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00E9C192B33D5FC41E45E7A9 /* GlanceModel.swift */; };
 		2F17426EF105437983CDF0BC /* NSBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42BE0808089545E7BE6AE359 /* NSBundle.swift */; };
 		335CB5BBEBED4922B20C0CEC /* StockLoopStack.swift in Sources */ = {isa = PBXBuildFile; fileRef = F23412C23E024F9A9399C435 /* StockLoopStack.swift */; };
+		C0D6128D55F7237079C42112 /* WatchDeviceManagers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD49ED34A3CE3A86BEFB048E /* WatchDeviceManagers.swift */; };
 		33644743F20B3706E3107FAC /* mood_synth.caf in Resources */ = {isa = PBXBuildFile; fileRef = BEC0BA802BE613F144AC3A70 /* mood_synth.caf */; };
 		37F9E89015084C8ABF4404FB /* LoanProtocolV2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1368A70B6E347BCB432DF4D /* LoanProtocolV2Tests.swift */; };
 		3BD58D425AE24815B134F3E1 /* LoanBooksHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF6006BAC6EA4034BFD67C0E /* LoanBooksHarnessTests.swift */; };
@@ -373,7 +374,6 @@
 		9960C6964DD51D81093FAD5D /* chime.caf in Resources */ = {isa = PBXBuildFile; fileRef = 3F7A1D72697082DC3A14587E /* chime.caf */; };
 		9A7CE028302D82A800A03F53 /* DeviceLogThrottleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE014302D82A800A03F53 /* DeviceLogThrottleTests.swift */; };
 		9A7CE029302D82A800A03F53 /* HandbackWedgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE015302D82A800A03F53 /* HandbackWedgeTests.swift */; };
-		9A7CE02B302D82A800A03F53 /* PodLoanEpochScopingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE017302D82A800A03F53 /* PodLoanEpochScopingTests.swift */; };
 		9A7CE02C302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE018302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift */; };
 		9A7CE02D302D82A800A03F53 /* PodLoanTimerSeamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE019302D82A800A03F53 /* PodLoanTimerSeamTests.swift */; };
 		9A7CE02E302D82A800A03F53 /* WatchAppTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE01A302D82A800A03F53 /* WatchAppTests.swift */; };
@@ -1303,7 +1303,6 @@
 		9A7CE002302D82A800A03F53 /* WatchAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WatchAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9A7CE014302D82A800A03F53 /* DeviceLogThrottleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceLogThrottleTests.swift; sourceTree = "<group>"; };
 		9A7CE015302D82A800A03F53 /* HandbackWedgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandbackWedgeTests.swift; sourceTree = "<group>"; };
-		9A7CE017302D82A800A03F53 /* PodLoanEpochScopingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanEpochScopingTests.swift; sourceTree = "<group>"; };
 		9A7CE018302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanTimerCharacterizationTests.swift; sourceTree = "<group>"; };
 		9A7CE019302D82A800A03F53 /* PodLoanTimerSeamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanTimerSeamTests.swift; sourceTree = "<group>"; };
 		9A7CE01A302D82A800A03F53 /* WatchAppTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAppTests.swift; sourceTree = "<group>"; };
@@ -1661,6 +1660,7 @@
 		F0ABB040AC55431083B36492 /* GlanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = GlanceView.swift; path = "WatchApp Extension/StockLoop/GlanceView.swift"; sourceTree = SOURCE_ROOT; };
 		00E9C192B33D5FC41E45E7A9 /* GlanceModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "GlanceModel.swift"; path = "WatchApp Extension/StockLoop/GlanceModel.swift"; sourceTree = SOURCE_ROOT; };
 		F23412C23E024F9A9399C435 /* StockLoopStack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StockLoopStack.swift; path = "WatchApp Extension/StockLoop/StockLoopStack.swift"; sourceTree = SOURCE_ROOT; };
+		AD49ED34A3CE3A86BEFB048E /* WatchDeviceManagers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchDeviceManagers.swift"; path = "WatchApp Extension/StockLoop/WatchDeviceManagers.swift"; sourceTree = SOURCE_ROOT; };
 		F3F9328E659A49159A47F646 /* WatchDoseEnactor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WatchDoseEnactor.swift; path = "WatchApp Extension/StockLoop/WatchDoseEnactor.swift"; sourceTree = SOURCE_ROOT; };
 		F520419E66CD453A809324D1 /* RuntimeStateLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RuntimeStateLog.swift; path = "WatchApp Extension/StockLoop/RuntimeStateLog.swift"; sourceTree = SOURCE_ROOT; };
 		F5D9C01727DABBE0002E48F6 /* tr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = tr; path = tr.lproj/Intents.strings; sourceTree = "<group>"; };
@@ -2630,6 +2630,7 @@
 				A113A845D5DDEEDA9A76D9AD /* PodLoanWatchController+Debug.swift */,
 				4D15E99F644E4E50A306CA01 /* StockLoopSession.swift */,
 				F23412C23E024F9A9399C435 /* StockLoopStack.swift */,
+				AD49ED34A3CE3A86BEFB048E /* WatchDeviceManagers.swift */,
 				D0861EE8E371426287E4542F /* LoanTransport.swift */,
 				8FF10EA3BB7642DAE19471F6 /* LoanMessages.swift */,
 				FBC4D5290F0F35E6B66B7227 /* LoanRecords.swift */,
@@ -2913,7 +2914,6 @@
 				9A7CE030302D82A800A03F53 /* LoanContextPrecedenceTests.swift */,
 				9A7CE014302D82A800A03F53 /* DeviceLogThrottleTests.swift */,
 				9A7CE015302D82A800A03F53 /* HandbackWedgeTests.swift */,
-				9A7CE017302D82A800A03F53 /* PodLoanEpochScopingTests.swift */,
 				9A7CE018302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift */,
 				9A7CE019302D82A800A03F53 /* PodLoanTimerSeamTests.swift */,
 				5E12EA01302D82A800A03F53 /* SeizeActivationTests.swift */,
@@ -4115,6 +4115,7 @@
 				2497B7839C12276E55320CFF /* PodLoanWatchController+Debug.swift in Sources */,
 				BC5C47547CCB49F9BA618108 /* StockLoopSession.swift in Sources */,
 				335CB5BBEBED4922B20C0CEC /* StockLoopStack.swift in Sources */,
+				C0D6128D55F7237079C42112 /* WatchDeviceManagers.swift in Sources */,
 				C1275DD62E808E2F0013B99D /* LoopWatchApp.swift in Sources */,
 				894F6DDD243C0A2300CCE676 /* CarbAmountLabel.swift in Sources */,
 				B455C7352BD14E30002B847E /* Comparable.swift in Sources */,
@@ -4396,7 +4397,6 @@
 				9A7CE031302D82A800A03F53 /* LoanContextPrecedenceTests.swift in Sources */,
 				9A7CE028302D82A800A03F53 /* DeviceLogThrottleTests.swift in Sources */,
 				9A7CE029302D82A800A03F53 /* HandbackWedgeTests.swift in Sources */,
-				9A7CE02B302D82A800A03F53 /* PodLoanEpochScopingTests.swift in Sources */,
 				9A7CE02C302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift in Sources */,
 				9A7CE02D302D82A800A03F53 /* PodLoanTimerSeamTests.swift in Sources */,
 				5E12EA02302D82A800A03F53 /* SeizeActivationTests.swift in Sources */,

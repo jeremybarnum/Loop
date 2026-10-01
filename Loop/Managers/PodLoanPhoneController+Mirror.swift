@@ -26,7 +26,7 @@ extension PodLoanPhoneController {
         guard state == .owner, !yieldingToInferredLoan else { return }
         // The yield, first contact for the silence watchdog, and the audit anchored on the pod's
         // total while it is still readable: one save.
-        let units = (deps.pumpManager() as? PumpConnectionLendable)?.lentDeviceInsulinDelivered
+        let units = (deps.pumpManager() as? PumpDeliveryOdometer)?.deliveredUnits?.units
         let asOf = deps.pumpManager()?.lastSync ?? deps.now()
         let now = deps.now()
         updateState {
@@ -44,7 +44,7 @@ extension PodLoanPhoneController {
         deps.setAutomaticDosingPaused(true)
 
         // Dosing authority and the radio go together.
-        (deps.pumpManager() as? PumpConnectionLendable)?.releaseConnection()
+        (deps.pumpManager() as? ExclusiveDeviceControl)?.releaseControl()
 
         // A settle window left open would escalate at +12 s and re-take the radio and the dosing gate.
         closeReclaimSettleWindow(reason: "yielding to an inferred loan — this phone is not reaching for the pod")
@@ -59,7 +59,7 @@ extension PodLoanPhoneController {
 
     /// Take the radio back; every route back to ownership must call it.
     func reclaimPodConnection() {
-        (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
+        (deps.pumpManager() as? ExclusiveDeviceControl)?.takeControl()
     }
 
     /// Does not re-take the radio or resume dosing; callers differ on both.

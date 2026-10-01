@@ -137,7 +137,7 @@ struct LoanDebugView: View {
 
                 Button("Reconnect sensor") {
                     SportLog.event("g7-ble", "*** USER RECONNECT *** dropping the G7 link and re-acquiring the same sensor")
-                    ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager.reconnectG7()
+                    (ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.loopManager.cgmManager as? G7CGMManager)?.reconnectG7()
                     lastAction = "sensor reconnect started"
                 }
 
@@ -166,7 +166,7 @@ struct LoanDebugView: View {
     private func tick() {
         session?.loanController.refreshDebugSnapshot()
         snapshot = session?.loanController.mirroredDebugSnapshot ?? snapshot
-        cgm = session.map { CGMHealth($0.stack.cgmManager) } ?? cgm
+        cgm = (session?.stack.loopManager.cgmManager as? G7CGMManager).map(CGMHealth.init) ?? cgm
 
         RuntimeStateLog.mark("debug.tick")
         session?.stack.loopManager.refreshGlanceData()

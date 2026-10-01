@@ -50,7 +50,7 @@ extension PodLoanPhoneController {
             os_log("Reclaim settle CEILING reached (%.0fs) without a verified round-trip — clearing anyway",
                    log: self.log, type: .error, Self.reclaimSettleTimeout)
 
-            let ble = (self.deps.pumpManager() as? PumpConnectionLendable)?.connectionDiagnostics()
+            let ble = (self.deps.pumpManager() as? ExclusiveDeviceControl)?.connectionDiagnostics()
             self.handbackDiag(self.epoch, String(
                 format: "settle CEILING at %.0fs — NO verified round-trip; clearing anyway · ble: %@",
                 Self.reclaimSettleTimeout, ble ?? "no diagnostics from the pump manager"))
@@ -70,7 +70,7 @@ extension PodLoanPhoneController {
     }
 
     /// Ends the window early, for a phone that has stopped trying to hold the pod. Left open, the
-    /// chase would escalate at +12 s and clear `podConnectionReleased`, the phone's dosing gate.
+    /// chase would escalate at +12 s and lift the release, the phone's dosing gate.
     func closeReclaimSettleWindow(reason: String) {
         guard reclaimStartedAt != nil else { return }
         handbackDiag(epoch, "settle window CLOSED early — \(reason)")
@@ -119,10 +119,10 @@ extension PodLoanPhoneController {
         // Once per settle, and only while the link has never come up.
         if reclaimLinkUpAt == nil, !reclaimEscalated,
            deps.now().timeIntervalSince(started) >= Self.reclaimEscalateAfter,
-           let lendable = deps.pumpManager() as? PumpConnectionLendable {
+           let control = deps.pumpManager() as? ExclusiveDeviceControl {
             reclaimEscalated = true
-            let bleBefore = lendable.connectionDiagnostics() ?? "none"
-            let outcome = lendable.escalateConnectionReclaim() ?? "the pump manager had nothing to escalate"
+            let bleBefore = control.connectionDiagnostics() ?? "none"
+            let outcome = control.escalateTakeControl() ?? "the pump manager had nothing to escalate"
             handbackDiag(epoch, String(format: "settle: link still down at +%.0fs — escalating: %@ · ble before: %@",
                                        deps.now().timeIntervalSince(started), outcome, bleBefore))
         }
@@ -141,9 +141,9 @@ extension PodLoanPhoneController {
             reclaimVerifyInFlight = true
             let read: (@escaping (Date?) -> Void) -> Void
             // Force a real read where offered: `ensureCurrentPumpData` alone can return a cached `lastSync`.
-            if let lendable = pump as? PumpConnectionLendable {
+            if let odometer = pump as? PumpDeliveryOdometer {
                 read = { done in
-                    lendable.refreshLentDeviceStatus { _ in pump.ensureCurrentPumpData { done($0) } }
+                    odometer.refreshDeliveredUnits { _ in pump.ensureCurrentPumpData { done($0) } }
                 }
             } else {
                 read = { done in pump.ensureCurrentPumpData { done($0) } }
@@ -196,7 +196,7 @@ extension PodLoanPhoneController {
         guard let pending = pendingHandbackAudit else { return }
         pendingHandbackAudit = nil
 
-        if let latest = (deps.pumpManager() as? PumpConnectionLendable)?.lentDeviceInsulinDelivered {
+        if let latest = (deps.pumpManager() as? PumpDeliveryOdometer)?.deliveredUnits?.units {
             let delivered = latest - pending.deliveredAtStart
             // Milli-units, so the band comparison is not decided by float error.
             let residual = ((delivered - pending.expected) * 1000).rounded() / 1000

@@ -11,7 +11,6 @@ import HealthKit
 import LoopKit
 import LoopCore
 import LoopAlgorithm
-import OmnipodKit
 @testable import WatchApp
 
 final class SeizeActivationTests: XCTestCase {
@@ -69,7 +68,7 @@ final class SeizeActivationTests: XCTestCase {
     private func fixtureDormant(issuedAt: Date, epoch: Int = 3, token: UUID = UUID(),
                                 completeSettings: Bool = false) -> DormantGrant {
         let grant = LoanGrant(epoch: epoch, expiresAt: issuedAt,
-                              pumpManagerRawState: Data([1, 2, 3]), podAddress: 0x1F0A2B3C,
+                              pumpConfiguration: Data([1, 2, 3]), podAddress: 0x1F0A2B3C,
                               therapySettingsRaw: completeSettings ? Self.completeTherapySettingsRaw() : Data([4, 5]),
                               settingsTimeZoneID: "GMT",
                               doseHistory: [],
@@ -130,7 +129,7 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertGreaterThan(rebuilt.expiresAt.timeIntervalSinceNow, 240,
                              "an hour-old credential must still enter the ladder with (almost) the full 5-minute budget")
         // Every other field carries verbatim.
-        XCTAssertEqual(rebuilt.pumpManagerRawState, dormant.grant.pumpManagerRawState)
+        XCTAssertEqual(rebuilt.pumpConfiguration, dormant.grant.pumpConfiguration)
         XCTAssertEqual(rebuilt.podAddress, dormant.grant.podAddress)
         XCTAssertEqual(rebuilt.therapySettingsRaw, dormant.grant.therapySettingsRaw)
         XCTAssertEqual(rebuilt.settingsTimeZoneID, dormant.grant.settingsTimeZoneID)
@@ -623,28 +622,5 @@ final class SeizeActivationTests: XCTestCase {
         let snap = controller.debugSnapshot()
         XCTAssertEqual(snap.phase, .requested)
         XCTAssertNil(snap.seizeOfferIssuedAt, "the new request withdrew the stale offer")
-    }
-
-    // MARK: - First contact with a new pod
-
-    /// Asks for the wrist only for an unmet pod; the wire `podAddress` is 0, the address is in the snapshot.
-    func testTheStartPageAsksForTheWristOnlyForAPodThisWatchHasNotMet() async throws {
-        let address: UInt32 = 0x17A6219A
-        PodLoanBleIdentifierCache.forget(podAddress: address)
-        defer { PodLoanBleIdentifierCache.forget(podAddress: address) }
-        let controller = await makeController()
-        XCTAssertFalse(controller.debugSnapshot().podFirstContactExpected, "no standing copy yet: no pod known, nothing said")
-
-        let envelope: [String: Any] = ["state": ["podState": ["address": address]]]
-        let raw = try PropertyListSerialization.data(fromPropertyList: envelope, format: .binary, options: 0)
-        let grant = LoanGrant(epoch: 3, expiresAt: Date(), pumpManagerRawState: raw, podAddress: 0,
-                              therapySettingsRaw: Data([4, 5]), settingsTimeZoneID: "GMT", doseHistory: [],
-                              therapySettingsSupplementRaw: nil)
-        controller.handleDormantGrant(DormantGrant(grant: grant, issuedAt: Date(), seizeToken: UUID()))
-        XCTAssertTrue(controller.debugSnapshot().podFirstContactExpected,
-                      "a pod with no saved handle has to be found, which needs the screen on")
-
-        PodLoanBleIdentifierCache.store("SAVED-HANDLE", forPodAddress: address)
-        XCTAssertFalse(controller.debugSnapshot().podFirstContactExpected, "a saved handle connects with the wrist down")
     }
 }

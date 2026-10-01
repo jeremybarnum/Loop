@@ -11,7 +11,6 @@ import HealthKit
 import LoopKit
 import LoopAlgorithm
 import LoopCore
-import OmnipodKit
 import WatchKit
 import os.log
 
@@ -56,12 +55,12 @@ extension PodLoanWatchController {
         }
 
         SportLog.event("loan", "RESUME: building the pump manager from saved state")
-        guard let manager = OmniPumpManager(rawState: savedState) else {
+        guard let manager = watchPumpManager(rawValue: savedState) else {
             pumpStateStore.wrappedValue = nil
             updateState { $0.grantedSettings = nil }
             phase = .recoveredDrain
             issueSessionEndedAlert()
-            SportLog.event("loan", "RESUME failed — saved pod state unreadable; falling back to a recovered drain")
+            SportLog.event("loan", "RESUME failed — saved pump state unreadable (or saved before it carried its manager's identifier); falling back to a recovered drain")
             return
         }
         SportLog.event("loan", "RESUME: pump manager built")

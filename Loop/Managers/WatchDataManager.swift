@@ -307,6 +307,7 @@ final class WatchDataManager: NSObject {
         dosingDecision.carbsOnBoard = carbsOnBoard
 
         context.cgmManagerState = self.deviceManager.cgmManager?.rawValue
+        podLoanShareCGMConfiguration(context)
 
         let settings = self.settingsManager.loopSettings
 

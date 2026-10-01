@@ -12,7 +12,6 @@ import HealthKit
 import LoopKit
 import LoopAlgorithm
 import LoopCore
-import OmnipodKit
 import WatchKit
 import os.log
 
@@ -163,12 +162,12 @@ extension PodLoanWatchController {
                 }
             }
             // Read the odometer only over a link already up; otherwise a read dials the pod.
-            if manager.isConnectionReady {
-                manager.refreshLentDeviceStatus { first in
-                    let delivered = manager.lentDeviceInsulinDelivered
+            if let odometer = manager as? PumpDeliveryOdometer, (manager as? ExclusiveDeviceControl)?.isControlReady == true {
+                odometer.refreshDeliveredUnits { first in
+                    let delivered = odometer.deliveredUnits?.units
                     // A total equal to the takeover reading is probably stale: read once more.
                     if first, delivered != nil, delivered == self.deliveredAtTakeover {
-                        manager.refreshLentDeviceStatus { second in finalize(second) }
+                        odometer.refreshDeliveredUnits { second in finalize(second) }
                     } else {
                         finalize(first)
                     }
@@ -187,9 +186,9 @@ extension PodLoanWatchController {
         // After a revoke's teardown, use the total captured before it.
         var odometer: LoanOdometerSnapshot?
         if let start = deliveredAtTakeover,
-           let latest = pumpManager?.lentDeviceInsulinDelivered ?? revokeCapturedDelivered {
+           let latest = pumpOdometer?.deliveredUnits?.units ?? revokeCapturedDelivered {
             odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest, freshenSucceeded: freshened,
-                                            asOf: pumpManager?.podLoanInsulinDeliveredAt ?? revokeCapturedDeliveredAt)
+                                            asOf: pumpOdometer?.deliveredUnits?.at ?? revokeCapturedDeliveredAt)
         }
         let offerEvents = journal.unackedEvents()
         let offer = HandbackOffer(
@@ -355,8 +354,8 @@ extension PodLoanWatchController {
         HandbackStuckAlert.disarm()
 
         // Capture the odometer before the teardown frees the pod for the phone.
-        revokeCapturedDelivered = pumpManager?.lentDeviceInsulinDelivered
-        revokeCapturedDeliveredAt = pumpManager?.podLoanInsulinDeliveredAt
+        revokeCapturedDelivered = pumpOdometer?.deliveredUnits?.units
+        revokeCapturedDeliveredAt = pumpOdometer?.deliveredUnits?.at
         loopManager.pumpManager = nil
         teardownPump()
         phase = .revoked
@@ -403,7 +402,7 @@ extension PodLoanWatchController {
             mode: currentMode(),
             lastDirectGlucoseAge: loopManager.latestGlucoseAge,
             lastEventSeq: journal.lastEventSeq,
-            podFault: pumpManager?.podLoanFaultDescription,
+            podFault: pumpFaultDescription,
             holdsPod: phase == .active,
             knowsGrant: true)
         sendMessage(.statusReport(report))
@@ -418,10 +417,10 @@ extension PodLoanWatchController {
     func currentPodStatus() -> LoanPodStatus {
         LoanPodStatus(
             timestamp: self.now(),
-            deliveredUnits: pumpManager?.lentDeviceInsulinDelivered,
+            deliveredUnits: pumpOdometer?.deliveredUnits?.units,
             reservoirLevel: nil,
             isSuspended: false,
-            faultCode: pumpManager?.podLoanFaultDescription)
+            faultCode: pumpFaultDescription)
     }
 
 }

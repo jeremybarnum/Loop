@@ -2,8 +2,9 @@
 //  PodLoanWatchController.swift
 //  WatchApp Extension
 //
-//  The watch half of the loan protocol: the state machine, grant intake into a stock
-//  OmniPumpManager, hand-back, revoke and the relaunch drain. Transport is injected (`send`).
+//  The watch half of the loan protocol: the state machine, grant intake into the pump manager
+//  the phone's exported configuration builds, hand-back, revoke and the relaunch drain.
+//  Transport is injected (`send`).
 //
 
 import Foundation
@@ -11,7 +12,6 @@ import HealthKit
 import LoopKit
 import LoopAlgorithm
 import LoopCore
-import OmnipodKit
 import WatchKit
 import os.log
 
@@ -106,8 +106,8 @@ final class PodLoanWatchController {
     /// Where state files live; nil in the app (Documents).
     let stateDirectory: URL?
 
-    /// The loaned pump manager's `rawState`, saved on every update as stock saves a pump manager;
-    /// beside an active phase it means the loan can resume.
+    /// The loaned pump manager's `managerIdentifier` and `state`, saved on every update as stock
+    /// saves a pump manager; beside an active phase it means the loan can resume.
     var pumpStateStore: PersistedProperty<PumpManager.RawStateValue>
 
     /// The stored seize credential, in its own file: large, and replaced whole by each refresh.
@@ -175,7 +175,16 @@ final class PodLoanWatchController {
     }
 
     /// Non-nil means this watch has the pod; only `teardownPump` clears it.
-    var pumpManager: OmniPumpManager?
+    var pumpManager: PumpManager?
+
+    /// Every pump the watch can be loaned has both (checked at the grant).
+    var pumpControl: ExclusiveDeviceControl? { pumpManager as? ExclusiveDeviceControl }
+    var pumpOdometer: PumpDeliveryOdometer? { pumpManager as? PumpDeliveryOdometer }
+
+    /// For the wire and the debug page; stock knows only that the pump is inoperable.
+    var pumpFaultDescription: String? {
+        pumpManager.flatMap { $0.isInoperable ? "inoperable" : nil }
+    }
 
     /// Takeover timings and the glance's bar are measured from it.
     var attemptStartedAt: Date?
@@ -227,15 +236,10 @@ final class PodLoanWatchController {
     /// Reported to the phone at the next opportunity.
     var pendingInterruptedTakeoverEpoch: Int?
 
-    /// Kept so a handle that never connected can be forgotten.
-    var takeoverCachedHandle: (address: UInt32, handle: String)?
-
     /// First contact must find the pod, which needs the screen on. Queue-confined.
     var takeoverFirstContact = false
     var takeoverPodReached = false
     var takeoverNudges = 0
-    /// From the latest standing copy or grant; read once from the stored copy.
-    lazy var currentPodAddress: UInt32? = storedDormantGrant().flatMap { Self.podAddress(in: $0.grant) }
     /// Seams: is the app on screen right now, and the tap itself.
     var isWatchAppActive: () -> Bool = { RuntimeStateLog.appStateName() == "active" }
     var playTakeoverNudge: () -> Void = { WKInterfaceDevice.current().play(.notification) }
@@ -308,7 +312,7 @@ final class PodLoanWatchController {
         stateStore.wrappedValue = _persisted.rawValue
     }
 
-    /// Saved pod state handed from `init` to `resumeIfNeeded`, which does the rebuild.
+    /// Saved pump state handed from `init` to `resumeIfNeeded`, which does the rebuild.
     var pendingResumeState: PumpManager.RawStateValue?
 
     /// Serialized with timers and the pump's callbacks.
@@ -387,8 +391,8 @@ final class PodLoanWatchController {
     /// Explicit BLE teardown so the pod advertises for the phone. Also resets the insulin book
     /// and wrist override, since WatchLoopManager outlives the loan.
     func teardownPump() {
-        SportLog.event("handback", "teardownPump: releasing BLE explicitly (see PODLOAN release log for the identifier)")
-        pumpManager?.releaseConnection()
+        SportLog.event("handback", "teardownPump: releasing control of the pump explicitly")
+        pumpControl?.releaseControl()
         pumpManager?.pumpManagerDelegate = nil
         pumpManager = nil
         pumpStateStore.wrappedValue = nil
