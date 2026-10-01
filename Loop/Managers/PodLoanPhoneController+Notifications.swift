@@ -20,13 +20,12 @@ extension PodLoanPhoneController {
         content.body = body
         content.sound = .default
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: repeats)
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
+        deps.addNotification(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
     }
 
     /// Removes pending and delivered: a reminder about a cleared condition is worse than none.
     func cancelNotification(id: String) {
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
+        deps.removeNotifications([id])
     }
 
     /// Once per stretch of version skew; the first message that decodes re-arms it.

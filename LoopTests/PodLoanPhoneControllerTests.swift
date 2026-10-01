@@ -97,6 +97,13 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// What `Dependencies.glucoseAlertSettings` hands the grant.
     var glucoseAlertSettings: Data?
 
+    /// Never reset: a controller's late log lines must not reach the host app's Documents either.
+    static let phoneLogDirectory: URL = {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneLogTests", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
     override func tearDown() {
         defaults.removePersistentDomain(forName: suiteName)
         try? FileManager.default.removeItem(at: stateDir)
@@ -106,6 +113,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     override func setUp() {
         super.setUp()
         // Every test gets fresh storage: its own defaults suite and state folder.
+        PhoneLog.directoryOverride = Self.phoneLogDirectory
         suiteName = "PodLoanPhoneControllerTests-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)!
         stateDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -240,7 +248,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             latestGlucoseDate: latestGlucose ?? { now() },   // by default the phone is beside the body: a reading just now
             now: now,
             defaults: defaults,
-            stateDirectory: stateDir
+            stateDirectory: stateDir,
+            addNotification: { _ in },
+            removeNotifications: { _ in }
         ))
     }
 

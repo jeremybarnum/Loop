@@ -1381,6 +1381,7 @@ private final class PhoneOverrideHarness {
     private let stateDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
 
     init(epoch: Int = 1) {
+        PhoneLog.directoryOverride = PodLoanPhoneControllerTests.phoneLogDirectory
         try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         // Persisted-state derivation is how this controller boots: write LOANED at `epoch` and
         // it comes up mid-loan, ready to receive the hand-back offer.
@@ -1409,7 +1410,9 @@ private final class PhoneOverrideHarness {
             doseHistory: { _, completion in completion([]) },
             issueNotice: { _, _ in },
             defaults: defaults,
-            stateDirectory: stateDir))
+            stateDirectory: stateDir,
+            addNotification: { _ in },
+            removeNotifications: { _ in }))
     }
 
     /// Delivers a final offer and waits deterministically via `queue.sync` round-trips.

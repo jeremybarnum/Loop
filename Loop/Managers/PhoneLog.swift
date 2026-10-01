@@ -46,8 +46,11 @@ enum PhoneLog {
         }
     }
 
+    /// Tests point the log at their own folder, which also skips the iCloud mirror.
+    static var directoryOverride: URL?
+
     private static var localURL: URL? {
-        guard let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
+        guard let dir = directoryOverride ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
         return dir.appendingPathComponent("g7phone-latest.log")
     }
 
@@ -79,6 +82,7 @@ enum PhoneLog {
     }
 
     private static func mirrorToICloud() {
+        guard directoryOverride == nil else { return }
         let fm = FileManager.default
         guard let local = localURL, fm.fileExists(atPath: local.path) else { return }
         guard let container = fm.url(forUbiquityContainerIdentifier: nil) else { return }

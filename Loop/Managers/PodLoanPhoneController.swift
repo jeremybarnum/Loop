@@ -136,6 +136,13 @@ final class PodLoanPhoneController {
         /// Storage seams for tests. A nil directory keeps each file in its app location.
         var defaults: UserDefaults = .standard
         var stateDirectory: URL? = nil
+
+        /// The scheduled reminders' notification centre; tests replace both so nothing reaches the app.
+        var addNotification: (UNNotificationRequest) -> Void = { UNUserNotificationCenter.current().add($0) }
+        var removeNotifications: ([String]) -> Void = { ids in
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids)
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids)
+        }
     }
 
     /// Book a placeholder bolus for unexplained insulin after a force reclaim.
