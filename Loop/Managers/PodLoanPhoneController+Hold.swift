@@ -47,12 +47,7 @@ extension PodLoanPhoneController {
 
     /// An audit describes one loan, so every path that ends a loan clears its anchors.
     func clearAuditAnchors() {
-        checkpointsThisLoan = 0
-        auditBase = nil
-        loanStartedAt = nil
-        deps.defaults.removeObject(forKey: Keys.loanStartedAt)
-        deps.defaults.removeObject(forKey: Keys.deliveredAtTakeover)
-        deps.defaults.removeObject(forKey: Keys.deliveredAtGrant)
+        updateState { $0.audit = .init() }
     }
 
     /// Judged by send time: a batch that sat in a queue renews nothing.

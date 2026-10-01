@@ -11,7 +11,7 @@ import LoopCore
 
 struct PodLoanPhoneState: RawRepresentable {
     /// Bumped when a group of legacy keys moves in, so each group migrates exactly once.
-    static let version = 2
+    static let version = 3
 
     /// When the watch last reported a cycle, so a relaunch is not read as silence.
     var holdRenewedAt: Date?
@@ -24,6 +24,39 @@ struct PodLoanPhoneState: RawRepresentable {
     /// Minted once and echoed by a watch that started alone: this phone's reunion credential.
     var seizeToken: UUID?
 
+    /// One loan's audit inputs; every path that ends a loan resets them together.
+    struct AuditAnchors {
+        /// Start of the audit window, and the floor for every expectation over it.
+        var loanStartedAt: Date?
+        /// The pod's total at the grant: the fallback origin.
+        var deliveredAtGrant: Double?
+        /// The total as the watch first read it: the preferred origin.
+        var deliveredAtTakeover: Double?
+        /// The running base, read back only in the epoch it was set under.
+        var base: PodLoanPhoneController.AuditBase?
+        var baseEpoch: Int?
+        var checkpoints = 0
+    }
+    var audit = AuditAnchors()
+
+    /// A force-reclaim verdict still owed; re-armed at launch.
+    struct ForceAudit: Equatable {
+        let epoch: Int
+        let deliveredAtStart: Double
+        let expected: Double
+        let loanMinutes: Double
+    }
+    var pendingForceAudit: ForceAudit?
+
+    /// The placeholder bolus for insulin a lost watch never reported.
+    struct GapBooking: Equatable {
+        let epoch: Int
+        let units: Double
+        let bookedAt: Date?
+        var deleteFailedAfterRecords = false
+    }
+    var gapBooking: GapBooking?
+
     init() {}
 
     init?(rawValue: [String: Any]) {
@@ -32,6 +65,18 @@ struct PodLoanPhoneState: RawRepresentable {
         watchSilenceWarningsIssued = rawValue["watchSilenceWarningsIssued"] as? Int ?? 0
         watchSupportsSeize = rawValue["watchSupportsSeize"] as? Bool ?? false
         seizeToken = (rawValue["seizeToken"] as? String).flatMap(UUID.init(uuidString:))
+        if let a = rawValue["audit"] as? [String: Any] {
+            audit.loanStartedAt = a["loanStartedAt"] as? Date
+            audit.deliveredAtGrant = a["deliveredAtGrant"] as? Double
+            audit.deliveredAtTakeover = a["deliveredAtTakeover"] as? Double
+            if let units = a["baseUnits"] as? Double, let asOf = a["baseAsOf"] as? Date {
+                audit.base = .init(units: units, asOf: asOf)
+            }
+            audit.baseEpoch = a["baseEpoch"] as? Int
+            audit.checkpoints = a["checkpoints"] as? Int ?? 0
+        }
+        pendingForceAudit = (rawValue["pendingForceAudit"] as? [String: Any]).flatMap(Self.forceAudit(from:))
+        gapBooking = (rawValue["gapBooking"] as? [String: Any]).flatMap(Self.gapBooking(from:))
     }
 
     var rawValue: [String: Any] {
@@ -40,12 +85,43 @@ struct PodLoanPhoneState: RawRepresentable {
         raw["seizeToken"] = seizeToken?.uuidString
         raw["holdRenewedAt"] = holdRenewedAt
         raw["holdLapseNoticedAt"] = holdLapseNoticedAt
+        var a: [String: Any] = ["checkpoints": audit.checkpoints]
+        a["loanStartedAt"] = audit.loanStartedAt
+        a["deliveredAtGrant"] = audit.deliveredAtGrant
+        a["deliveredAtTakeover"] = audit.deliveredAtTakeover
+        a["baseUnits"] = audit.base?.units
+        a["baseAsOf"] = audit.base?.asOf
+        a["baseEpoch"] = audit.baseEpoch
+        raw["audit"] = a
+        raw["pendingForceAudit"] = pendingForceAudit.map {
+            ["epoch": $0.epoch, "atStart": $0.deliveredAtStart, "expected": $0.expected, "loanMinutes": $0.loanMinutes]
+        }
+        raw["gapBooking"] = gapBooking.map {
+            var d: [String: Any] = ["epoch": $0.epoch, "units": $0.units, "deleteFailedAfterRecords": $0.deleteFailedAfterRecords]
+            d["bookedAt"] = $0.bookedAt?.timeIntervalSince1970
+            return d
+        }
         return raw
+    }
+
+    /// The dictionary shapes the legacy keys used, kept for the file.
+    static func forceAudit(from d: [String: Any]) -> ForceAudit? {
+        guard let e = d["epoch"] as? Int, let atStart = d["atStart"] as? Double,
+              let expected = d["expected"] as? Double, let minutes = d["loanMinutes"] as? Double else { return nil }
+        return ForceAudit(epoch: e, deliveredAtStart: atStart, expected: expected, loanMinutes: minutes)
+    }
+
+    static func gapBooking(from d: [String: Any]) -> GapBooking? {
+        guard let e = d["epoch"] as? Int, let units = d["units"] as? Double else { return nil }
+        return GapBooking(epoch: e, units: units, bookedAt: (d["bookedAt"] as? TimeInterval).map(Date.init(timeIntervalSince1970:)),
+                          deleteFailedAfterRecords: d["deleteFailedAfterRecords"] as? Bool ?? false)
     }
 
     /// Every key a group's fields came from, removed once the file holds them.
     static let legacyKeys = ["holdRenewedAt", "holdLapseNoticedAt", "watchSilenceWarningsIssued",
-                             "watchSupportsSeize", "dormantSeizeToken"]
+                             "watchSupportsSeize", "dormantSeizeToken",
+                             "loanStartedAt", "deliveredAtGrant", "deliveredAtTakeover", "auditBase",
+                             "pendingForceAudit", "gapBooking"]
         .map { "PodLoanPhoneController." + $0 }
 
     /// Reads, field for field, each group the saved file predates.
@@ -59,6 +135,19 @@ struct PodLoanPhoneState: RawRepresentable {
         if savedVersion < 2 {
             watchSupportsSeize = defaults.bool(forKey: key("watchSupportsSeize"))
             seizeToken = defaults.string(forKey: key("dormantSeizeToken")).flatMap(UUID.init(uuidString:))
+        }
+        if savedVersion < 3 {
+            audit.loanStartedAt = defaults.object(forKey: key("loanStartedAt")) as? Date
+            audit.deliveredAtGrant = defaults.object(forKey: key("deliveredAtGrant")) as? Double
+            audit.deliveredAtTakeover = defaults.object(forKey: key("deliveredAtTakeover")) as? Double
+            if let d = defaults.dictionary(forKey: key("auditBase")),
+               let units = d["units"] as? Double, let asOf = d["asOf"] as? Date {
+                audit.base = .init(units: units, asOf: asOf)
+                audit.baseEpoch = d["epoch"] as? Int
+                audit.checkpoints = d["count"] as? Int ?? 0
+            }
+            pendingForceAudit = defaults.dictionary(forKey: key("pendingForceAudit")).flatMap(Self.forceAudit(from:))
+            gapBooking = defaults.dictionary(forKey: key("gapBooking")).flatMap(Self.gapBooking(from:))
         }
     }
 }
@@ -86,6 +175,26 @@ extension PodLoanPhoneController {
         stateLock.lock()
         defer { stateLock.unlock() }
         return _persisted
+    }
+
+    /// Start of the current loan's audit window.
+    var loanStartedAt: Date? {
+        get { persisted.audit.loanStartedAt }
+        set { updateState { $0.audit.loanStartedAt = newValue } }
+    }
+
+    /// Tagged with the epoch it is set under, so a base can never be adopted by another loan.
+    var auditBase: AuditBase? {
+        get { persisted.audit.base }
+        set {
+            let owner = epoch
+            updateState { $0.audit.base = newValue; $0.audit.baseEpoch = owner }
+        }
+    }
+
+    var checkpointsThisLoan: Int {
+        get { persisted.audit.checkpoints }
+        set { updateState { $0.audit.checkpoints = newValue } }
     }
 
     /// Applies one change and writes the whole value once, before returning.

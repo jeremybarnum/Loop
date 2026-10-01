@@ -68,26 +68,9 @@ extension PodLoanPhoneController {
         static let pendingRevoke = "PodLoanPhoneController.pendingRevoke"
         /// The exactly-once record. Losing it would let a resend re-commit doses already booked.
         static let committedIDs = "PodLoanPhoneController.committedIDs"
-        /// Start of the current loan's audit window, and the floor for every expectation over it.
-        static let loanStartedAt = "PodLoanPhoneController.loanStartedAt"
-
-        /// The pod's total at the grant; the fallback audit origin.
-        static let deliveredAtGrant = "PodLoanPhoneController.deliveredAtGrant"
-
-        /// The total as the watch first read it; preferred. Cleared when a loan starts or is adopted.
-        static let deliveredAtTakeover = "PodLoanPhoneController.deliveredAtTakeover"
-
-        /// The standing placeholder for insulin a lost watch never accounted for.
-        static let gapBooking = "PodLoanPhoneController.gapBooking"
-
-        /// Only force-reclaim audits persist, so the verdict survives a relaunch.
-        static let pendingForceAudit = "PodLoanPhoneController.pendingForceAudit"
 
         /// Rolling diagnostic series. Nothing reads these back to change behaviour.
         static let residualHistory = "PodLoanPhoneController.residualHistory"
-
-        /// Where the audit window currently starts — stored with the epoch that owns it.
-        static let auditBase = "PodLoanPhoneController.auditBase"
 
         static let windowWorstHistory = "PodLoanPhoneController.windowResidualWorst"
 
@@ -320,8 +303,7 @@ extension PodLoanPhoneController {
         let anchor: (units: Double, asOf: Date)?
         if let base = auditBase {
             anchor = (base.units, base.asOf)
-        } else if let units = (deps.defaults.object(forKey: Keys.deliveredAtTakeover) as? Double)
-                            ?? (deps.defaults.object(forKey: Keys.deliveredAtGrant) as? Double) {
+        } else if let units = persisted.audit.deliveredAtTakeover ?? persisted.audit.deliveredAtGrant {
             anchor = (units, start)
         } else {
             anchor = nil
@@ -338,7 +320,7 @@ extension PodLoanPhoneController {
                                                       from: anchor.asOf, to: deps.now())
 
         // Whole-loan figure for the drift check only.
-        let takeoverUnits = deps.defaults.object(forKey: Keys.deliveredAtTakeover) as? Double
+        let takeoverUnits = persisted.audit.deliveredAtTakeover
         let wholeLoanExpected = takeoverUnits.map {
             _ in LoanReconciler.expectedInsulin(events: allEvents, schedule: schedule, from: start, to: deps.now())
         }

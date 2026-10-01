@@ -172,9 +172,7 @@ extension PodLoanPhoneController {
             guard let self = self else { return }
             self.queue.async {
                 if ok {
-                    self.deps.defaults.set(["epoch": epoch, "units": units,
-                                               "bookedAt": now.timeIntervalSince1970],
-                                              forKey: Keys.gapBooking)
+                    self.updateState { $0.gapBooking = .init(epoch: epoch, units: units, bookedAt: now) }
 
                     self.armPlaceholderReminders(units: units, bookedAt: now)
                     self.handbackDiag(epoch, String(format: "R37 gap BOOKED — %.2f U bolus @ reclaim (sync %@); retired if the watch returns", units, sync))
@@ -190,11 +188,11 @@ extension PodLoanPhoneController {
 
     /// Launch-time retry for a placeholder whose delete failed AFTER the real records landed.
     func retryPersistedGapDeleteIfAny() {
-        guard let gap = deps.defaults.dictionary(forKey: Keys.gapBooking),
-              let gapEpoch = gap["epoch"] as? Int, let booked = gap["units"] as? Double else { return }
+        guard let gap = persisted.gapBooking else { return }
+        let gapEpoch = gap.epoch, booked = gap.units
 
         // Retry only after a failed delete; a standing placeholder stays.
-        guard gap["deleteFailedAfterRecords"] as? Bool == true else {
+        guard gap.deleteFailedAfterRecords else {
             handbackDiag(gapEpoch, String(format: "R37 gap placeholder STANDS — %.2f U still unexplained; the watch never returned, so the booking is left in place", booked))
             return
         }
@@ -204,11 +202,8 @@ extension PodLoanPhoneController {
             guard let self = self else { return }
             self.queue.async {
                 if ok {
-                    self.deps.defaults.removeObject(forKey: Keys.gapBooking)
-
-                    if let bookedAt = (gap["bookedAt"] as? TimeInterval).map(Date.init(timeIntervalSince1970:)) {
-                        self.deps.insulinHistoryRewritten(bookedAt)
-                    }
+                    self.updateState { $0.gapBooking = nil }
+                    if let bookedAt = gap.bookedAt { self.deps.insulinHistoryRewritten(bookedAt) }
                     self.cancelPlaceholderReminders()
                     self.handbackDiag(gapEpoch, String(format: "R37 gap RETIRED on launch retry — %.2f U placeholder cleared", booked))
                 } else {
@@ -220,9 +215,8 @@ extension PodLoanPhoneController {
 
     /// Removes the placeholder after the real records are written, never before.
     func retireGapBookingIfExplained(offerEpoch: Int, dosesJustCommitted: [DoseEntry], carbsJustCommitted: Int) {
-        guard let gap = deps.defaults.dictionary(forKey: Keys.gapBooking),
-              let gapEpoch = gap["epoch"] as? Int, gapEpoch == offerEpoch,
-              let booked = gap["units"] as? Double else { return }
+        guard let gap = persisted.gapBooking, gap.epoch == offerEpoch else { return }
+        let gapEpoch = gap.epoch, booked = gap.units
         // An empty drain proves nothing.
         guard !dosesJustCommitted.isEmpty else { return }
 
@@ -235,11 +229,8 @@ extension PodLoanPhoneController {
             guard let self = self else { return }
             self.queue.async {
                 if ok {
-                    self.deps.defaults.removeObject(forKey: Keys.gapBooking)
-
-                    if let bookedAt = (gap["bookedAt"] as? TimeInterval).map(Date.init(timeIntervalSince1970:)) {
-                        self.deps.insulinHistoryRewritten(bookedAt)
-                    }
+                    self.updateState { $0.gapBooking = nil }
+                    if let bookedAt = gap.bookedAt { self.deps.insulinHistoryRewritten(bookedAt) }
                     self.handbackDiag(gapEpoch, String(format:
                         "R37 gap RETIRED — the watch returned with %d real dose(s): %.2f U bolus + %d rate record(s) (%.2f U gross programmed, pre-truncation) and %d carb(s); the %.2f U estimate is replaced by actual timing",
                         dosesJustCommitted.count, bolusUnits, rateCount, rateGross, carbsJustCommitted, booked))
@@ -249,9 +240,7 @@ extension PodLoanPhoneController {
                                           String(format: "The watch is back. Its records (%d doses, %d carbs) replaced the estimated %.2f U bolus — your IOB and COB now reflect actual timing.",
                                                  dosesJustCommitted.count, carbsJustCommitted, booked))
                 } else {
-                    var marked = gap
-                    marked["deleteFailedAfterRecords"] = true
-                    self.deps.defaults.set(marked, forKey: Keys.gapBooking)
+                    self.updateState { $0.gapBooking?.deleteFailedAfterRecords = true }
                     self.handbackDiag(gapEpoch, String(format:
                         "** R37 gap DELETE FAILED — the %.2f U placeholder AND the real records are both booked; IOB is over-counted until this retries **", booked))
                 }
