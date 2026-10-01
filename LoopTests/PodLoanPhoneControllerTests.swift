@@ -1609,16 +1609,19 @@ extension PodLoanPhoneControllerTests {
                           events: [realTail], tombstones: [], recovered: true)).transportDictionary())
 
         waitUntil(timeout: 5, "gap retired") { self.lock.lock(); defer { self.lock.unlock() }; return !self.deletedGapSyncs.isEmpty }
+        // The notice is sent after the delete returns, from the controller's queue.
+        // The urgent channel, not the quiet one: the recovered-records message rewrites IOB
+        // and COB, so it rides time-sensitive interruption.
+        waitUntil(timeout: 5, "the user is told their numbers changed, and why") {
+            self.lock.lock(); defer { self.lock.unlock() }
+            return self.urgentNotices.contains { $0.contains("Watch Records Recovered") }
+        }
 
         lock.lock()
         let deleted = deletedGapSyncs
-        // The urgent channel, not the quiet one: the recovered-records message rewrites IOB
-        // and COB, so it rides time-sensitive interruption.
-        let recovered = urgentNotices.contains { $0.contains("Watch Records Recovered") }
         lock.unlock()
 
         XCTAssertEqual(deleted, ["PODLOAN-ODOGAP-e\(grant.epoch)"], "the placeholder retires by its deterministic identity")
-        XCTAssertTrue(recovered, "the user is told their numbers changed, and why")
         waitUntil(timeout: 5, "state cleared") {
             controller.persisted.gapBooking == nil
         }
