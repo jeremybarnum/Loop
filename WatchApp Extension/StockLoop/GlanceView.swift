@@ -13,7 +13,6 @@ import WatchKit
 import HealthKit
 import LoopKit
 import LoopCore
-import G7SensorKit
 
 struct GlanceView: View {
     @ObservedObject var model: GlanceViewModel
