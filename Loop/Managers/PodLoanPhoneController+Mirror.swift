@@ -24,19 +24,20 @@ extension PodLoanPhoneController {
     /// Known gap: the phone's own running temp is not counted in the audit window opened here.
     func engageInferredLoanYield(evidence: String) {
         guard state == .owner, !yieldingToInferredLoan else { return }
-        yieldingToInferredLoan = true
-        // First contact: the silence watchdog counts from here.
-        holdRenewedAt = deps.now()
-        holdLapseNoticedAt = nil
-
-        // Anchor the audit on the pod's total while it is still readable.
-        if let units = (deps.pumpManager() as? PumpConnectionLendable)?.lentDeviceInsulinDelivered {
-            let asOf = deps.pumpManager()?.lastSync ?? deps.now()
-            let owner = epoch
-            updateState {
+        // The yield, first contact for the silence watchdog, and the audit anchored on the pod's
+        // total while it is still readable: one save.
+        let units = (deps.pumpManager() as? PumpConnectionLendable)?.lentDeviceInsulinDelivered
+        let asOf = deps.pumpManager()?.lastSync ?? deps.now()
+        let now = deps.now()
+        updateState {
+            $0.yieldingToInferredLoan = true
+            $0.holdRenewedAt = now
+            $0.holdLapseNoticedAt = nil
+            $0.watchSilenceWarningsIssued = 0
+            if let units {
                 $0.audit.checkpoints = 0
                 $0.audit.base = AuditBase(units: units, asOf: asOf)
-                $0.audit.baseEpoch = owner
+                $0.audit.baseEpoch = $0.epoch
                 $0.audit.loanStartedAt = asOf
             }
         }

@@ -149,11 +149,6 @@ extension PodLoanPhoneController {
 
         // This loan's origin; the previous loan's takeover reading is cleared with it.
         let deliveredAtGrant = lendable.lentDeviceInsulinDelivered
-        updateState {
-            $0.audit.deliveredAtGrant = deliveredAtGrant
-            $0.audit.deliveredAtTakeover = nil
-            $0.audit.checkpoints = 0
-        }
         worstWindowThisLoan = 0
 
         let releaseEpoch = epoch + 1
@@ -170,22 +165,27 @@ extension PodLoanPhoneController {
             PhoneLog.flush()
         }
 
-        // New epoch, empty dedup state. The base is saved after the epoch, which tags it.
-        epoch += 1
-        auditBase = deliveredAtGrant.map { AuditBase(units: $0, asOf: handedOverAt) }
-        state = .grantOffered
-        committedCursor = 0
-        committedIDs = []
-        persistCommittedIDs()
+        // New epoch, empty dedup state, this loan's anchors: one save, before the grant goes out.
+        let previous = state
+        updateState {
+            $0.epoch += 1
+            $0.phase = .grantOffered
+            $0.committedCursor = 0
+            $0.committedIDs = []
+            $0.audit = .init(loanStartedAt: handedOverAt, deliveredAtGrant: deliveredAtGrant,
+                             base: deliveredAtGrant.map { AuditBase(units: $0, asOf: handedOverAt) })
+            $0.audit.baseEpoch = $0.epoch
+            $0.holdRenewedAt = handedOverAt
+            $0.holdLapseNoticedAt = nil
+            $0.watchSilenceWarningsIssued = 0
+        }
+        stateDidChange(from: previous)
 
         pendingForceReclaimReason = nil
         coalescedOffers.removeAll()
         staged = [:]
         stagedTombstones = []
         persistStaged()
-        loanStartedAt = handedOverAt
-        holdRenewedAt = handedOverAt
-        holdLapseNoticedAt = nil
 
         let grantEpoch = epoch
 

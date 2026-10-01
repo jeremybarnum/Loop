@@ -81,22 +81,23 @@ extension PodLoanPhoneController {
             handbackDiag(offer.epoch, "[seize] RETRO-ACK — offer for a SEIZED loan (token …\(String(token.uuidString.suffix(8)))); adopting epoch \(epoch)→\(offer.epoch) as .loaned, reconciling on the normal path")
 
             clearInferredLoanYield(reason: "retro-ack — the inferred loan is now the adopted loan e\(offer.epoch)")
-            epoch = offer.epoch
-            state = .loaned
-            holdRenewedAt = offer.handedBackAt
-            holdLapseNoticedAt = nil
-
-            updateState {
-                $0.audit.base = nil
-                $0.audit.checkpoints = 0
-                $0.audit.deliveredAtTakeover = nil
-            }
-            worstWindowThisLoan = 0
-
             // Anchor the adopted loan at its earliest record, at most six hours back.
             let anchor = max(offer.events.map(\.record.startDate).min() ?? offer.handedBackAt,
                              deps.now().addingTimeInterval(-.hours(6)))
-            loanStartedAt = anchor
+            let previous = state
+            updateState {
+                $0.epoch = offer.epoch
+                $0.phase = .loaned
+                $0.holdRenewedAt = offer.handedBackAt
+                $0.holdLapseNoticedAt = nil
+                $0.watchSilenceWarningsIssued = 0
+                $0.audit.base = nil
+                $0.audit.checkpoints = 0
+                $0.audit.deliveredAtTakeover = nil
+                $0.audit.loanStartedAt = anchor
+            }
+            stateDidChange(from: previous)
+            worstWindowThisLoan = 0
         }
 
         // An offer ahead of this phone's epoch cannot be committed.
@@ -296,9 +297,11 @@ extension PodLoanPhoneController {
 
                         let newCursor = events.map(\.seq).max() ?? self.committedCursor
                         if !isStale {
-                            self.committedCursor = max(self.committedCursor, newCursor)
-                            self.committedIDs.formUnion(committable.map(\.id))
-                            self.persistCommittedIDs()
+                            // Saved before the ack: a relaunch must never re-commit (carbs have no identity).
+                            self.updateState {
+                                $0.committedCursor = max($0.committedCursor, newCursor)
+                                $0.committedIDs.formUnion(committable.map(\.id))
+                            }
                             // The ack, and only now that the store has it.
                             self.sendMessage(.handbackAck(HandbackAck(epoch: self.epoch, committedCursor: self.committedCursor)))
                             self.handbackDiag(self.epoch, String(format: "write DONE %.0fms → ACK cursor %d", self.deps.now().timeIntervalSince(writeStart) * 1000, self.committedCursor))
