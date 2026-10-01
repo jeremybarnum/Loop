@@ -148,13 +148,11 @@ extension PodLoanPhoneController {
                 let handedOverAt = deps.now()
 
         // This loan's origin; the previous loan's takeover reading is cleared with it.
-        if let delivered = lendable.lentDeviceInsulinDelivered {
+        let deliveredAtGrant = lendable.lentDeviceInsulinDelivered
+        if let delivered = deliveredAtGrant {
             deps.defaults.set(delivered, forKey: Keys.deliveredAtGrant)
-
-            auditBase = AuditBase(units: delivered, asOf: handedOverAt)
         } else {
             deps.defaults.removeObject(forKey: Keys.deliveredAtGrant)
-            auditBase = nil
         }
         checkpointsThisLoan = 0
         worstWindowThisLoan = 0
@@ -175,8 +173,9 @@ extension PodLoanPhoneController {
             PhoneLog.flush()
         }
 
-        // New epoch, empty dedup state.
+        // New epoch, empty dedup state. The base is saved after the epoch, which tags it.
         epoch += 1
+        auditBase = deliveredAtGrant.map { AuditBase(units: $0, asOf: handedOverAt) }
         state = .grantOffered
         committedCursor = 0
         committedIDs = []
