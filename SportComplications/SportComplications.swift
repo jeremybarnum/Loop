@@ -53,10 +53,8 @@ struct SportComplicationView: View {
         case .accessoryCorner:
             // The face curves a corner's LABEL along the bezel but not its content (wrist,
             // 2026-09-30: widgetCurvesContent rendered flat on the Utility face). So the whole
-            // value rides the label, and the tip carries a symbol.
-            Image(systemName: cornerSymbol)
-                .font(.system(size: 18, weight: .semibold))
-                .widgetAccentable()
+            // value rides the label and the tip stays empty — no symbol needed.
+            Color.clear
                 .widgetLabel { Text(snapshot.curved(kind, at: entry.date)) }
         case .accessoryCircular:
             ZStack {
@@ -90,15 +88,6 @@ struct SportComplicationView: View {
         case .cob: return snapshot.cobText(at: d) ?? SportComplicationSnapshot.dash
         case .eventual: return snapshot.eventualText(at: d) ?? SportComplicationSnapshot.dash
         case .glucoseToEventual: return snapshot.currentText(at: d) ?? SportComplicationSnapshot.dash
-        }
-    }
-
-    private var cornerSymbol: String {
-        switch kind {
-        case .iob: return "syringe"
-        case .cob: return "fork.knife"
-        case .eventual: return "arrow.right"
-        case .glucoseToEventual: return "drop.fill"
         }
     }
 
