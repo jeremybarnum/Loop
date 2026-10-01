@@ -136,6 +136,24 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertEqual((decoded.state["opaque"] as? [String: Any])?["nested"] as? Data, Data([9]))
     }
 
+    /// The glucose alert settings ride the grant; a grant from an older phone has none.
+    func testGrantGlucoseAlertSettingsRoundTripAndAreOptional() throws {
+        var profile = GlucoseAlertProfile.makePrimary()
+        profile.configuration.lowThresholdMgDL = 75
+        let settings = GlucoseAlertSettings(profiles: [profile], activeProfileID: profile.id,
+                                            cgmProvidesOwnAlerts: false, loopAlertsOverrideForOwnAlertingCGM: false)
+        let grant = LoanGrant(epoch: 4, expiresAt: Date(), pumpConfiguration: Data([1]), podAddress: 0,
+                              therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC", doseHistory: [],
+                              glucoseAlertSettings: settings.encoded)
+        guard case .grant(let received) = try roundTrip(.grant(grant)) else { return XCTFail("not a grant") }
+        XCTAssertEqual(GlucoseAlertSettings(encoded: received.glucoseAlertSettings), settings)
+
+        let older = LoanGrant(epoch: 4, expiresAt: Date(), pumpConfiguration: Data([1]), podAddress: 0,
+                              therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC", doseHistory: [])
+        guard case .grant(let fromOlder) = try roundTrip(.grant(older)) else { return XCTFail("not a grant") }
+        XCTAssertNil(fromOlder.glucoseAlertSettings)
+    }
+
     func testAGrantWithoutAConfigurationDecodesToNil() {
         let grant = LoanGrant(epoch: 4, expiresAt: Date(), pumpConfiguration: Data([1, 2, 3]), podAddress: 0,
                               therapySettingsRaw: Data(), settingsTimeZoneID: "UTC", doseHistory: [])

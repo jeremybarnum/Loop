@@ -403,6 +403,7 @@ final class PodLoanWatchController {
         Task { await loopManager.resetInsulinBook(reason: "teardown") }
 
         loopManager.applyWristOverride(nil)
+        Task { @MainActor in loopManager.clearGlucoseAlerts() }
     }
 
     /// Raised when a request times out with a credential stored.

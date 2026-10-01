@@ -58,7 +58,7 @@ extension WatchLoopManager: CGMManagerDelegate {
     }
 
     /// Stock `processCGMReadingResult` plus a cross-device dedup, a source stamp and a post-write
-    /// check; no staleness monitor or glucose alerts.
+    /// check; no staleness monitor. Glucose alerts see every delivered reading, as stock's do.
     private func processCGMReadingResult(_ manager: CGMManager, readingResult: CGMReadingResult, completion: @escaping () -> Void) {
         switch readingResult {
         case .newData(let rawValues):
@@ -77,6 +77,7 @@ extension WatchLoopManager: CGMManagerDelegate {
 
             // Stamped on arrival, since the phone's relay of the same reading usually lands first.
             if deliveredCount > 0 { self.noteGlucoseSource(directG7: true) }
+            if !values.isEmpty { self.evaluateGlucoseAlerts(values) }
 
             SportLog.event("glucose",
                 "INGEST src=direct-G7 kept=\(kept.count)/\(deliveredCount) · latest \(latestDesc)\(batchTag)")

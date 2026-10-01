@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		01414522FC033F2B7A9B223A /* crying.caf in Resources */ = {isa = PBXBuildFile; fileRef = 85203550670F2E9BE92F27D8 /* crying.caf */; };
 		0514DEEA3C0A404FBA775CD7 /* SettingsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CB27CFCF9F0424FBB930CFF /* SettingsProvider.swift */; };
+		B20CD77F806353E80916E596 /* GlucoseAlertManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9A47B0275B13A9543390BC6 /* GlucoseAlertManager.swift */; };
+		D1C318442145F5A2652A5DD6 /* GlucoseAlertManager+Sharing.swift in Sources */ = {isa = PBXBuildFile; fileRef = C71A6661AA828EAFD63C8F08 /* GlucoseAlertManager+Sharing.swift */; };
 		0580A71C73134CBC9DE309C5 /* LoopStallWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8B06DC011B54C348CC2A48F /* LoopStallWatchdog.swift */; };
 		0929161C5DEB4DFB9F0826AE /* SettingsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A28F30399B460CABF4EDD2 /* SettingsProvider.swift */; };
 		0A02E77AD7536C322933D49B /* minimal.caf in Resources */ = {isa = PBXBuildFile; fileRef = 74145BE3C46270883D295A1F /* minimal.caf */; };
@@ -224,6 +226,8 @@
 		4DDC23AB11E8E215F41D2E42 /* WatchLoopManager+Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9198C65DD7145352022F9854 /* WatchLoopManager+Diagnostics.swift */; };
 		7BE5EC4CA7BFBB16E8018091 /* WatchLoopManager+Display.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5744C796822627F1C74D802F /* WatchLoopManager+Display.swift */; };
 		C5247AB8EBF91BAC440F95DC /* WatchLoopManager+Glucose.swift in Sources */ = {isa = PBXBuildFile; fileRef = C286C2D1E18B35177E020E34 /* WatchLoopManager+Glucose.swift */; };
+		99A92794C3DBB3888B340AE6 /* GlucoseAlertManager+Watch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 446048F44BAE9C66B12394F4 /* GlucoseAlertManager+Watch.swift */; };
+		A9DE3D1E90432124BB5738B2 /* WatchLoopManager+GlucoseAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC6E574D826158B33EE53EF6 /* WatchLoopManager+GlucoseAlerts.swift */; };
 		3DAF0D06E678E7616137C84A /* WatchLoopManager+Dosing.swift in Sources */ = {isa = PBXBuildFile; fileRef = F89D20C8E12BA79EEB440570 /* WatchLoopManager+Dosing.swift */; };
 		344ABCF8A638888D8C0AC47B /* WatchLoopManager+Cycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4975B7BB91A91CB21F89ED6 /* WatchLoopManager+Cycle.swift */; };
 		4F08DE8F1E7BB871006741EA /* CollectionType+Loop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F08DE8E1E7BB871006741EA /* CollectionType+Loop.swift */; };
@@ -379,6 +383,7 @@
 		9A7CE02E302D82A800A03F53 /* WatchAppTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE01A302D82A800A03F53 /* WatchAppTests.swift */; };
 		9A7CE02F302D82A800A03F53 /* WatchdogArmingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE01B302D82A800A03F53 /* WatchdogArmingTests.swift */; };
 		18606676A16D24BF383CCCF8 /* WatchAlertPresenterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29791F50B72A7F84FE807E1C /* WatchAlertPresenterTests.swift */; };
+		5FDDEC8709A17CE196A2F202 /* WristGlucoseAlertTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94E05C050AF4C0CC0B314040 /* WristGlucoseAlertTests.swift */; };
 		9A7CE031302D82A800A03F53 /* LoanContextPrecedenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE030302D82A800A03F53 /* LoanContextPrecedenceTests.swift */; };
 		9A7CE061302D82A800A03F53 /* WristAlertScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE060302D82A800A03F53 /* WristAlertScheduler.swift */; };
 		C4811779E54B6B2608BF2998 /* WatchAlertPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B579C199D790911890AE3F3A /* WatchAlertPresenter.swift */; };
@@ -669,6 +674,7 @@
 		2497B7839C12276E55320CFF /* PodLoanWatchController+Debug.swift in Sources */ = {isa = PBXBuildFile; fileRef = A113A845D5DDEEDA9A76D9AD /* PodLoanWatchController+Debug.swift */; };
 		C9A47B0180AAB1FC572D3EFE /* CriticalAlertAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9A47B0175B13A9543390BC5 /* CriticalAlertAudioPlayer.swift */; };
 		C9A47B0280AAB1FC572D3EFF /* GlucoseAlertManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9A47B0275B13A9543390BC6 /* GlucoseAlertManager.swift */; };
+		0CC007AD18915A53154250B6 /* GlucoseAlertManager+Sharing.swift in Sources */ = {isa = PBXBuildFile; fileRef = C71A6661AA828EAFD63C8F08 /* GlucoseAlertManager+Sharing.swift */; };
 		C9A47B0380AAB1FC572D3F00 /* GlucoseAlertSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9A47B0375B13A9543390BC7 /* GlucoseAlertSettingsView.swift */; };
 		C9A47B0480AAB1FC572D3F01 /* critical.caf in Resources */ = {isa = PBXBuildFile; fileRef = C9A47B0475B13A9543390BC8 /* critical.caf */; };
 		C9SCENED0000000000000001 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9SCENED0000000000000002 /* SceneDelegate.swift */; };
@@ -1181,6 +1187,8 @@
 		9198C65DD7145352022F9854 /* WatchLoopManager+Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchLoopManager+Diagnostics.swift"; path = "WatchApp Extension/StockLoop/WatchLoopManager+Diagnostics.swift"; sourceTree = SOURCE_ROOT; };
 		5744C796822627F1C74D802F /* WatchLoopManager+Display.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchLoopManager+Display.swift"; path = "WatchApp Extension/StockLoop/WatchLoopManager+Display.swift"; sourceTree = SOURCE_ROOT; };
 		C286C2D1E18B35177E020E34 /* WatchLoopManager+Glucose.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchLoopManager+Glucose.swift"; path = "WatchApp Extension/StockLoop/WatchLoopManager+Glucose.swift"; sourceTree = SOURCE_ROOT; };
+		446048F44BAE9C66B12394F4 /* GlucoseAlertManager+Watch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "GlucoseAlertManager+Watch.swift"; path = "WatchApp Extension/StockLoop/GlucoseAlertManager+Watch.swift"; sourceTree = SOURCE_ROOT; };
+		DC6E574D826158B33EE53EF6 /* WatchLoopManager+GlucoseAlerts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchLoopManager+GlucoseAlerts.swift"; path = "WatchApp Extension/StockLoop/WatchLoopManager+GlucoseAlerts.swift"; sourceTree = SOURCE_ROOT; };
 		F89D20C8E12BA79EEB440570 /* WatchLoopManager+Dosing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchLoopManager+Dosing.swift"; path = "WatchApp Extension/StockLoop/WatchLoopManager+Dosing.swift"; sourceTree = SOURCE_ROOT; };
 		C4975B7BB91A91CB21F89ED6 /* WatchLoopManager+Cycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchLoopManager+Cycle.swift"; path = "WatchApp Extension/StockLoop/WatchLoopManager+Cycle.swift"; sourceTree = SOURCE_ROOT; };
 		7C9DDCE80C384964BDDF1C8B /* PhoneLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PhoneLog.swift; path = Loop/Managers/PhoneLog.swift; sourceTree = SOURCE_ROOT; };
@@ -1308,6 +1316,7 @@
 		9A7CE01A302D82A800A03F53 /* WatchAppTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAppTests.swift; sourceTree = "<group>"; };
 		9A7CE01B302D82A800A03F53 /* WatchdogArmingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchdogArmingTests.swift; sourceTree = "<group>"; };
 		29791F50B72A7F84FE807E1C /* WatchAlertPresenterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAlertPresenterTests.swift; sourceTree = "<group>"; };
+		94E05C050AF4C0CC0B314040 /* WristGlucoseAlertTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WristGlucoseAlertTests.swift"; sourceTree = "<group>"; };
 		9A7CE030302D82A800A03F53 /* LoanContextPrecedenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanContextPrecedenceTests.swift; sourceTree = "<group>"; };
 		9A7CE060302D82A800A03F53 /* WristAlertScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WristAlertScheduler.swift; path = "WatchApp Extension/StockLoop/WristAlertScheduler.swift"; sourceTree = SOURCE_ROOT; };
 		B579C199D790911890AE3F3A /* WatchAlertPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchAlertPresenter.swift"; path = "WatchApp Extension/StockLoop/WatchAlertPresenter.swift"; sourceTree = SOURCE_ROOT; };
@@ -1594,6 +1603,7 @@
 		C940C6F431E6435B971D98B2 /* SportLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SportLog.swift; path = "WatchApp Extension/StockLoop/SportLog.swift"; sourceTree = SOURCE_ROOT; };
 		C9A47B0175B13A9543390BC5 /* CriticalAlertAudioPlayer.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = CriticalAlertAudioPlayer.swift; sourceTree = "<group>"; };
 		C9A47B0275B13A9543390BC6 /* GlucoseAlertManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = GlucoseAlertManager.swift; sourceTree = "<group>"; };
+		C71A6661AA828EAFD63C8F08 /* GlucoseAlertManager+Sharing.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = "GlucoseAlertManager+Sharing.swift"; sourceTree = "<group>"; };
 		C9A47B0375B13A9543390BC7 /* GlucoseAlertSettingsView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = GlucoseAlertSettingsView.swift; sourceTree = "<group>"; };
 		C9A47B0475B13A9543390BC8 /* critical.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop/Resources/Sounds/critical.caf; sourceTree = SOURCE_ROOT; };
 		C9EA3F48338B49BD9C6BD0F9 /* urgent_low.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop/Resources/Sounds/urgent_low.caf; sourceTree = SOURCE_ROOT; };
@@ -1827,6 +1837,7 @@
 				C9A47B0175B13A9543390BC5 /* CriticalAlertAudioPlayer.swift */,
 				C1A1A00001000000000000A2 /* CriticalAlertAlarmScheduler.swift */,
 				C9A47B0275B13A9543390BC6 /* GlucoseAlertManager.swift */,
+				C71A6661AA828EAFD63C8F08 /* GlucoseAlertManager+Sharing.swift */,
 				1D05219C2469F1F5000EBBDE /* AlertStore.swift */,
 				1D080CBB2473214A00356610 /* AlertStore.xcdatamodeld */,
 				1DA649A8244126DA00F61E75 /* InAppModalAlertScheduler.swift */,
@@ -2606,6 +2617,8 @@
 				9198C65DD7145352022F9854 /* WatchLoopManager+Diagnostics.swift */,
 				5744C796822627F1C74D802F /* WatchLoopManager+Display.swift */,
 				C286C2D1E18B35177E020E34 /* WatchLoopManager+Glucose.swift */,
+				446048F44BAE9C66B12394F4 /* GlucoseAlertManager+Watch.swift */,
+				DC6E574D826158B33EE53EF6 /* WatchLoopManager+GlucoseAlerts.swift */,
 				F89D20C8E12BA79EEB440570 /* WatchLoopManager+Dosing.swift */,
 				C4975B7BB91A91CB21F89ED6 /* WatchLoopManager+Cycle.swift */,
 				C940C6F431E6435B971D98B2 /* SportLog.swift */,
@@ -2927,6 +2940,7 @@
 				BB7CE080302D82A800A03F53 /* InsulinBookTests.swift */,
 				9A7CE01B302D82A800A03F53 /* WatchdogArmingTests.swift */,
 				29791F50B72A7F84FE807E1C /* WatchAlertPresenterTests.swift */,
+				94E05C050AF4C0CC0B314040 /* WristGlucoseAlertTests.swift */,
 			);
 			path = WatchAppTests;
 			sourceTree = "<group>";
@@ -3906,6 +3920,7 @@
 				C9A47B0180AAB1FC572D3EFE /* CriticalAlertAudioPlayer.swift in Sources */,
 				C1A1A00001000000000000A1 /* CriticalAlertAlarmScheduler.swift in Sources */,
 				C9A47B0280AAB1FC572D3EFF /* GlucoseAlertManager.swift in Sources */,
+				0CC007AD18915A53154250B6 /* GlucoseAlertManager+Sharing.swift in Sources */,
 				43C0944A1CACCC73001F6403 /* NotificationManager.swift in Sources */,
 				149A28E42A8A63A700052EDF /* FavoriteFoodDetailView.swift in Sources */,
 				1DDE274024AEA4F200796622 /* NotificationsCriticalAlertPermissionsView.swift in Sources */,
@@ -4067,6 +4082,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B20CD77F806353E80916E596 /* GlucoseAlertManager.swift in Sources */,
+				D1C318442145F5A2652A5DD6 /* GlucoseAlertManager+Sharing.swift in Sources */,
 				DDBD0001000000000000BD01 /* BuildDetails.swift in Sources */,
 				8C844DFDB7274EB6A6B0A09E /* LoanEventJournal.swift in Sources */,
 				D4E5F6A7B8C9D0E1F2A3B4C5 /* G7SilenceHint.swift in Sources */,
@@ -4090,6 +4107,8 @@
 				4DDC23AB11E8E215F41D2E42 /* WatchLoopManager+Diagnostics.swift in Sources */,
 				7BE5EC4CA7BFBB16E8018091 /* WatchLoopManager+Display.swift in Sources */,
 				C5247AB8EBF91BAC440F95DC /* WatchLoopManager+Glucose.swift in Sources */,
+				99A92794C3DBB3888B340AE6 /* GlucoseAlertManager+Watch.swift in Sources */,
+				A9DE3D1E90432124BB5738B2 /* WatchLoopManager+GlucoseAlerts.swift in Sources */,
 				3DAF0D06E678E7616137C84A /* WatchLoopManager+Dosing.swift in Sources */,
 				344ABCF8A638888D8C0AC47B /* WatchLoopManager+Cycle.swift in Sources */,
 				F06FDE1F67AF4011937B1529 /* SportLog.swift in Sources */,
@@ -4410,6 +4429,7 @@
 				BB7CE081302D82A800A03F53 /* InsulinBookTests.swift in Sources */,
 				9A7CE02F302D82A800A03F53 /* WatchdogArmingTests.swift in Sources */,
 				18606676A16D24BF383CCCF8 /* WatchAlertPresenterTests.swift in Sources */,
+				5FDDEC8709A17CE196A2F202 /* WristGlucoseAlertTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -199,6 +199,9 @@ extension WatchDataManager {
                     })
                 }
             },
+            glucoseAlertSettings: { [weak self] completion in
+                Task { @MainActor in completion(self?.deviceManager.glucoseAlertManager.sharedSettings.encoded) }
+            },
             issueNotice: { [weak self] title, body in
                 self?.log.error("PodLoan notice: %{public}@ - %{public}@", title, body)
                 let content = UNMutableNotificationContent()

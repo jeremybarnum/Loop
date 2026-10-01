@@ -424,9 +424,11 @@ extension PodLoanWatchController {
             $0.grantedSettings = .init(therapySettingsRaw: grant.therapySettingsRaw,
                                        supplementRaw: grant.therapySettingsSupplementRaw,
                                        supportsInterimHandback: grant.supportsInterimHandback ?? false,
-                                       supportsOverrideRecords: grant.supportsOverrideRecords ?? false)
+                                       supportsOverrideRecords: grant.supportsOverrideRecords ?? false,
+                                       glucoseAlertSettings: grant.glucoseAlertSettings)
         }
         loopManager.settings = decodedSettings!
+        Task { @MainActor [loopManager] in loopManager.configureGlucoseAlerts(from: grant.glucoseAlertSettings) }
 
         if let raw = grant.activeOverrideRaw {
             if let plist = (try? PropertyListSerialization.propertyList(from: raw, options: [], format: nil)) as? TemporaryScheduleOverride.RawValue,

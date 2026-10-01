@@ -94,6 +94,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     var suiteName: String!
     var defaults: UserDefaults!
     var stateDir: URL!
+    /// What `Dependencies.glucoseAlertSettings` hands the grant.
+    var glucoseAlertSettings: Data?
 
     override func tearDown() {
         defaults.removePersistentDomain(forName: suiteName)
@@ -118,6 +120,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         gapDeleteSucceeds = true
         sent = []
         sentExpectations = []
+        glucoseAlertSettings = nil
         addedDoses = []
         pauseCalls = []
         notices = []
@@ -193,6 +196,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 completion(nil)
             },
             doseHistory: { _, completion in completion([]) },
+            glucoseAlertSettings: { [weak self] completion in completion(self?.glucoseAlertSettings) },
             issueNotice: { [weak self] title, _ in
                 guard let self = self else { return }
                 self.lock.lock(); self.notices.append(title); self.lock.unlock()
@@ -1502,6 +1506,18 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             }
         }
         return removed
+    }
+
+    // MARK: - Glucose alarms on the wrist
+
+    /// The grant carries the phone's glucose alert settings, so the wrist sounds the same lows.
+    func testTheGrantCarriesTheGlucoseAlertSettings() throws {
+        let profile = GlucoseAlertProfile.makePrimary()
+        glucoseAlertSettings = GlucoseAlertSettings(profiles: [profile], activeProfileID: profile.id,
+                                                    cgmProvidesOwnAlerts: false,
+                                                    loopAlertsOverrideForOwnAlertingCGM: false).encoded
+        let grant = offerGrant(makeController())
+        XCTAssertEqual(GlucoseAlertSettings(encoded: grant.glucoseAlertSettings)?.profiles, [profile])
     }
 
     // MARK: - The outbound handover is two states, not one

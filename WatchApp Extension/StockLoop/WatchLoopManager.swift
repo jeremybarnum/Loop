@@ -551,6 +551,9 @@ final class WatchLoopManager {
     /// Queue-owned; `isIntegralRetrospectiveCorrectionEnabled` is the safe way to read it.
     var integralRetrospectiveCorrectionEnabled = false
 
+    /// Stock glucose alerts, built from the phone's settings for a loan; nil between loans.
+    @MainActor var glucoseAlerts: GlucoseAlertManager?
+
     // MARK: - Last algorithm run
     // Written by both the temp-basal and manual-bolus runs; `dataAccessQueue`-owned.
 

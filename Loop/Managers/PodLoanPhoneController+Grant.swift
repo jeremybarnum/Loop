@@ -222,6 +222,8 @@ extension PodLoanPhoneController {
                 guard let self = self else { return }
                 self.deps.glucoseHistory(glucoseStart) { [weak self] glucose in
                     guard let self = self else { return }
+                    self.deps.glucoseAlertSettings { [weak self] glucoseAlertSettings in
+                    guard let self = self else { return }
                     self.queue.async {
                         guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pumpConfiguration.rawValue, format: .binary, options: 0),
                               let settingsData = try? PropertyListSerialization.data(fromPropertyList: loanSettingsRaw, format: .binary, options: 0) else {
@@ -264,7 +266,7 @@ extension PodLoanPhoneController {
                                settings.defaultRapidActingModel.map { String(describing: $0) } ?? "MISSING (wrist will assume rapid-acting adult)",
                                supplementData?.count ?? 0)
 
-                        self.handbackDiag(grantEpoch, "[grant] supplement \(supplementData?.count ?? 0)B · seeds: \(history.count) dose, \(carbs.count) carb, \(glucose.count) glucose · podState \(stateData.count)B · settings \(settingsData.count)B")
+                        self.handbackDiag(grantEpoch, "[grant] supplement \(supplementData?.count ?? 0)B · seeds: \(history.count) dose, \(carbs.count) carb, \(glucose.count) glucose · podState \(stateData.count)B · settings \(settingsData.count)B · glucose alerts \(glucoseAlertSettings.map { "\($0.count)B" } ?? "ABSENT")")
                         let grant = LoanGrant(
                             epoch: grantEpoch,
                             expiresAt: expiresAt,
@@ -288,8 +290,10 @@ extension PodLoanPhoneController {
                             therapySettingsSupplementRaw: supplementData,
 
                             // Loop recency carries across the boundary.
-                            lastLoopCompleted: self.deps.lastLoopCompleted())
+                            lastLoopCompleted: self.deps.lastLoopCompleted(),
+                            glucoseAlertSettings: glucoseAlertSettings)
                         completion(grant)
+                    }
                     }
                 }
             }

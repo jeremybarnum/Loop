@@ -112,6 +112,9 @@ extension WatchLoopManager {
                 self.logPredictionBreakdown(decided: decided)
             }
 
+            // Stock runs predicted low on each completed cycle's forecast.
+            if computeSucceeded { self.evaluatePredictedLowAlert(self.predictedGlucose) }
+
             // Both arms, as stock's `updateDisplayState()`.
             self.publishHUDContext()
         }

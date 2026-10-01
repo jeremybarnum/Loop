@@ -142,6 +142,9 @@ public struct LoanGrant: Codable, Equatable {
     /// Schedules and insulin model, which the settings blob drops.
     public let therapySettingsSupplementRaw: Data?
 
+    /// The phone's glucose alert settings (JSON), so the wrist sounds the same lows.
+    public let glucoseAlertSettings: Data?
+
     public init(epoch: Int, expiresAt: Date, pumpConfiguration: Data, podAddress: UInt32,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
                 doseHistory: [LoanDoseRecord],
@@ -154,7 +157,8 @@ public struct LoanGrant: Codable, Equatable {
                 predictionSnapshot: LoanPredictionSnapshot? = nil,
                 activeOverrideRaw: Data? = nil,
                 therapySettingsSupplementRaw: Data? = nil,
-                lastLoopCompleted: Date? = nil) {
+                lastLoopCompleted: Date? = nil,
+                glucoseAlertSettings: Data? = nil) {
         self.epoch = epoch
         self.expiresAt = expiresAt
         self.pumpConfiguration = pumpConfiguration
@@ -172,6 +176,7 @@ public struct LoanGrant: Codable, Equatable {
         self.activeOverrideRaw = activeOverrideRaw
         self.therapySettingsSupplementRaw = therapySettingsSupplementRaw
         self.lastLoopCompleted = lastLoopCompleted
+        self.glucoseAlertSettings = glucoseAlertSettings
     }
 }
 

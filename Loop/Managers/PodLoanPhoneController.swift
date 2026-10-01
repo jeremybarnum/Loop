@@ -87,6 +87,9 @@ final class PodLoanPhoneController {
 
         var glucoseHistory: (_ start: Date, _ completion: @escaping ([LoanGlucoseRecord]) -> Void) -> Void = { _, done in done([]) }
 
+        /// The glucose alert settings, encoded for the grant; nil leaves the wrist without them.
+        var glucoseAlertSettings: (_ completion: @escaping (Data?) -> Void) -> Void = { $0(nil) }
+
         var issueNotice: (_ title: String, _ body: String) -> Void
 
         var ownershipDidChange: () -> Void = {}

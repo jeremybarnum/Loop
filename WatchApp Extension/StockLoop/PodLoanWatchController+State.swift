@@ -26,6 +26,7 @@ struct PodLoanWatchState: RawRepresentable {
         var supplementRaw: Data?
         var supportsInterimHandback: Bool
         var supportsOverrideRecords: Bool
+        var glucoseAlertSettings: Data? = nil
     }
     var grantedSettings: GrantedSettings?
 
@@ -54,6 +55,7 @@ struct PodLoanWatchState: RawRepresentable {
             var d: [String: Any] = ["raw": $0.therapySettingsRaw, "interim": $0.supportsInterimHandback,
                                     "overrideRecords": $0.supportsOverrideRecords]
             d["supplement"] = $0.supplementRaw
+            d["glucoseAlerts"] = $0.glucoseAlertSettings
             return d
         }
         raw["deliveredAtTakeover"] = deliveredAtTakeover
@@ -66,7 +68,8 @@ struct PodLoanWatchState: RawRepresentable {
         guard let raw = d["raw"] as? Data else { return nil }
         return GrantedSettings(therapySettingsRaw: raw, supplementRaw: d["supplement"] as? Data,
                                supportsInterimHandback: d["interim"] as? Bool ?? false,
-                               supportsOverrideRecords: d["overrideRecords"] as? Bool ?? false)
+                               supportsOverrideRecords: d["overrideRecords"] as? Bool ?? false,
+                               glucoseAlertSettings: d["glucoseAlerts"] as? Data)
     }
 
     typealias Keys = PodLoanWatchController.Keys
