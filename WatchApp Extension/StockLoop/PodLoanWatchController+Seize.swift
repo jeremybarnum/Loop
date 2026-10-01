@@ -138,7 +138,8 @@ extension PodLoanWatchController {
         }
     }
 
-    /// The prompt's alert half, so the phone's return is visible without the glance on screen.
+    /// The prompt's alert half, so the phone's return is visible without the glance on screen. A
+    /// routine prompt: the watch keeps dosing.
     func issueReunionPromptAlert() {
         let title = NSLocalizedString("iPhone Is Back", comment: "Watch alert title when the phone returns during a seized loan")
         let body = NSLocalizedString("Sport Mode is still running without it. Open the app to hand the pod back, or keep going.", comment: "Watch alert body when the phone returns during a seized loan")
@@ -147,7 +148,7 @@ extension PodLoanWatchController {
                 identifier: Alert.Identifier(managerIdentifier: "PodLoan", alertIdentifier: "seizeReunionPrompt"),
                 foregroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
                 backgroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
-                trigger: .immediate))
+                trigger: .immediate, interruptionLevel: .active))
         }
     }
 

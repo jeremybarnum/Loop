@@ -358,14 +358,16 @@ final class PodLoanWatchController {
         send?(dictionary)
     }
 
-    /// One identifier for all protocol alerts.
-    func issueProtocolAlert(title: String, body: String) {
+    /// Time-sensitive under one shared identifier unless told otherwise. A routine alert takes its
+    /// own identifier, so it never replaces an urgent one.
+    func issueProtocolAlert(title: String, body: String, identifier: String = "protocolNack",
+                            interruptionLevel: Alert.InterruptionLevel = .timeSensitive) {
         Task { @MainActor in
             loopManager.issueAlert(Alert(
-                identifier: Alert.Identifier(managerIdentifier: "PodLoan", alertIdentifier: "protocolNack"),
+                identifier: Alert.Identifier(managerIdentifier: "PodLoan", alertIdentifier: identifier),
                 foregroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
                 backgroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
-                trigger: .immediate))
+                trigger: .immediate, interruptionLevel: interruptionLevel))
         }
     }
 

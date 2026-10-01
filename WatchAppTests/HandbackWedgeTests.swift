@@ -9,6 +9,7 @@ import XCTest
 import LoopKit
 import LoopAlgorithm
 import LoopCore
+import UserNotifications
 @testable import WatchApp
 
 final class HandbackWedgeTests: XCTestCase {
@@ -183,5 +184,115 @@ final class HandbackDrainStateTests: XCTestCase {
         XCTAssertEqual(HandbackWedge.classify(resendCount: PodLoanWatchController.maxDrainResends,
                                               sawUnreachable: false, reachableNow: true, sendsErrored: false),
                        .oneWay)
+    }
+}
+
+// MARK: - Interruption levels of the loan's own alerts
+
+/// Pod unattended → time-sensitive; the watch still dosing → normal.
+final class LoanAlertLevelTests: XCTestCase {
+
+    private var defaults: UserDefaults!
+    private var journalDir: URL!
+    private var scheduler: RecordingWristAlertScheduler!
+
+    override func setUp() {
+        super.setUp()
+        defaults = UserDefaults(suiteName: "LoanAlertLevelTests-\(UUID().uuidString)")!
+        journalDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try? FileManager.default.createDirectory(at: journalDir, withIntermediateDirectories: true)
+        scheduler = RecordingWristAlertScheduler()
+        WristAlerts.scheduler = scheduler
+    }
+
+    override func tearDown() {
+        WristAlerts.scheduler = UNUserNotificationCenter.current()
+        try? FileManager.default.removeItem(at: journalDir)
+        scheduler = nil
+        defaults = nil
+        journalDir = nil
+        super.tearDown()
+    }
+
+    private func makeController() async -> PodLoanWatchController {
+        let cacheStore = PersistenceController(directoryURL: journalDir.appendingPathComponent("cache"))
+        let doseStore = await DoseStore(healthKitSampleStore: nil, cacheStore: cacheStore,
+                                        longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration,
+                                        provenanceIdentifier: "LoanAlertLevelTests")
+        let glucoseStore = await GlucoseStore(healthKitSampleStore: nil, cacheStore: cacheStore,
+                                              cacheLength: .hours(4), provenanceIdentifier: "LoanAlertLevelTests")
+        let carbStore = CarbStore(healthKitSampleStore: nil, cacheStore: cacheStore,
+                                  cacheLength: .hours(24), provenanceIdentifier: "LoanAlertLevelTests")
+        let manager = WatchLoopManager(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore,
+                                       defaults: defaults, stateDirectory: journalDir)
+        let controller = PodLoanWatchController(loopManager: manager,
+                                                journal: LoanEventJournal(directory: journalDir),
+                                                stateDirectory: journalDir)
+        controller.scheduler = { _, _, _ in }
+        controller.isPhoneReachable = { true }
+        return controller
+    }
+
+    /// Alerts are issued from a main-actor task.
+    private func alert(titled title: String, other: String? = nil) async throws -> UNNotificationRequest {
+        for _ in 0..<100 {
+            let scheduler = self.scheduler!
+            if let request = await MainActor.run(body: {
+                scheduler.pending.first { $0.content.title == title && $0.identifier != other }
+            }) {
+                return request
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return try XCTUnwrap(nil, "no alert titled \(title)")
+    }
+
+    /// One-way wedge while the loan is live: the watch is still dosing.
+    func testEndNotConfirmedWhileStillDosingIsNormal() async throws {
+        let c = await makeController()
+        c.queue.sync {
+            c.phase = .active
+            c.handbackResendCount = 3
+            c.handbackTimedOut()
+        }
+        let request = try await alert(titled: "End Not Confirmed")
+        XCTAssertEqual(request.content.interruptionLevel, .active)
+    }
+
+    /// The watch has let go of the pod and the phone has not confirmed: nobody is dosing.
+    func testEndNotConfirmedAfterTheFinalOfferIsTimeSensitive() async throws {
+        let c = await makeController()
+        c.queue.sync {
+            c.phase = .handingBack
+            c.handbackTimedOut()
+        }
+        let request = try await alert(titled: "End Not Confirmed")
+        XCTAssertEqual(request.content.interruptionLevel, .timeSensitive)
+    }
+
+    /// The two variants never replace each other.
+    func testTheTwoEndNotConfirmedVariantsHaveTheirOwnIdentifiers() async throws {
+        let c = await makeController()
+        c.queue.sync {
+            c.phase = .active
+            c.handbackResendCount = 3
+            c.handbackTimedOut()
+        }
+        let stillDosing = try await alert(titled: "End Not Confirmed")
+        c.queue.sync {
+            c.phase = .handingBack
+            c.handbackTimedOut()
+        }
+        let final = try await alert(titled: "End Not Confirmed", other: stillDosing.identifier)
+        XCTAssertNotEqual(stillDosing.identifier, final.identifier)
+        XCTAssertEqual(scheduler.pending.filter { $0.content.title == "End Not Confirmed" }.count, 2)
+    }
+
+    /// The phone's return during a seized loan is a routine prompt; the watch keeps dosing.
+    func testIPhoneIsBackIsNormal() async throws {
+        let c = await makeController()
+        c.issueReunionPromptAlert()
+        let request = try await alert(titled: "iPhone Is Back")
+        XCTAssertEqual(request.content.interruptionLevel, .active)
     }
 }

@@ -12,6 +12,7 @@ import LoopKit
 import LoopAlgorithm
 import LoopCore
 import MockKit
+import UserNotifications
 @testable import Loop
 
 /// The test pump's hand-off state, shared by every instance.
@@ -77,6 +78,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// Captures for the dead-watch reclaim audit.
     var urgentNotices: [String] = []
     var urgentNoticeBodies: [String] = []
+    /// Every scheduled reminder, for its interruption level.
+    var addedNotifications: [UNNotificationRequest] = []
     var bookedGapDoses: [DoseEntry] = []
     var deletedGapSyncs: [String] = []
     var gapDeleteSucceeds = true
@@ -120,6 +123,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         backgroundTaskEnds = 0
         urgentNotices = []
         urgentNoticeBodies = []
+        addedNotifications = []
         bookedGapDoses = []
         deletedGapSyncs = []
         gapDeleteSucceeds = true
@@ -253,7 +257,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             latestGlucoseDate: latestGlucose ?? { now() },   // by default the phone is beside the body: a reading just now
             now: now,
             stateDirectory: stateDir,
-            addNotification: { _ in },
+            addNotification: { [weak self] request in
+                guard let self = self else { return }
+                self.lock.lock(); self.addedNotifications.append(request); self.lock.unlock()
+            },
             removeNotifications: { _ in }
         ))
     }
@@ -1522,6 +1529,26 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(controller.state, .loaned, "the loan itself is the watch's to end")
     }
 
+    // MARK: - Interruption levels of loan notices
+
+    /// Version skew can strand a loan with nobody dosing, so the warning is time-sensitive.
+    func testAnUnreadableWatchMessageWarnsTimeSensitively() {
+        let controller = makeController()
+        controller.handleIncoming(userInfo: [LoanProtocol.userInfoKey: Data("not a loan message".utf8)])
+        controller.queue.sync { }
+        XCTAssertEqual(urgentNotices, ["Watch Message Unreadable"])
+        XCTAssertFalse(notices.contains("Watch Message Unreadable"))
+    }
+
+    /// Nothing doses automatically until the user acts, so the reminder is time-sensitive.
+    func testTheClosedLoopIsOffReminderIsTimeSensitive() throws {
+        let controller = makeController()
+        controller.queue.sync { controller.armOpenLoopReminder() }
+        lock.lock(); let added = addedNotifications; lock.unlock()
+        let reminder = try XCTUnwrap(added.first { $0.content.title == "Closed Loop Is Off" })
+        XCTAssertEqual(reminder.content.interruptionLevel, .timeSensitive)
+    }
+
     // MARK: - Glucose alarms on the wrist
 
     /// The grant carries the phone's glucose alert settings, so the wrist sounds the same lows.
@@ -1655,13 +1682,15 @@ extension PodLoanPhoneControllerTests {
                           events: [realTail], tombstones: [], recovered: true)).transportDictionary())
 
         waitUntil(timeout: 5, "gap retired") { self.lock.lock(); defer { self.lock.unlock() }; return !self.deletedGapSyncs.isEmpty }
-        // The notice is sent after the delete returns, from the controller's queue.
-        // The urgent channel, not the quiet one: the recovered-records message rewrites IOB
-        // and COB, so it rides time-sensitive interruption.
+        // The notice is sent after the delete returns, from the controller's queue. Good news,
+        // so the normal channel: IOB and COB are now right.
         waitUntil(timeout: 5, "the user is told their numbers changed, and why") {
             self.lock.lock(); defer { self.lock.unlock() }
-            return self.urgentNotices.contains { $0.contains("Watch Records Recovered") }
+            return self.notices.contains { $0.contains("Watch Records Recovered") }
         }
+        lock.lock()
+        XCTAssertFalse(urgentNotices.contains { $0.contains("Watch Records Recovered") }, "not time-sensitive")
+        lock.unlock()
 
         lock.lock()
         let deleted = deletedGapSyncs

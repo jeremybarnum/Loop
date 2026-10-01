@@ -14,11 +14,13 @@ import UserNotifications
 import os.log
 
 extension PodLoanPhoneController {
-    func scheduleNotification(id: String, title: String, body: String, delay: TimeInterval, repeats: Bool) {
+    func scheduleNotification(id: String, title: String, body: String, delay: TimeInterval, repeats: Bool,
+                              interruptionLevel: UNNotificationInterruptionLevel = .active) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
+        content.interruptionLevel = interruptionLevel
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: repeats)
         deps.addNotification(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
     }
@@ -28,12 +30,13 @@ extension PodLoanPhoneController {
         deps.removeNotifications([id])
     }
 
-    /// Once per stretch of version skew; the first message that decodes re-arms it.
+    /// Once per stretch of version skew; the first message that decodes re-arms it. Time-sensitive:
+    /// a skewed loan can leave the pod with nobody dosing.
     func warnProtocolMismatch() {
         os_log("Loan protocol skew — payload undecodable in this build", log: log, type: .error)
         guard !hasWarnedProtocolMismatch else { return }
         hasWarnedProtocolMismatch = true
-        deps.issueNotice(
+        deps.issueUrgentNotice(
             NSLocalizedString("Watch Message Unreadable", comment: "Phone notice title when a loan message cannot be decoded"),
             NSLocalizedString("Loop can't read a message from the watch. The apps may be on different builds — check both are current.", comment: "Phone notice body when a loan message cannot be decoded"))
     }
@@ -62,13 +65,14 @@ extension PodLoanPhoneController {
         }
     }
 
-    /// Fires once; the phone already announced the open loop.
+    /// Fires once; the phone already announced the open loop. Time-sensitive: nothing doses
+    /// automatically until the user acts.
     func armOpenLoopReminder() {
         scheduleNotification(
             id: NotificationID.openLoop,
             title: NSLocalizedString("Closed Loop Is Off", comment: "Phone reminder title after an audit opened the loop"),
             body: NSLocalizedString("Loop couldn't verify the watch session's insulin, so it stopped dosing. Turn Closed Loop back on when you're ready.", comment: "Phone reminder body after an audit opened the loop"),
-            delay: ReminderLadder.openLoopDelay, repeats: false)
+            delay: ReminderLadder.openLoopDelay, repeats: false, interruptionLevel: .timeSensitive)
     }
 
     /// At launch, in case the user already closed the loop.

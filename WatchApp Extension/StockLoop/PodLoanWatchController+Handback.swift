@@ -110,10 +110,11 @@ extension PodLoanWatchController {
             // Self-heals in a minute or two, so it is logged and never alerted.
             SportLog.event("loan", "hand-back wedge variant B (session re-establishing) — no alert; expected to clear on its own")
         case .oneWay:
-            // Only while the loan is still live.
+            // Only while the loan is still live, so the watch is still dosing: a normal alert.
             if !wasFinal {
                 issueProtocolAlert(title: "End Not Confirmed",
-                                   body: "Your iPhone is reachable but hasn't confirmed. Reopening Loop on both devices usually clears this.")
+                                   body: "Your iPhone is reachable but hasn't confirmed. Reopening Loop on both devices usually clears this.",
+                                   identifier: "handbackOneWay", interruptionLevel: .active)
             }
         case .none:
             break

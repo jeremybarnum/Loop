@@ -236,9 +236,9 @@ extension PodLoanPhoneController {
                         dosesJustCommitted.count, bolusUnits, rateCount, rateGross, carbsJustCommitted, booked))
 
                     self.cancelPlaceholderReminders()
-                    self.deps.issueUrgentNotice("Watch Records Recovered",
-                                          String(format: "The watch is back. Its records (%d doses, %d carbs) replaced the estimated %.2f U bolus — your IOB and COB now reflect actual timing.",
-                                                 dosesJustCommitted.count, carbsJustCommitted, booked))
+                    self.deps.issueNotice("Watch Records Recovered",
+                                    String(format: "The watch is back. Its records (%d doses, %d carbs) replaced the estimated %.2f U bolus — your IOB and COB now reflect actual timing.",
+                                           dosesJustCommitted.count, carbsJustCommitted, booked))
                 } else {
                     self.updateState { $0.gapBooking?.deleteFailedAfterRecords = true }
                     self.handbackDiag(gapEpoch, String(format:
