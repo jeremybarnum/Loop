@@ -51,18 +51,13 @@ struct SportComplicationView: View {
         case .accessoryInline:
             Text(snapshot.line(kind, at: entry.date))
         case .accessoryCorner:
-            // One line curved along the bezel, like the system's own corner text (wrist,
-            // 2026-09-30: a number at the tip with a separate curved label read as two things).
-            if #available(watchOS 10.0, *) {
-                Text(snapshot.curved(kind, at: entry.date))
-                    .widgetCurvesContent()
-                    .widgetAccentable()
-            } else {
-                Text(cornerCenter)
-                    .font(.system(size: 24, weight: .semibold, design: .rounded))
-                    .minimumScaleFactor(0.6).lineLimit(1)
-                    .widgetLabel { Text(cornerLabel) }
-            }
+            // The face curves a corner's LABEL along the bezel but not its content (wrist,
+            // 2026-09-30: widgetCurvesContent rendered flat on the Utility face). So the whole
+            // value rides the label, and the tip carries a symbol.
+            Image(systemName: cornerSymbol)
+                .font(.system(size: 18, weight: .semibold))
+                .widgetAccentable()
+                .widgetLabel { Text(snapshot.curved(kind, at: entry.date)) }
         case .accessoryCircular:
             ZStack {
                 AccessoryWidgetBackground()
@@ -98,12 +93,12 @@ struct SportComplicationView: View {
         }
     }
 
-    private var cornerLabel: String {
+    private var cornerSymbol: String {
         switch kind {
-        case .iob: return "IOB"
-        case .cob: return "COB"
-        case .eventual: return "Eventual"
-        case .glucoseToEventual: return "→ \(snapshot.eventualText(at: entry.date) ?? SportComplicationSnapshot.dash)"
+        case .iob: return "syringe"
+        case .cob: return "fork.knife"
+        case .eventual: return "arrow.right"
+        case .glucoseToEventual: return "drop.fill"
         }
     }
 
