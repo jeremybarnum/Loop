@@ -10,9 +10,6 @@ import Foundation
 import LoopCore
 
 struct PodLoanPhoneState: RawRepresentable {
-    /// Bumped when a group of legacy keys moves in, so each group migrates exactly once.
-    static let version = 4
-
     /// The loan: the phone doses only at `.owner`, and not while yielding to an inferred loan.
     var phase: PodLoanPhoneController.State = .owner
     /// Monotonic; the watch rejects any epoch it has already seen.
@@ -99,8 +96,7 @@ struct PodLoanPhoneState: RawRepresentable {
     }
 
     var rawValue: [String: Any] {
-        var raw: [String: Any] = ["version": Self.version,
-                                  "phase": phase.rawValue, "epoch": epoch, "committedCursor": committedCursor,
+        var raw: [String: Any] = ["phase": phase.rawValue, "epoch": epoch, "committedCursor": committedCursor,
                                   "committedIDs": committedIDs.map(\.uuidString), "pendingRevoke": pendingRevoke,
                                   "yieldingToInferredLoan": yieldingToInferredLoan,
                                   "watchSilenceWarningsIssued": watchSilenceWarningsIssued,
@@ -140,7 +136,7 @@ struct PodLoanPhoneState: RawRepresentable {
                           deleteFailedAfterRecords: d["deleteFailedAfterRecords"] as? Bool ?? false)
     }
 
-    /// Every key a group's fields came from, removed once the file holds them.
+    /// Every key the state's fields came from, removed once the file holds them.
     static let legacyKeys = ["holdRenewedAt", "holdLapseNoticedAt", "watchSilenceWarningsIssued",
                              "watchSupportsSeize", "dormantSeizeToken",
                              "loanStartedAt", "deliveredAtGrant", "deliveredAtTakeover", "auditBase",
@@ -148,57 +144,46 @@ struct PodLoanPhoneState: RawRepresentable {
                              "state", "epoch", "cursor", "committedIDs", "pendingRevoke", "yieldingToInferredLoan"]
         .map { "PodLoanPhoneController." + $0 }
 
-    /// Reads, field for field, each group the saved file predates.
-    mutating func readLegacy(_ defaults: UserDefaults, savedVersion: Int) {
+    /// Field for field what the legacy keys held.
+    init(legacy defaults: UserDefaults) {
         let key = { "PodLoanPhoneController." + $0 }
-        if savedVersion < 1 {
-            holdRenewedAt = defaults.object(forKey: key("holdRenewedAt")) as? Date
-            holdLapseNoticedAt = defaults.object(forKey: key("holdLapseNoticedAt")) as? Date
-            watchSilenceWarningsIssued = defaults.integer(forKey: key("watchSilenceWarningsIssued"))
+        phase = defaults.string(forKey: key("state")).flatMap(PodLoanPhoneController.State.init(rawValue:)) ?? .owner
+        epoch = defaults.object(forKey: key("epoch")) as? Int ?? 0
+        committedCursor = defaults.object(forKey: key("cursor")) as? Int ?? 0
+        committedIDs = Set((defaults.array(forKey: key("committedIDs")) as? [String] ?? []).compactMap(UUID.init(uuidString:)))
+        pendingRevoke = defaults.bool(forKey: key("pendingRevoke"))
+        yieldingToInferredLoan = defaults.bool(forKey: key("yieldingToInferredLoan"))
+        holdRenewedAt = defaults.object(forKey: key("holdRenewedAt")) as? Date
+        holdLapseNoticedAt = defaults.object(forKey: key("holdLapseNoticedAt")) as? Date
+        watchSilenceWarningsIssued = defaults.integer(forKey: key("watchSilenceWarningsIssued"))
+        watchSupportsSeize = defaults.bool(forKey: key("watchSupportsSeize"))
+        seizeToken = defaults.string(forKey: key("dormantSeizeToken")).flatMap(UUID.init(uuidString:))
+        audit.loanStartedAt = defaults.object(forKey: key("loanStartedAt")) as? Date
+        audit.deliveredAtGrant = defaults.object(forKey: key("deliveredAtGrant")) as? Double
+        audit.deliveredAtTakeover = defaults.object(forKey: key("deliveredAtTakeover")) as? Double
+        if let d = defaults.dictionary(forKey: key("auditBase")),
+           let units = d["units"] as? Double, let asOf = d["asOf"] as? Date {
+            audit.base = .init(units: units, asOf: asOf)
+            audit.baseEpoch = d["epoch"] as? Int
+            audit.checkpoints = d["count"] as? Int ?? 0
         }
-        if savedVersion < 2 {
-            watchSupportsSeize = defaults.bool(forKey: key("watchSupportsSeize"))
-            seizeToken = defaults.string(forKey: key("dormantSeizeToken")).flatMap(UUID.init(uuidString:))
-        }
-        if savedVersion < 3 {
-            audit.loanStartedAt = defaults.object(forKey: key("loanStartedAt")) as? Date
-            audit.deliveredAtGrant = defaults.object(forKey: key("deliveredAtGrant")) as? Double
-            audit.deliveredAtTakeover = defaults.object(forKey: key("deliveredAtTakeover")) as? Double
-            if let d = defaults.dictionary(forKey: key("auditBase")),
-               let units = d["units"] as? Double, let asOf = d["asOf"] as? Date {
-                audit.base = .init(units: units, asOf: asOf)
-                audit.baseEpoch = d["epoch"] as? Int
-                audit.checkpoints = d["count"] as? Int ?? 0
-            }
-            pendingForceAudit = defaults.dictionary(forKey: key("pendingForceAudit")).flatMap(Self.forceAudit(from:))
-            gapBooking = defaults.dictionary(forKey: key("gapBooking")).flatMap(Self.gapBooking(from:))
-        }
-        if savedVersion < 4 {
-            phase = defaults.string(forKey: key("state")).flatMap(PodLoanPhoneController.State.init(rawValue:)) ?? .owner
-            epoch = defaults.object(forKey: key("epoch")) as? Int ?? 0
-            committedCursor = defaults.object(forKey: key("cursor")) as? Int ?? 0
-            committedIDs = Set((defaults.array(forKey: key("committedIDs")) as? [String] ?? []).compactMap(UUID.init(uuidString:)))
-            pendingRevoke = defaults.bool(forKey: key("pendingRevoke"))
-            yieldingToInferredLoan = defaults.bool(forKey: key("yieldingToInferredLoan"))
-        }
+        pendingForceAudit = defaults.dictionary(forKey: key("pendingForceAudit")).flatMap(Self.forceAudit(from:))
+        gapBooking = defaults.dictionary(forKey: key("gapBooking")).flatMap(Self.gapBooking(from:))
     }
 }
 
 extension PodLoanPhoneController {
     static let stateFileKey = "PodLoanPhoneState"
 
-    /// The saved file, plus any legacy group it predates; written first, then the keys go.
+    /// The file if present, else the legacy keys: written to the file first, then removed.
     static func loadState(from store: inout PersistedProperty<[String: Any]>, legacy defaults: UserDefaults) -> PodLoanPhoneState {
-        let saved = store.wrappedValue
-        var state = saved.flatMap(PodLoanPhoneState.init(rawValue:)) ?? PodLoanPhoneState()
-        let savedVersion = saved?["version"] as? Int ?? 0
-        if savedVersion < PodLoanPhoneState.version {
-            state.readLegacy(defaults, savedVersion: savedVersion)
-            store.wrappedValue = state.rawValue
-        }
-        if store.wrappedValue != nil {
+        if let saved = store.wrappedValue.flatMap(PodLoanPhoneState.init(rawValue:)) {
             PodLoanPhoneState.legacyKeys.forEach(defaults.removeObject(forKey:))
+            return saved
         }
+        let state = PodLoanPhoneState(legacy: defaults)
+        store.wrappedValue = state.rawValue
+        if store.wrappedValue != nil { PodLoanPhoneState.legacyKeys.forEach(defaults.removeObject(forKey:)) }
         return state
     }
 
