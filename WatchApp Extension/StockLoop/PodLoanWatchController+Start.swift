@@ -627,6 +627,21 @@ extension PodLoanWatchController {
         }
     }
 
+    /// The takeover's one save: odometer, `.active` and a seized loan's reunion token together.
+    /// The token is persisted only here: an aborted activation never touched the pod.
+    func recordTakeoverActive(delivered: Double) {
+        let token = pendingSeizeToken
+        pendingSeizeToken = nil
+        updateState {
+            $0.deliveredAtTakeover = delivered
+            $0.phase = .active
+            if let token { $0.seizeToken = token }
+        }
+        if let token {
+            SportLog.event("seize", "seized loan ACTIVE — reunion token …\(String(token.uuidString.suffix(8))) persisted for the offer echo [seize]")
+        }
+    }
+
     /// Reads pod status until it answers (up to fourteen reads, 8 s backstop). The lease is
     /// re-checked every iteration and expiry outranks a good status.
     func attemptTakeoverRead(manager: OmniPumpManager, grant: LoanGrant, attempt: Int, driver: String = "initial") {
@@ -659,17 +674,7 @@ extension PodLoanWatchController {
                     // The base for every later audit of this loan.
                     self.revokeCapturedDelivered = nil
                     self.revokeCapturedDeliveredAt = nil
-                    self.updateState {
-                        $0.deliveredAtTakeover = delivered
-                        $0.phase = .active
-                    }
-
-                    // Persisted only at `.active`: an aborted activation never touched the pod.
-                    if let token = self.pendingSeizeToken {
-                        self.updateState { $0.seizeToken = token }
-                        self.pendingSeizeToken = nil
-                        SportLog.event("seize", "seized loan ACTIVE — reunion token …\(String(token.uuidString.suffix(8))) persisted for the offer echo [seize]")
-                    }
+                    self.recordTakeoverActive(delivered: delivered)
                     self.loopManager.pumpManager = manager
                     self.onLoanActiveChanged?(true)
                     let takeoverSecs = self.attemptStartedAt.map { self.now().timeIntervalSince($0) } ?? -1
