@@ -50,35 +50,35 @@ final class G7WatchAcquisitionTests: XCTestCase {
     // MARK: the re-lodge arm
 
     func testTheProvenArmIsTheDefault() {
-        XCTAssertEqual(G7WatchAcquisition.relodge, .holdApp, "33 in 33; Pete's formula measured 1 in 4")
-        XCTAssertEqual(G7WatchAcquisition.Relodge(rawValue: "peteDelay"), .peteDelay)
+        XCTAssertEqual(G7WatchAcquisition.relodge, .holdApp, "33 in 33; the grid delay measured 1 in 4")
+        XCTAssertEqual(G7WatchAcquisition.Relodge(rawValue: "peteDelay"), .gridDelay, "the persisted raw value still decodes")
         XCTAssertEqual(G7WatchAcquisition.Relodge(rawValue: "holdApp"), .holdApp)
         XCTAssertNil(G7WatchAcquisition.Relodge(rawValue: "tailDelay"), "the 31-s arm is gone")
     }
 
-    // MARK: Pete's start delay — the grid arithmetic
+    // MARK: the grid delay — the arithmetic
 
-    func testPetesDelayIsHisFormulaOnTheReadingsGrid() {
-        // Pete (2026-09-15 11:56): "delay = 298 - (now - bg_timestamp)". A lodge happens at the
+    func testTheGridDelayIsTheFormulaOnTheReadingsGrid() {
+        // delay = 298 - (now - bg_timestamp). A lodge happens at the
         // sensor's close, a few seconds after the reading's own timestamp.
         for sinceReading in [3.5, 4.0, 5.5, 12.0, 60.0] {
             let now = anchor.addingTimeInterval(sinceReading)
-            XCTAssertEqual(Double(G7WatchAcquisition.peteDelay(anchor: anchor, now: now)), 298 - sinceReading, accuracy: 0.5,
-                           "whole seconds of his formula, not a variant of it")
+            XCTAssertEqual(Double(G7WatchAcquisition.gridDelay(anchor: anchor, now: now)), 298 - sinceReading, accuracy: 0.5,
+                           "whole seconds of the formula, not a variant of it")
         }
         XCTAssertEqual(G7WatchAcquisition.period + G7WatchAcquisition.fireOffset - G7WatchAcquisition.lead, 298, accuracy: 0.001,
-                       "period + fireOffset - lead == 298 is what makes it his formula")
+                       "period + fireOffset - lead == 298 is what makes it the formula")
     }
 
-    func testPetesDelayIsWholeSecondsNeverBelowOneAndInsideTheCycle() {
-        let d = G7WatchAcquisition.peteDelay(anchor: anchor, now: anchor.addingTimeInterval(10))
+    func testTheGridDelayIsWholeSecondsNeverBelowOneAndInsideTheCycle() {
+        let d = G7WatchAcquisition.gridDelay(anchor: anchor, now: anchor.addingTimeInterval(10))
         XCTAssertGreaterThan(d, 0)
         XCTAssertLessThan(Double(d), G7WatchAcquisition.period, "never past the burst it is aimed at")
         // The burst is already here: a delay would land after it — the shortest legal delay instead
         // (a zero or fractional NSNumber is refused with CBError 1).
-        XCTAssertEqual(G7WatchAcquisition.peteDelay(anchor: anchor, now: anchor.addingTimeInterval(299)), 1)
+        XCTAssertEqual(G7WatchAcquisition.gridDelay(anchor: anchor, now: anchor.addingTimeInterval(299)), 1)
         // Hours later the anchor still names the grid: it is the sensor's own clock.
-        XCTAssertEqual(Double(G7WatchAcquisition.peteDelay(anchor: anchor, now: anchor.addingTimeInterval(47 * 300 + 12))),
+        XCTAssertEqual(Double(G7WatchAcquisition.gridDelay(anchor: anchor, now: anchor.addingTimeInterval(47 * 300 + 12))),
                        298 - 12, accuracy: 0.5)
     }
 
@@ -108,7 +108,7 @@ final class G7WatchAcquisitionTests: XCTestCase {
 
     func testTheToggleSelectsThePlan() {
         let now = anchor.addingTimeInterval(3.5)
-        XCTAssertEqual(G7WatchAcquisition.relodgePlan(.peteDelay, sinceLinkUp: 3.5, anchor: anchor, now: now), .startDelay(seconds: 295))
+        XCTAssertEqual(G7WatchAcquisition.relodgePlan(.gridDelay, sinceLinkUp: 3.5, anchor: anchor, now: now), .startDelay(seconds: 295))
         XCTAssertEqual(G7WatchAcquisition.relodgePlan(.holdApp, sinceLinkUp: 3.5, anchor: anchor, now: now), .holdThenConnect(wait: 31.5))
     }
 
@@ -118,14 +118,14 @@ final class G7WatchAcquisitionTests: XCTestCase {
                        "a late connect failure counts from now: hold the full clearance")
     }
 
-    func testPetesDelayWithNoReadingOnRecordClearsTheTailLikeTheHold() {
+    func testTheGridDelayWithNoReadingOnRecordClearsTheTailLikeTheHold() {
         // No grid to aim at, but never a plain connect straight after a close: on 2026-09-16 a
         // same-burst failure storm (58 of 77 handshakes) began with exactly that.
-        XCTAssertEqual(G7WatchAcquisition.relodgePlan(.peteDelay, sinceLinkUp: 3.5, anchor: nil), .holdThenConnect(wait: 31.5))
-        XCTAssertNil(G7WatchAcquisition.relodgePlan(.peteDelay, sinceLinkUp: 120, anchor: nil))
+        XCTAssertEqual(G7WatchAcquisition.relodgePlan(.gridDelay, sinceLinkUp: 3.5, anchor: nil), .holdThenConnect(wait: 31.5))
+        XCTAssertNil(G7WatchAcquisition.relodgePlan(.gridDelay, sinceLinkUp: 120, anchor: nil))
     }
 
-    // MARK: refusals — Pete's back-off, stop after two
+    // MARK: refusals — back off, stop after two
 
     func testASynchronousRefusalBacksOffAndTwoStandDown() {
         let first = G7WatchAcquisition.onConnectFailure(refusals: 0, sinceLodge: 0.4)
