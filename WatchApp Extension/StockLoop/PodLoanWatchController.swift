@@ -179,9 +179,11 @@ final class PodLoanWatchController {
     var pumpControl: ExclusiveDeviceControl? { pumpManager as? ExclusiveDeviceControl }
     var pumpOdometer: PumpDeliveryOdometer? { pumpManager as? PumpDeliveryOdometer }
 
-    /// For the wire and the debug page; stock knows only that the pump is inoperable.
+    /// For the wire and the debug page: the kit's own words for why the pump is inoperable.
     var pumpFaultDescription: String? {
-        pumpManager.flatMap { $0.isInoperable ? "inoperable" : nil }
+        guard let pumpManager, pumpManager.isInoperable else { return nil }
+        return pumpManager.localizedInoperableDescription
+            ?? NSLocalizedString("Pump Inoperable", comment: "Fault text for a pump whose kit gives none")
     }
 
     /// Takeover timings and the glance's bar are measured from it.

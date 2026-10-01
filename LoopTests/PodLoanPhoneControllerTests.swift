@@ -76,6 +76,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     var settings: LoopSettings!
     /// Captures for the dead-watch reclaim audit.
     var urgentNotices: [String] = []
+    var urgentNoticeBodies: [String] = []
     var bookedGapDoses: [DoseEntry] = []
     var deletedGapSyncs: [String] = []
     var gapDeleteSucceeds = true
@@ -118,6 +119,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         backgroundTaskBegins = 0
         backgroundTaskEnds = 0
         urgentNotices = []
+        urgentNoticeBodies = []
         bookedGapDoses = []
         deletedGapSyncs = []
         gapDeleteSucceeds = true
@@ -222,9 +224,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 guard let self = self else { return }
                 self.lock.lock(); self.openLoopCalls += 1; self.lock.unlock()
             },
-            issueUrgentNotice: { [weak self] title, _ in
+            issueUrgentNotice: { [weak self] title, body in
                 guard let self = self else { return }
-                self.lock.lock(); self.urgentNotices.append(title); self.lock.unlock()
+                self.lock.lock(); self.urgentNotices.append(title); self.urgentNoticeBodies.append(body); self.lock.unlock()
             },
             bookGapDose: { [weak self] entry, completion in
                 guard let self = self else { return completion(false) }
@@ -1510,9 +1512,11 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         try report(fault: nil)
         XCTAssertFalse(urgentNotices.contains("Pod Fault"), "no fault, no notice")
 
-        try report(fault: "inoperable")
-        try report(fault: "inoperable")
+        try report(fault: "Critical Pod Fault 049")
+        try report(fault: "Critical Pod Fault 049")
         XCTAssertEqual(urgentNotices.filter { $0 == "Pod Fault" }.count, 1, "one notice per fault, not one per report")
+        XCTAssertTrue(urgentNoticeBodies.last?.contains("Critical Pod Fault 049") == true,
+                      "the notice shows the pump's own fault text")
         XCTAssertEqual(controller.state, .loaned, "the loan itself is the watch's to end")
     }
 

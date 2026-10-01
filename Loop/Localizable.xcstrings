@@ -38407,8 +38407,8 @@
     "The watch hasn't reported a loop for %1$.0f minutes. The pod is still assigned to it. If the watch is off or out of battery, tap the pod tile to bring the pod back to this phone." : {
       "comment" : "Phone warning body: watch silent mid-session (1: minutes)"
     },
-    "The watch reports a pod fault. Insulin delivery has stopped — replace the pod." : {
-      "comment" : "Phone notice body when the watch reports a pod fault during a loan"
+    "The watch reports a pod fault: %1$@. Insulin delivery has stopped — replace the pod." : {
+      "comment" : "Phone notice body when the watch reports a pod fault during a loan (1: the pump's own fault text)"
     },
     "Therapy Settings" : {
       "comment" : "Title text for button to Therapy Settings",

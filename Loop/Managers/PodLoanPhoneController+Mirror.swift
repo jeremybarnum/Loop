@@ -214,7 +214,7 @@ extension PodLoanPhoneController {
         podFaultNoticed = key
         deps.issueUrgentNotice(
             NSLocalizedString("Pod Fault", comment: "Phone notice title when the watch reports a pod fault during a loan"),
-            NSLocalizedString("The watch reports a pod fault. Insulin delivery has stopped — replace the pod.", comment: "Phone notice body when the watch reports a pod fault during a loan"))
+            String(format: NSLocalizedString("The watch reports a pod fault: %1$@. Insulin delivery has stopped — replace the pod.", comment: "Phone notice body when the watch reports a pod fault during a loan (1: the pump's own fault text)"), fault))
     }
 
 }

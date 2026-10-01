@@ -106,6 +106,23 @@ final class WristAlertAcknowledgementTests: XCTestCase {
         XCTAssertNil(other, "a glucose alert is not the pump's to acknowledge")
     }
 
+    /// The phone hears the kit's own words for a fault, read through LoopKit, not Omnipod state.
+    func testTheFaultSentToThePhoneIsThePumpsOwnText() async throws {
+        let controller = await makeController()
+        let working = try makePump()
+        controller.queue.sync { controller.pumpManager = working }
+        XCTAssertNil(controller.queue.sync { controller.pumpFaultDescription }, "no fault, nothing to report")
+
+        // A detailed status carrying fault code 0x8F.
+        let status = try DetailedStatus(encodedData: Data([0x02, 0x0d, 0, 0, 0, 0x06, 0, 0, 0x8f, 0, 0, 0x03, 0xff,
+                                                           0, 0, 0, 0, 0x03, 0xa2, 0x03, 0x86, 0xa0]))
+        let faulted = try makePump(fault: status)
+        XCTAssertEqual((faulted as DeviceManager).localizedInoperableDescription, "Critical Pod Fault 143",
+                       "the kit's implementation, not LoopKit's nil default")
+        controller.queue.sync { controller.pumpManager = faulted }
+        XCTAssertEqual(controller.queue.sync { controller.pumpFaultDescription }, "Critical Pod Fault 143")
+    }
+
     private func makeController() async -> PodLoanWatchController {
         let cacheStore = PersistenceController(directoryURL: dir.appendingPathComponent("cache"))
         let doseStore = await DoseStore(healthKitSampleStore: nil, cacheStore: cacheStore,
@@ -121,9 +138,10 @@ final class WristAlertAcknowledgementTests: XCTestCase {
                                       stateDirectory: dir)
     }
 
-    private func makePump() throws -> OmniPumpManager {
-        let podState = PodState(address: 0x1f0b3557, firmwareVersion: "2.7.0", iFirmwareVersion: "2.7.0",
+    private func makePump(fault: DetailedStatus? = nil) throws -> OmniPumpManager {
+        var podState = PodState(address: 0x1f0b3557, firmwareVersion: "2.7.0", iFirmwareVersion: "2.7.0",
                                 lotNo: 1, lotSeq: 1, insulinType: .novolog, podType: dashType)
+        podState.fault = fault
         let raw: [String: Any] = ["basalSchedule": ["entries": [["rate": 1.0, "startTime": 0.0]]],
                                   "controllerId": UInt32(0x1234_5678), "podId": UInt32(0x1234_5679),
                                   "podState": podState.rawValue]
