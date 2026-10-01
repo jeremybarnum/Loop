@@ -27,6 +27,12 @@ func watchPumpManager(adopting configuration: SharedDeviceConfiguration) -> Pump
     watchPumpManagersByIdentifier[configuration.managerIdentifier]?.init(adopting: configuration)
 }
 
+/// Whether taking control of this export here would have to find the device first.
+func watchTakeControlNeedsSearch(adopting configuration: SharedDeviceConfiguration) -> Bool {
+    let type = watchPumpManagersByIdentifier[configuration.managerIdentifier] as? ExclusiveDeviceControl.Type
+    return type?.takeControlNeedsSearch(adopting: configuration) ?? false
+}
+
 /// A pump manager restored from its saved `managerIdentifier` and `state`, as stock restores one.
 func watchPumpManager(rawValue: [String: Any]) -> PumpManager? {
     guard let identifier = rawValue["managerIdentifier"] as? String,

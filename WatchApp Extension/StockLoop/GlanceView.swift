@@ -207,6 +207,14 @@ struct GlanceView: View {
                     .foregroundColor(.glanceDim)
                 }
             } else {
+            // First contact needs the screen on: say so above Start, in the attention colour.
+            if let note = model.state.firstContactNote {
+                Text(note)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.glanceAttention)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Button { model.startSportMode() } label: {
                 Text("Start Sport Mode")
                     .font(.system(size: 17, weight: .semibold))
@@ -214,7 +222,7 @@ struct GlanceView: View {
                     .padding(.vertical, 8)
             }
             .buttonStyle(.borderedProminent)
-            .tint(.glanceAccent)
+            .tint(model.state.firstContactNote == nil ? .glanceAccent : .glanceAttention)
             }
             if let note = model.state.idleNote {
                 Text(note)

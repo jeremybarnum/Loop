@@ -76,7 +76,8 @@ struct GlanceUIState {
 
     var startingStageText: String? = nil
 
-    /// First contact with a new pod needs the screen on: the takeover hint says so.
+    /// First contact with a new pod needs the screen on: the Start note, then the takeover hint.
+    var firstContactNote: String? = nil
     var takeoverHint: String? = nil
     var takeoverHintDone: Bool = false
 
@@ -363,6 +364,7 @@ final class GlanceViewModel: ObservableObject {
                 f.unitsStyle = .abbreviated
                 idle.seizeOfferAgeText = f.string(from: Date().timeIntervalSince(issued)) ?? "?"
             }
+            if snap.pumpFirstContactExpected { idle.firstContactNote = PodLoanWatchController.firstContactStartNote }
             state = idle
         // One UI phase for both, so a slow takeover does not look like a failure.
         case .requested, .takingOver:
@@ -401,6 +403,7 @@ final class GlanceViewModel: ObservableObject {
                 f.unitsStyle = .abbreviated
                 restIdle.seizeOfferAgeText = f.string(from: Date().timeIntervalSince(issued)) ?? "?"
             }
+            if snap.pumpFirstContactExpected { restIdle.firstContactNote = PodLoanWatchController.firstContactStartNote }
             state = restIdle
         // The phone took the pod back. Nothing is left to offer the user and nothing is
         // cancellable — only the records are still owed — so the page says exactly that.

@@ -263,6 +263,16 @@ extension PodLoanWatchController {
         SportLog.event("seize", "offline offer WITHDRAWN — \(reason) [seize]")
     }
 
+    /// Resting, with a standing copy of a pump this watch would have to search for: Start needs the screen on.
+    func pumpFirstContactExpected() -> Bool {
+        guard phase == .idle || phase == .recoveredDrain, let configuration = standingPumpConfiguration else { return false }
+        return watchTakeControlNeedsSearch(adopting: configuration)
+    }
+
+    static let firstContactStartNote = NSLocalizedString(
+        "New pod — keep your wrist up after Start",
+        comment: "Glance note above Start when this watch has never connected to the current pod")
+
     /// The hint under the takeover bar; only a first contact needs one.
     static func takeoverHint(firstContact: Bool, podReached: Bool, nudged: Bool) -> String? {
         guard firstContact else { return nil }

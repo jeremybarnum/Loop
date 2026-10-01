@@ -47,6 +47,8 @@ extension PodLoanWatchController {
         /// The wrist-up hint under the takeover bar, or nil; and whether it reports the pod reached.
         let takeoverHint: String?
         let takeoverPodReached: Bool
+        /// Resting: the next Start must find a pump this watch has never met.
+        let pumpFirstContactExpected: Bool
     }
 
     /// Blocking. Not for main — `isLoanActiveNonBlocking` is main's answer.
@@ -120,7 +122,8 @@ extension PodLoanWatchController {
                 takeoverHint: phase == .takingOver
                     ? Self.takeoverHint(firstContact: takeoverFirstContact, podReached: takeoverPodReached, nudged: takeoverNudges > 0)
                     : nil,
-                takeoverPodReached: phase == .takingOver && takeoverPodReached)
+                takeoverPodReached: phase == .takingOver && takeoverPodReached,
+                pumpFirstContactExpected: pumpFirstContactExpected())
     }
 
     /// nil: no pump manager, as opposed to a failed read.

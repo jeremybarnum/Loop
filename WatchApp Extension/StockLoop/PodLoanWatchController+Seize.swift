@@ -158,6 +158,7 @@ extension PodLoanWatchController {
             return
         }
         dormantGrantStore.wrappedValue = data
+        standingPumpConfiguration = dormant.grant.sharedPumpConfiguration
         SportLog.event("seize", String(format: "dormant grant refreshed — issued %@, %d dose record(s), token …%@, pump %@ [seize]",
                                        DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .none, timeStyle: .medium),
                                        dormant.grant.doseHistory.count,
