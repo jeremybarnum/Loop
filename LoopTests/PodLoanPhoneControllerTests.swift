@@ -753,8 +753,6 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                       "delivered must be phone-read latest (10.900) minus the watch's start (10.000) — got: \(line)")
         XCTAssertTrue(line.contains("vs watch endpoint +0.500"),
                       "the line must state how much delivery the watch's stale endpoint missed — got: \(line)")
-        let persisted = defaults.object(forKey: "PodLoanPhoneController.deliveredAuthoritative") as? Double
-        XCTAssertEqual(persisted ?? .nan, 0.900, accuracy: 0.0001)
     }
 
     /// Phone-enforced: the temp the WATCH programmed is cancelled once — and only once the
@@ -1011,21 +1009,11 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual((defaults.array(forKey: "PodLoanPhoneController.windowResidualWorst") as? [Double])?.count, 1)
     }
 
-    /// Force-reclaim residuals banked before scoping are purged once at launch (> +0.5 U).
-    func testContaminatedResidualsArePurgedOnceAtLaunch() {
-        defaults.set([-0.200, -0.150, 0.800, 0.850, -0.050],
-                                  forKey: "PodLoanPhoneController.residualHistory")
+    /// Keys no build reads any more are removed at launch.
+    func testRetiredKeysAreSweptAtLaunch() {
+        for key in PodLoanPhoneController.Keys.retired { defaults.set(1.0, forKey: key) }
         _ = makeController()
-        XCTAssertEqual(defaults.array(forKey: "PodLoanPhoneController.residualHistory") as? [Double],
-                       [-0.200, -0.150, -0.050],
-                       "the two force-reclaim residuals go; every clean sample survives, order intact")
-
-        // ONE SHOT, not a standing rule: a hand-back genuinely above +0.5 U is a loud open-loop event
-        // whose residual is still authentic calibration data.
-        defaults.set([0.900], forKey: "PodLoanPhoneController.residualHistory")
-        _ = makeController()
-        XCTAssertEqual(defaults.array(forKey: "PodLoanPhoneController.residualHistory") as? [Double],
-                       [0.900], "the flag is already set — a later launch must not purge again")
+        for key in PodLoanPhoneController.Keys.retired { XCTAssertNil(defaults.object(forKey: key), key) }
     }
 
     /// +0.25 U is over the ±0.20 bound and under the old ±0.5, so a revert fails this.

@@ -79,11 +79,6 @@ extension PodLoanWatchController {
             guard self.phase == .active,
                   self.defaults.string(forKey: DormantKeys.activeToken) != nil,
                   !self.handbackRequested, !self.reunionPromptActive else { return }
-            // A stored default with no UI, for a session where the prompt is not wanted.
-            guard !self.defaults.bool(forKey: Self.seizeAutoHandbackDisabledKey) else {
-                SportLog.event("seize", "phone returned during a seized loan — reunion prompt DISABLED by kill switch [seize]")
-                return
-            }
             guard !self.seizeReunionDebounceArmed else { return }
             self.seizeReunionDebounceArmed = true
             SportLog.event("seize", "phone REACHABLE during a seized loan — reunion prompt in 30s unless it flickers away [seize]")
@@ -259,7 +254,9 @@ extension PodLoanWatchController {
     /// Bounds the handshake, not the credential.
     static let seizeActivationLease: TimeInterval = 5 * 60
 
-    static let seizeAutoHandbackDisabledKey = "PodLoanWatchController.seizeAutoHandbackDisabled"
+    /// Written by earlier builds and read by nothing now; removed at launch.
+    static let retiredKeys = ["seizeAutoHandbackDisabled", "dormantGrantIssuedAt", "dormantGrantToken"]
+        .map { "PodLoanWatchController." + $0 }
 
     /// The phone's reconciliation band.
     static let unexplainedInsulinBand = 0.20

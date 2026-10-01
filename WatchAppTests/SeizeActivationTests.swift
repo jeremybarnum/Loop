@@ -347,12 +347,6 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertTrue(pendingDebounce.isEmpty, "a normal loan must never arm the reunion prompt")
 
         defaults.set(UUID().uuidString, forKey: "PodLoanWatchController.activeSeizeToken")
-        defaults.set(true, forKey: "PodLoanWatchController.seizeAutoHandbackDisabled")
-        controller.noteReachabilityChanged(true)
-        _ = controller.debugSnapshot()
-        XCTAssertTrue(pendingDebounce.isEmpty, "the kill switch must hold it off")
-
-        defaults.removeObject(forKey: "PodLoanWatchController.seizeAutoHandbackDisabled")
         controller.noteReachabilityChanged(false)
         _ = controller.debugSnapshot()
         XCTAssertTrue(pendingDebounce.isEmpty, "a reachability LOSS is not a reunion")

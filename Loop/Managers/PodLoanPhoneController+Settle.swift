@@ -219,7 +219,6 @@ extension PodLoanPhoneController {
                 pending.loanMinutes, pending.cycles, elapsed,
                 drift.map { String(format: "%+.3f", $0) } ?? "n/a",
                 pending.watchFreshened ? "Y" : "N"))
-            deps.defaults.set(loanDelivered ?? delivered, forKey: Keys.deliveredAuthoritative)
 
             // Diagnostic only: windows reconciled but the loan total drifted.
             if let lr = loanResidual, abs(lr) > 0.5, abs(residual) <= Self.checkpointBand {
