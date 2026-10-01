@@ -39,7 +39,7 @@ extension PodLoanWatchController {
             let newEpoch = max(dormant.grant.epoch,
                                (self.epoch ?? 0) + 1,
                                (self.journal.activeEpoch ?? 0) + 1,
-                               self.defaults.integer(forKey: Keys.highWaterEpoch) + 1,
+                               self.persisted.highWaterEpoch + 1,
                                (self.lastRevokedEpoch ?? 0) + 1)
 
             let leaseUntil = self.now().addingTimeInterval(Self.seizeActivationLease)
@@ -77,7 +77,7 @@ extension PodLoanWatchController {
         queue.async {
             guard reachable else { return }
             guard self.phase == .active,
-                  self.defaults.string(forKey: DormantKeys.activeToken) != nil,
+                  self.persisted.seizeToken != nil,
                   !self.handbackRequested, !self.reunionPromptActive else { return }
             guard !self.seizeReunionDebounceArmed else { return }
             self.seizeReunionDebounceArmed = true
@@ -86,7 +86,7 @@ extension PodLoanWatchController {
                 guard let self = self else { return }
                 self.seizeReunionDebounceArmed = false
                 guard self.phase == .active,
-                      self.defaults.string(forKey: DormantKeys.activeToken) != nil,
+                      self.persisted.seizeToken != nil,
                       !self.handbackRequested, !self.reunionPromptActive else { return }
                 guard self.isPhoneReachable() else {
                     SportLog.event("seize", "phone flickered away before the reunion debounce — seized loan continues [seize]")
@@ -242,13 +242,13 @@ extension PodLoanWatchController {
         /// Legacy home of the stored credential, migrated once into `dormantGrantStore`.
         static let envelope = "PodLoanWatchController.dormantGrant"
 
-        /// Persisted for the life of a seized loan so every offer echoes it.
+        /// Legacy home of the reunion token, migrated once into `PodLoanWatchState`.
         static let activeToken = "PodLoanWatchController.activeSeizeToken"
     }
 
     /// For log tags, from activation until the loan closes.
     var seizeMarkerActive: Bool {
-        pendingSeizeToken != nil || defaults.string(forKey: DormantKeys.activeToken) != nil
+        pendingSeizeToken != nil || persisted.seizeToken != nil
     }
 
     /// Bounds the handshake, not the credential.

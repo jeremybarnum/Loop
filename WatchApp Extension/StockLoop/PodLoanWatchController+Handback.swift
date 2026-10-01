@@ -206,7 +206,7 @@ extension PodLoanWatchController {
             watchClosedLoopEnabled: recovered ? nil : loopManager.closedLoopEnabledNonBlocking,
 
             // Lets the phone retro-acknowledge a loan it never granted.
-            seizeToken: defaults.string(forKey: DormantKeys.activeToken).flatMap(UUID.init(uuidString:)),
+            seizeToken: persisted.seizeToken,
 
             lastLoopCompleted: loopManager.lastLoopCompleted)
         if offer.released == true, finalOfferSentAt == nil { finalOfferSentAt = self.now() }
@@ -255,9 +255,13 @@ extension PodLoanWatchController {
                 self.resendWorkItem?.cancel()
                 self.teardownPump()
                 self.journal.end()
-                self.phase = .idle
-                self.epoch = nil
-                self.deliveredAtTakeover = nil
+                // Closed in one save; the token goes too, or the next loan is mistaken for a seized one.
+                self.updateState {
+                    $0.phase = .idle
+                    $0.epoch = nil
+                    $0.deliveredAtTakeover = nil
+                    $0.seizeToken = nil
+                }
                 self.handbackDeadline = nil
                 self.handbackStartedAt = nil
                 self.finalOfferSentAt = nil
@@ -268,8 +272,6 @@ extension PodLoanWatchController {
                 self.handbackSawUnreachable = false
                 self.handbackSawUrgentSendError = false
                 self.urgentSendWedged = false
-                // Or the next loan is mistaken for a seized one.
-                self.defaults.removeObject(forKey: DormantKeys.activeToken)
                 HandbackStuckAlert.disarm()
                 self.onLoanActiveChanged?(false)
                 SportLog.event("loan", "CLOSED — drain abandoned, pod already the phone's")
@@ -317,14 +319,16 @@ extension PodLoanWatchController {
         // Closed: epoch, journal, takeover odometer and seize token go; the high-water epoch stays.
         finalOfferSentAt = nil
         journal.end()
-        phase = .idle
-        epoch = nil
-        deliveredAtTakeover = nil
+        updateState {
+            $0.phase = .idle
+            $0.epoch = nil
+            $0.deliveredAtTakeover = nil
+            $0.seizeToken = nil
+        }
         handbackDeadline = nil
         handbackStartedAt = nil
         HandbackStuckAlert.disarm()
         onLoanActiveChanged?(false)
-        defaults.removeObject(forKey: DormantKeys.activeToken)
         reunionPromptActive = false
         SportLog.event("loan", "CLOSED — records drained, pod released, cursor \(ack.committedCursor)")
     }

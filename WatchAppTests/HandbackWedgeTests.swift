@@ -152,7 +152,7 @@ final class HandbackDrainStateTests: XCTestCase {
             c.phase = .recoveredDrain
             c.epoch = 5          // an offer without a session number returns before it sends
         }
-        c.defaults.set(UUID().uuidString, forKey: PodLoanWatchController.DormantKeys.activeToken)
+        c.updateState { $0.seizeToken = UUID() }
 
         // The give-up check lives in the resend timer, not in the send. Firing the work item
         // inline is a jump past its deadline, on the queue it would really run on.
@@ -168,7 +168,7 @@ final class HandbackDrainStateTests: XCTestCase {
             XCTAssertFalse(c.urgentSendWedged)
             XCTAssertEqual(c.phase, .idle, "the drain closed")
         }
-        XCTAssertNil(c.defaults.string(forKey: PodLoanWatchController.DormantKeys.activeToken),
+        XCTAssertNil(c.persisted.seizeToken,
                      "left set, the next ordinary loan is mistaken for a seized one")
     }
 

@@ -370,8 +370,8 @@ extension PodLoanWatchController {
         }
 
         // The second channel's copy of a grant already taken.
-        if !seizeActivationInFlight, grant.epoch <= defaults.integer(forKey: Keys.highWaterEpoch) {
-            rejectGrant("epoch \(grant.epoch) already accepted once (high-water \(defaults.integer(forKey: Keys.highWaterEpoch))) — a late duplicate",
+        if !seizeActivationInFlight, grant.epoch <= persisted.highWaterEpoch {
+            rejectGrant("epoch \(grant.epoch) already accepted once (high-water \(persisted.highWaterEpoch)) — a late duplicate",
                         notifyPhone: false)
             return
         }
@@ -403,7 +403,7 @@ extension PodLoanWatchController {
 
             // A fold persists the token now: real records already exist.
             if let token = pendingSeizeToken {
-                defaults.set(token.uuidString, forKey: DormantKeys.activeToken)
+                updateState { $0.seizeToken = token }
                 pendingSeizeToken = nil
                 SportLog.event("seize", "reunion token …\(String(token.uuidString.suffix(8))) persisted at FOLD — the folded drain needs the retro-ack door [seize]")
             }
@@ -417,10 +417,11 @@ extension PodLoanWatchController {
             }
         }
 
-        epoch = grant.epoch
-
-        // Only rises, never cleared, so a spent epoch is never reused.
-        defaults.set(max(defaults.integer(forKey: Keys.highWaterEpoch), grant.epoch), forKey: Keys.highWaterEpoch)
+        // The high-water only rises, so a spent epoch is never reused; saved before the pod is touched.
+        updateState {
+            $0.epoch = grant.epoch
+            $0.highWaterEpoch = max($0.highWaterEpoch, grant.epoch)
+        }
         phoneSupportsInterimHandback = grant.supportsInterimHandback ?? false
         phoneSupportsOverrideRecords = grant.supportsOverrideRecords ?? false
         handbackRequested = false
@@ -438,15 +439,15 @@ extension PodLoanWatchController {
         RuntimeStateLog.probeTimerDeferral("takeover-start")
         withdrawSeizeOffer(reason: "a grant was accepted")
         // Force-unwrapped only because the completeness check above has already returned on nil.
-        phase = .takingOver
+        // Everything a resume needs, including the capability flags, saved with the phase.
+        updateState {
+            $0.phase = .takingOver
+            $0.grantedSettings = .init(therapySettingsRaw: grant.therapySettingsRaw,
+                                       supplementRaw: grant.therapySettingsSupplementRaw,
+                                       supportsInterimHandback: grant.supportsInterimHandback ?? false,
+                                       supportsOverrideRecords: grant.supportsOverrideRecords ?? false)
+        }
         loopManager.settings = decodedSettings!
-
-        // Everything a resume needs, including the capability flags.
-        var payload: [String: Any] = ["raw": grant.therapySettingsRaw,
-                                      "interim": grant.supportsInterimHandback ?? false,
-                                      "overrideRecords": grant.supportsOverrideRecords ?? false]
-        if let supplement = grant.therapySettingsSupplementRaw { payload["supplement"] = supplement }
-        defaults.set(payload, forKey: Keys.grantedTherapySettings)
 
         if let raw = grant.activeOverrideRaw {
             if let plist = (try? PropertyListSerialization.propertyList(from: raw, options: [], format: nil)) as? TemporaryScheduleOverride.RawValue,
@@ -658,13 +659,14 @@ extension PodLoanWatchController {
                     // The base for every later audit of this loan.
                     self.revokeCapturedDelivered = nil
                     self.revokeCapturedDeliveredAt = nil
-                    self.deliveredAtTakeover = delivered
-                    self.defaults.set(delivered, forKey: Keys.deliveredAtTakeover)
-                    self.phase = .active
+                    self.updateState {
+                        $0.deliveredAtTakeover = delivered
+                        $0.phase = .active
+                    }
 
                     // Persisted only at `.active`: an aborted activation never touched the pod.
                     if let token = self.pendingSeizeToken {
-                        self.defaults.set(token.uuidString, forKey: DormantKeys.activeToken)
+                        self.updateState { $0.seizeToken = token }
                         self.pendingSeizeToken = nil
                         SportLog.event("seize", "seized loan ACTIVE — reunion token …\(String(token.uuidString.suffix(8))) persisted for the offer echo [seize]")
                     }
