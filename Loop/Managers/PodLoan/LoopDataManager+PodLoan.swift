@@ -15,7 +15,7 @@ extension LoopDataManager {
     /// Cancels the pod's temp once it is back. Not guarded on the cached delivery state, which
     /// is stale after a loan; the watch cannot do it because it has released the link.
     func cancelTempBasalAfterPodReturn() async throws {
-        try await cancelTempBasalForPodLoan(reason: .podReturnedFromWatch)
+        try await cancelTempBasalForPodLoan(reason: .pumpControlReturned)
     }
 
     /// A temp cancel outside loop() at a loan boundary, as stock's cancelActiveTempBasal does.

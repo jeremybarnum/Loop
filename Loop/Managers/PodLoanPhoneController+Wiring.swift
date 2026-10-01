@@ -242,7 +242,7 @@ extension WatchDataManager {
                 guard let self = self else { return completion(nil) }
                 Task {
                     do {
-                        try await self.loopDataManager.cancelTempBasalForPodLoan(reason: .podLoanGrant)
+                        try await self.loopDataManager.cancelTempBasalForPodLoan(reason: .pumpControlReleased)
                         completion(nil)
                     } catch {
                         completion(error)

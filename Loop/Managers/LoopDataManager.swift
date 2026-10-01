@@ -1670,8 +1670,8 @@ enum CancelActiveTempBasalReason: String {
     case automaticDosingDisabled
     case unreliableCGMData
     case maximumBasalRateChanged
-    case podReturnedFromWatch
-    case podLoanGrant
+    case pumpControlReturned
+    case pumpControlReleased
 }
 
 extension LoopDataManager : AlgorithmDisplayStateProvider {
