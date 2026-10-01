@@ -852,6 +852,17 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         return grant
     }
 
+    /// The grant's audit base belongs to the grant's own epoch, so a relaunch before the watch
+    /// confirms keeps it (it was saved under the previous epoch and dropped at launch).
+    func testRelaunchBetweenGrantAndTakeoverKeepsTheAuditBase() {
+        MockPumpManager.testOdometer = 10.0
+        let grant = offerGrant(makeController())
+        let relaunched = makeController()
+        relaunched.queue.sync { }
+        XCTAssertEqual(relaunched.epoch, grant.epoch)
+        XCTAssertEqual(relaunched.auditBase?.units, 10.0, "the grant's base survives the relaunch")
+    }
+
     /// The fix: an explicit "I never got it" reclaims immediately instead of after 5 min 15 s.
     func testExplicitGrantLostReportReclaimsImmediately() throws {
         let controller = makeController()
