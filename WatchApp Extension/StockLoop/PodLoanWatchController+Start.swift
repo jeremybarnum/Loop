@@ -681,7 +681,7 @@ extension PodLoanWatchController {
                     self.loopManager.loop()
                 } else if attempt + 1 < maxAttempts {
                     if attempt == 0 {
-                        SportLog.event("loan", "connecting to pod… (BLE session establishing; typically ~17s, budget ~40s)")
+                        SportLog.event("loan", "connecting to pod… (BLE session establishing; up to \(maxAttempts) reads, 8 s apart at most, within the grant lease)")
                     }
 
                     let readElapsed = self.attemptStartedAt.map { self.now().timeIntervalSince($0) } ?? -1

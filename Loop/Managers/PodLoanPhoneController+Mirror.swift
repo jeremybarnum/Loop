@@ -96,8 +96,9 @@ extension PodLoanPhoneController {
         if grantOfferedAt == nil { grantOfferedAt = deps.now() }
         armGrantLostProbe(for: grantEpoch)
 
-        scheduleNotification(id: NotificationID.t1, title: "Watch Loan Not Confirmed",
-                             body: "The watch hasn't confirmed taking the pod. The phone will take it back.",
+        scheduleNotification(id: NotificationID.t1,
+                             title: NSLocalizedString("Watch Loan Not Confirmed", comment: "Phone notification title: the watch never confirmed a takeover"),
+                             body: NSLocalizedString("The watch hasn't confirmed taking the pod. The phone will take it back.", comment: "Phone notification body: the watch never confirmed a takeover"),
                              delay: .minutes(5), repeats: false)
         t1WorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
