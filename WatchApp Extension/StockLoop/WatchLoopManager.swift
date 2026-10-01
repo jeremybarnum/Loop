@@ -196,19 +196,25 @@ final class WatchLoopManager {
         manualBolusLock.unlock()
     }
 
-    private var _manualBolusDelivery: (units: Double, startedAt: Date, endsAt: Date)?
+    private var _bolusDelivery: (units: Double, reporter: DoseProgressReporter)?
 
-    /// Expires on its own clock: past `endsAt` it is nil, never "delivered".
-    var manualBolusDelivery: (units: Double, startedAt: Date, endsAt: Date)? {
+    /// The pump manager's progress reporter for the bolus the pod is delivering; nil once it
+    /// reports complete, never "delivered".
+    var manualBolusDelivery: (units: Double, reporter: DoseProgressReporter)? {
         manualBolusLock.lock(); defer { manualBolusLock.unlock() }
-        guard let d = _manualBolusDelivery, d.endsAt > self.now() else { return nil }
+        guard let d = _bolusDelivery, !d.reporter.progress.isComplete else { return nil }
         return d
     }
-    /// Posts on MAIN: the enact completion that calls this runs on a background queue, the
-    /// observer mutates published UI state, and the glance's own tick is blocked behind the dose.
-    func setManualBolusDelivering(units: Double, from startedAt: Date, to endsAt: Date) {
+
+    /// As stock's status screen does: a new bolus in progress gets a fresh reporter from the pump
+    /// manager. Posts on MAIN, since the observer mutates published UI state.
+    func bolusStateDidChange(to bolusState: PumpManagerStatus.BolusState, from oldState: PumpManagerStatus.BolusState, pumpManager: PumpManager) {
+        guard case .inProgress(let dose) = bolusState else { return }
+        if case .inProgress(let previous) = oldState, previous.syncIdentifier == dose.syncIdentifier { return }
+        let reporter = pumpManager.createBolusProgressReporter(reportingOn: .main)
+
         manualBolusLock.lock()
-        _manualBolusDelivery = (units: units, startedAt: startedAt, endsAt: endsAt)
+        _bolusDelivery = reporter.map { (units: dose.programmedUnits, reporter: $0) }
         manualBolusLock.unlock()
 
         DispatchQueue.main.async {

@@ -110,6 +110,7 @@ extension PodLoanWatchController: PumpManagerDelegate {
 extension PodLoanWatchController: PumpManagerStatusObserver {
     func pumpManager(_ pumpManager: PumpManager, didUpdate status: PumpManagerStatus, oldStatus: PumpManagerStatus) {
         os_log("Pump status: %{public}@", log: log, type: .default, String(describing: status.basalDeliveryState))
+        loopManager.bolusStateDidChange(to: status.bolusState, from: oldStatus.bolusState, pumpManager: pumpManager)
     }
 }
 

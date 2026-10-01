@@ -295,16 +295,15 @@ struct GlanceView: View {
         }
     }
 
-    /// An estimate on its own clock, like the phone's; renders nothing past its end, floored to pulses.
+    /// The pump manager's bolus progress, sampled every 2 s; renders nothing once it reports complete.
     @ViewBuilder
-    private func bolusDeliveryBlock(_ delivery: (units: Double, startedAt: Date, endsAt: Date)) -> some View {
-        TimelineView(.periodic(from: delivery.startedAt, by: 2)) { timeline in
-            let duration = delivery.endsAt.timeIntervalSince(delivery.startedAt)
-            let elapsed = timeline.date.timeIntervalSince(delivery.startedAt)
-            let fraction = duration > 0 ? min(max(elapsed / duration, 0), 1) : 1
+    private func bolusDeliveryBlock(_ delivery: (units: Double, reporter: DoseProgressReporter)) -> some View {
+        TimelineView(.periodic(from: .now, by: 2)) { _ in
+            let progress = delivery.reporter.progress
+            let fraction = min(max(progress.percentComplete, 0), 1)
 
-            if timeline.date < delivery.endsAt {
-            let delivered = (fraction * delivery.units / 0.05).rounded(.down) * 0.05
+            if !progress.isComplete {
+            let delivered = progress.deliveredUnits
             VStack(spacing: 3) {
                 Text(String(format: NSLocalizedString("bolusing %1$@ of %2$@ U", comment: "Glance status while a manual bolus is being delivered (1: units delivered so far, 2: total units)"),
                             GlanceViewModel.unitsFormatter.string(from: NSNumber(value: delivered)) ?? String(delivered),
@@ -683,9 +682,14 @@ struct GlanceDemoView: View {
         s.eventualText = "88"; s.iobText = "1.7"; s.cobText = "8"; s.tempText = "0.00"
         s.loopStatusText = "CLOSED · 1m"
 
-        let started = Date().addingTimeInterval(-22)
-        s.bolusDelivery = (units: 0.90, startedAt: started, endsAt: started.addingTimeInterval(0.90 / 1.5 * 60))
+        s.bolusDelivery = (units: 0.90, reporter: PreviewBolusProgress())
     }))
+}
+
+private final class PreviewBolusProgress: DoseProgressReporter {
+    let progress = DoseProgress(deliveredUnits: 0.55, percentComplete: 0.6)
+    func addObserver(_ observer: DoseProgressObserver) {}
+    func removeObserver(_ observer: DoseProgressObserver) {}
 }
 
 #Preview("Bolus · slow to reach the pod") {

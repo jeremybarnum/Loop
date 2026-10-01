@@ -155,13 +155,7 @@ extension WatchLoopManager {
                     if let error = error {
                         SportLog.event("loan", "MANUAL BOLUS FAILED — \(String(describing: error))")
                     } else {
-                        // Progress estimate at 1.5 U/min, like stock's PodDoseProgressEstimator; never "delivered".
-                        let acceptedAt = self.now()
-                        let deliveryEndsAt = acceptedAt.addingTimeInterval(rounded / 1.5 * 60)
-                        SportLog.event("loan", String(format: "MANUAL BOLUS delivering %.2f U — estimated done in %.0fs",
-                                                      rounded, deliveryEndsAt.timeIntervalSince(acceptedAt)))
-
-                        self.setManualBolusDelivering(units: rounded, from: acceptedAt, to: deliveryEndsAt)
+                        SportLog.event("loan", String(format: "MANUAL BOLUS %.2f U ACCEPTED by pod", rounded))
 
                         // Re-run the moment the pod ACCEPTS, not when delivery finishes: the
                         // temp the loop is running was computed without this bolus in it.
@@ -282,8 +276,6 @@ extension WatchLoopManager {
             }
             if let bolus {
                 SportLog.event("dose", String(format: "automatic bolus %.2f U ACCEPTED by pod", bolus))
-                let acceptedAt = now()
-                setManualBolusDelivering(units: bolus, from: acceptedAt, to: acceptedAt.addingTimeInterval(bolus / 1.5 * 60))
             }
         } catch {
             SportLog.event("dose", "enact FAILED — \(String(describing: error))")

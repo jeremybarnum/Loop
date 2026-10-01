@@ -84,8 +84,8 @@ struct GlanceUIState {
     /// Provenance, next-reading countdown or wedge hint; the hint wins.
     var g7EtaText: String? = nil
 
-    /// A manual bolus the pod has ACCEPTED, with the window it should deliver over.
-    var bolusDelivery: (units: Double, startedAt: Date, endsAt: Date)? = nil
+    /// A bolus the pod is delivering, with the pump manager's progress reporter for it.
+    var bolusDelivery: (units: Double, reporter: DoseProgressReporter)? = nil
 
     var overrideLabel: String? = nil
 
