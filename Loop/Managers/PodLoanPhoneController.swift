@@ -238,6 +238,10 @@ final class PodLoanPhoneController {
     /// Restores the loan and re-arms what was owed; a loaned state pauses dosing at once.
     init(dependencies: Dependencies) {
         self.deps = dependencies
+        var store = dependencies.stateDirectory.map { PersistedProperty<[String: Any]>(key: Self.stateFileKey, directory: $0) }
+            ?? PersistedProperty(key: Self.stateFileKey)
+        self._persisted = Self.loadState(from: &store, legacy: dependencies.defaults)
+        self.stateStore = store
         self.state = State(rawValue: dependencies.defaults.string(forKey: Keys.state) ?? "") ?? .owner
         self.epoch = dependencies.defaults.object(forKey: Keys.epoch) as? Int ?? 0
 
@@ -301,6 +305,11 @@ final class PodLoanPhoneController {
             }
         }
     }
+
+    /// The persisted state (+State); written whole by `updateState`.
+    var stateStore: PersistedProperty<[String: Any]>
+    var _persisted: PodLoanPhoneState
+    let stateLock = NSLock()
 
     /// The tile's lock-guarded view; the UI never touches `queue`.
     let uiMirrorLock = NSLock()

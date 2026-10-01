@@ -1016,6 +1016,25 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         for key in PodLoanPhoneController.Keys.retired { XCTAssertNil(defaults.object(forKey: key), key) }
     }
 
+    /// The silence-watch trio moves from UserDefaults into the state file once.
+    func testHoldStateMigratesOnceFromLegacyKeys() {
+        let renewed = Date(timeIntervalSinceNow: -1200), noticed = Date(timeIntervalSinceNow: -300)
+        defaults.set(renewed, forKey: "PodLoanPhoneController.holdRenewedAt")
+        defaults.set(noticed, forKey: "PodLoanPhoneController.holdLapseNoticedAt")
+        defaults.set(2, forKey: "PodLoanPhoneController.watchSilenceWarningsIssued")
+        let first = makeController()
+        XCTAssertEqual(first.persisted.holdRenewedAt, renewed)
+        XCTAssertEqual(first.persisted.holdLapseNoticedAt, noticed)
+        XCTAssertEqual(first.persisted.watchSilenceWarningsIssued, 2)
+        for key in PodLoanPhoneState.legacyKeys { XCTAssertNil(defaults.object(forKey: key), key) }
+
+        defaults.set(Date(), forKey: "PodLoanPhoneController.holdRenewedAt")
+        let second = makeController()
+        XCTAssertEqual(second.persisted.holdRenewedAt?.timeIntervalSince1970 ?? 0, renewed.timeIntervalSince1970, accuracy: 0.001,
+                       "the file wins over a re-seeded legacy key")
+        XCTAssertNil(defaults.object(forKey: "PodLoanPhoneController.holdRenewedAt"))
+    }
+
     /// +0.25 U is over the ±0.20 bound and under the old ±0.5, so a revert fails this.
     func testResidualJustAboveTheTightenedBoundOpensTheLoop() throws {
         let controller = makeController()
