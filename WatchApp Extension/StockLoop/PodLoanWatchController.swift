@@ -106,6 +106,10 @@ final class PodLoanWatchController {
     /// Where state files live; nil in the app (Documents).
     let stateDirectory: URL?
 
+    /// The loaned pump manager's `rawState`, saved on every update as stock saves a pump manager;
+    /// beside an active phase it means the loan can resume.
+    var pumpStateStore: PersistedProperty<PumpManager.RawStateValue>
+
     /// The stored seize credential, in its own file: large, and replaced whole by each refresh.
     var dormantGrantStore: PersistedProperty<Data>
 
@@ -264,7 +268,7 @@ final class PodLoanWatchController {
         static let phase = "PodLoanWatchController.phase"
         static let epoch = "PodLoanWatchController.epoch"
 
-        /// Saved on every update; beside an active phase it means the loan can resume.
+        /// Legacy home of the pump state, migrated once into `pumpStateStore`.
         static let pumpState = "PodLoanWatchController.pumpState"
 
         static let deliveredAtTakeover = "PodLoanWatchController.deliveredAtTakeover"
@@ -290,10 +294,17 @@ final class PodLoanWatchController {
             if dormant.wrappedValue != nil { defaults.removeObject(forKey: DormantKeys.envelope) }
         }
         self.dormantGrantStore = dormant
+        var pumpStore = stateDirectory.map { PersistedProperty<PumpManager.RawStateValue>(key: "PumpManagerState", directory: $0) }
+            ?? PersistedProperty(key: "PumpManagerState")
+        if let legacy = defaults.dictionary(forKey: Keys.pumpState) {
+            if pumpStore.wrappedValue == nil { pumpStore.wrappedValue = legacy }
+            if pumpStore.wrappedValue != nil { defaults.removeObject(forKey: Keys.pumpState) }
+        }
+        self.pumpStateStore = pumpStore
         self.phase = Phase(rawValue: defaults.string(forKey: Keys.phase) ?? "") ?? .idle
         self.epoch = defaults.object(forKey: Keys.epoch) as? Int
 
-        let savedPumpState = phase == .active ? defaults.dictionary(forKey: Keys.pumpState) : nil
+        let savedPumpState = phase == .active ? pumpStateStore.wrappedValue : nil
         if let savedPumpState {
             pendingResumeState = savedPumpState
 
@@ -411,7 +422,7 @@ final class PodLoanWatchController {
         pumpManager?.releaseConnection()
         pumpManager?.pumpManagerDelegate = nil
         pumpManager = nil
-        defaults.removeObject(forKey: Keys.pumpState)
+        pumpStateStore.wrappedValue = nil
         defaults.removeObject(forKey: Keys.deliveredAtTakeover)
         defaults.removeObject(forKey: Keys.grantedTherapySettings)
 

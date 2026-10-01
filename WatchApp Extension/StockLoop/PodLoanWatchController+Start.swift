@@ -549,7 +549,7 @@ extension PodLoanWatchController {
         manager.pumpManagerDelegate = self
         manager.delegateQueue = queue
         pumpManager = manager
-        defaults.set(manager.rawState, forKey: Keys.pumpState)
+        pumpStateStore.wrappedValue = manager.rawState
 
         // The copy's view, captured first; on a phoneless start it can be half an hour old.
         if let units = manager.lentDeviceInsulinDelivered, let asOf = manager.podLoanInsulinDeliveredAt {

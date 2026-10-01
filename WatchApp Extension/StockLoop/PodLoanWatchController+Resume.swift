@@ -48,7 +48,7 @@ extension PodLoanWatchController {
               let raw = payload["raw"] as? Data,
               let settings = Self.decodeTherapySettings(raw: raw, supplement: payload["supplement"] as? Data),
               settings.basalRateSchedule != nil else {
-            defaults.removeObject(forKey: Keys.pumpState)
+            pumpStateStore.wrappedValue = nil
             defaults.removeObject(forKey: Keys.grantedTherapySettings)
             phase = .recoveredDrain
             issueSessionEndedAlert()
@@ -58,7 +58,7 @@ extension PodLoanWatchController {
 
         SportLog.event("loan", "RESUME: building the pump manager from saved state")
         guard let manager = OmniPumpManager(rawState: savedState) else {
-            defaults.removeObject(forKey: Keys.pumpState)
+            pumpStateStore.wrappedValue = nil
             defaults.removeObject(forKey: Keys.grantedTherapySettings)
             phase = .recoveredDrain
             issueSessionEndedAlert()
