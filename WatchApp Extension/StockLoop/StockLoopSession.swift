@@ -149,7 +149,13 @@ final class StockLoopSession {
                 self.startLogPulse()
 
                 RuntimeStateLog.startHeartbeat()
+
+                // EXPERIMENT (experiment/ns-watch)
+                LoanRemoteUploads.shared.begin(loopManager: self.stack.loopManager)
             } else {
+                // EXPERIMENT (experiment/ns-watch); normally already done by teardownPump.
+                LoanRemoteUploads.shared.end()
+
                 os_log("Loan ended: stopping G7 transport", log: self.log, type: .default)
                 LoopStallWatchdog.disarm()
                 SportLog.event("deadman", "ladder CLEARED — loan ended, coverage transfers to the phone [deadman]")

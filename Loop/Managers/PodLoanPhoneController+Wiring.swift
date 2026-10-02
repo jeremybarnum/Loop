@@ -71,6 +71,28 @@ extension WatchDataManager {
                 })
                 if grantRidesBothChannels { session.transferUserInfo(dictionary) }
             },
+            // EXPERIMENT (experiment/ns-watch): read off the live service by reflection, so the app need
+            // not link NightscoutServiceKit (a plugin). Never logged.
+            nightscoutCredentials: { [weak self] in
+                guard let service = self?.deviceManager.allActivePlugins.first(where: { $0.pluginIdentifier == "NightscoutService" }) else { return nil }
+                let fields = Dictionary(Mirror(reflecting: service).children.compactMap { child in child.label.map { ($0, child.value) } },
+                                        uniquingKeysWith: { first, _ in first })
+                guard let siteURL = fields["siteURL"] as? URL, let apiSecret = fields["apiSecret"] as? String,
+                      !apiSecret.isEmpty else { return nil }
+                return LoanNightscoutCredentials(siteURL: siteURL, apiSecret: apiSecret)
+            },
+            // EXPERIMENT (experiment/ns-watch): the session as stock TidepoolService keeps it (its
+            // keychain item, read back the way its own restore does), so the app need not link
+            // TidepoolKit. Moved, never logged.
+            tidepoolSession: { [weak self] in
+                guard let service = self?.deviceManager.allActivePlugins.first(where: { $0.pluginIdentifier == "TidepoolService" }) as? StatefulPluggable,
+                      let id = service.rawState["id"] as? String,
+                      let json = try? KeychainManager().getGenericPasswordForServiceAsData("org.tidepool.TidepoolService.\(id)") else { return nil }
+                // For comparison with the wrist's [tp-exp] lines; ids, not tokens.
+                PhoneLog.event("loan", "[tp-exp] phone's Tidepool data set \(service.rawState["dataSetId"] as? String ?? "not cached yet") · client name \(Bundle.main.hostIdentifier)")
+                // As ServicesManager hands them to the phone's TidepoolService.
+                return LoanTidepoolSession(sessionJSON: json, hostIdentifier: Bundle.main.hostIdentifier, hostVersion: Bundle.main.hostVersion)
+            },
             addPumpEvents: { [weak self] events, lastReconciliation, completion in
                 guard let self = self else { completion(nil); return }
 

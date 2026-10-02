@@ -393,6 +393,9 @@ extension PodLoanWatchController {
             return
         }
 
+        // EXPERIMENT (experiment/ns-watch): Nightscout/Tidepool credentials, in memory until uploads start.
+        LoanRemoteUploads.shared.stage(nightscout: grant.nightscout, tidepool: grant.tidepool)
+
         // A seize over a parked drain folds the old events into this epoch, keeping their identities.
         if seizeActivationInFlight, journal.hasUndrainedEvents {
             let carried = journal.adoptEpoch(grant.epoch)

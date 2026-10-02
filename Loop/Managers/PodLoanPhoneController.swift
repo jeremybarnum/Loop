@@ -62,6 +62,14 @@ final class PodLoanPhoneController {
 
         var send: ([String: Any]) -> Void
 
+        /// EXPERIMENT (experiment/ns-watch): the active Nightscout service's site and secret for the
+        /// session grant; nil (no service) leaves the wrist without uploads.
+        var nightscoutCredentials: () -> LoanNightscoutCredentials? = { nil }
+
+        /// EXPERIMENT (experiment/ns-watch): the active Tidepool service's session for the session grant;
+        /// nil (no service) leaves the wrist without Tidepool uploads.
+        var tidepoolSession: () -> LoanTidepoolSession? = { nil }
+
         var addPumpEvents: ([NewPumpEvent], _ lastReconciliation: Date?, @escaping (Error?) -> Void) -> Void
 
         var addCarb: (NewCarbEntry, String, @escaping (Error?) -> Void) -> Void

@@ -196,10 +196,15 @@ extension PodLoanPhoneController {
             guard let self = self else { return }
             // The loan moved on during assembly; drop the grant.
             guard self.state == .grantOffered, self.epoch == grantEpoch else { return }
-            guard let grant = grant else {
+            guard var grant = grant else {
                 self.abortGrant(reason: "snapshot encoding failed")
                 return
             }
+            // EXPERIMENT (experiment/ns-watch): session grants only; the standing copy never carries it.
+            grant.nightscout = self.deps.nightscoutCredentials()
+            grant.tidepool = self.deps.tidepoolSession()
+            PhoneLog.event("loan", "[ns-exp] grant carries Nightscout credentials: \(grant.nightscout == nil ? "no" : "yes")")
+            PhoneLog.event("loan", "[tp-exp] grant carries the Tidepool session: \(grant.tidepool == nil ? "no" : "yes")")
             self.sendMessage(.grant(grant))
             self.armT1(for: grantEpoch)
         }
