@@ -54,6 +54,8 @@
 		<string>dexcomcgm</string>
 		<string>dexcomshare</string>
 	</array>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>LoopLocalCacheDurationDays</key>
@@ -87,6 +89,8 @@
 		<string>NewCarbEntryIntent</string>
 		<string>ViewLoopStatus</string>
 	</array>
+	<key>UIFileSharingEnabled</key>
+	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
