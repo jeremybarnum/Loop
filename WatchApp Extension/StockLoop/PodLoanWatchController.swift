@@ -384,6 +384,8 @@ final class PodLoanWatchController {
     /// and wrist override, since WatchLoopManager outlives the loan.
     func teardownPump() {
         SportLog.event("handback", "teardownPump: releasing control of the pump explicitly")
+        // Uploads stop before the insulin book is reset below.
+        LoanRemoteUploads.shared.end()
         pumpControl?.releaseControl()
         pumpManager?.pumpManagerDelegate = nil
         pumpManager = nil

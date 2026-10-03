@@ -95,6 +95,37 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertNil(g2.glucoseHistory)
     }
 
+    /// The Nightscout site and secret survive the wire, and no textual or reflected form of the
+    /// grant shows either; a grant from an older phone decodes with none.
+    func testGrantNightscoutCredentialsRoundTripRedacted() throws {
+        let now = Date(timeIntervalSince1970: 1_784_338_000.125)
+        let site = URL(string: "https://fixture-site.example")!
+        let secret = "fixture-secret-0123456789"
+        var grant = LoanGrant(epoch: 9, expiresAt: now.addingTimeInterval(300),
+                              pumpConfiguration: Data([1]), podAddress: 0,
+                              therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
+                              doseHistory: [])
+        grant.nightscout = LoanNightscoutCredentials(siteURL: site, apiSecret: secret)
+        guard case .grant(let g) = try roundTrip(.grant(grant)) else { return XCTFail("not a grant") }
+        XCTAssertEqual(g.nightscout?.siteURL, site)
+        XCTAssertEqual(g.nightscout?.apiSecret, secret)
+
+        var dumped = ""
+        dump(grant, to: &dumped)
+        for text in [String(describing: grant), String(reflecting: grant), dumped,
+                     String(describing: grant.nightscout!), String(reflecting: grant.nightscout!)] {
+            XCTAssertFalse(text.contains(secret), "the secret leaked")
+            XCTAssertFalse(text.contains("fixture-site"), "the site leaked")
+        }
+
+        let old = LoanGrant(epoch: 9, expiresAt: now.addingTimeInterval(300),
+                            pumpConfiguration: Data([1]), podAddress: 0,
+                            therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
+                            doseHistory: [])
+        guard case .grant(let g2) = try roundTrip(.grant(old)) else { return XCTFail("not a grant") }
+        XCTAssertNil(g2.nightscout)
+    }
+
     func testGrantPredictionSnapshotRoundTrips() throws {
         let now = Date(timeIntervalSince1970: 1_784_338_000.125)
         let snap = LoanPredictionSnapshot(

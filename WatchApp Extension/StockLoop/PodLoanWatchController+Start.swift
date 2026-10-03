@@ -393,6 +393,9 @@ extension PodLoanWatchController {
             return
         }
 
+        // Nightscout credentials, in memory until uploads start at ACTIVE.
+        LoanRemoteUploads.shared.stage(nightscout: grant.nightscout)
+
         // A seize over a parked drain folds the old events into this epoch, keeping their identities.
         if seizeActivationInFlight, journal.hasUndrainedEvents {
             let carried = journal.adoptEpoch(grant.epoch)

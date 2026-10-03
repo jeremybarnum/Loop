@@ -151,6 +151,23 @@ public struct DormantGrant: Codable, Equatable {
     }
 }
 
+/// What the wrist needs to run stock's Nightscout uploader during a loan.
+/// Every textual and reflected form is redacted, so a grant can be logged or dumped safely.
+public struct LoanNightscoutCredentials: Codable, Equatable, CustomStringConvertible,
+                                         CustomDebugStringConvertible, CustomReflectable {
+    public let siteURL: URL
+    public let apiSecret: String
+
+    public init(siteURL: URL, apiSecret: String) {
+        self.siteURL = siteURL
+        self.apiSecret = apiSecret
+    }
+
+    public var description: String { "LoanNightscoutCredentials(<redacted>)" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { Mirror(self, children: [:]) }
+}
+
 /// The pump's configuration, the therapy settings, and enough history for the first cycle.
 public struct LoanGrant: Codable, Equatable {
     /// Increases with every grant; both sides refuse any other epoch.
@@ -200,6 +217,10 @@ public struct LoanGrant: Codable, Equatable {
 
     /// The phone's settings over the last 24 h, up to the grant.
     public let settingsHistory: LoanSettingsHistory?
+
+    /// The phone's Nightscout site and secret, so the wrist can upload during the loan. Set on
+    /// Start grants only, never on the standing copy; absent from older phones.
+    public var nightscout: LoanNightscoutCredentials? = nil
 
     public init(epoch: Int, expiresAt: Date, pumpConfiguration: Data, podAddress: UInt32,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,

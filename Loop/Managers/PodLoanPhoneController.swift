@@ -62,6 +62,10 @@ final class PodLoanPhoneController {
 
         var send: ([String: Any]) -> Void
 
+        /// The active Nightscout service's site and secret for the Start grant; nil (no service)
+        /// leaves the wrist without uploads.
+        var nightscoutCredentials: () -> LoanNightscoutCredentials? = { nil }
+
         var addPumpEvents: ([NewPumpEvent], _ lastReconciliation: Date?, @escaping (Error?) -> Void) -> Void
 
         var addCarb: (NewCarbEntry, String, @escaping (Error?) -> Void) -> Void
