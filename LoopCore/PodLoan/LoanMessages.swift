@@ -189,6 +189,8 @@ public struct LoanGrant: Codable, Equatable {
 
     public let integralRetrospectiveCorrectionEnabled: Bool?
 
+    public let glucoseBasedApplicationFactorEnabled: Bool?
+
     public let phoneClosedLoopEnabled: Bool?
 
     public let carbHistory: [LoanCarbRecord]?
@@ -222,6 +224,7 @@ public struct LoanGrant: Codable, Equatable {
                 supportsInterimHandback: Bool? = nil,
                 supportsOverrideRecords: Bool? = nil,
                 integralRetrospectiveCorrectionEnabled: Bool? = nil,
+                glucoseBasedApplicationFactorEnabled: Bool? = nil,
                 phoneClosedLoopEnabled: Bool? = nil,
                 carbHistory: [LoanCarbRecord]? = nil,
                 glucoseHistory: [LoanGlucoseRecord]? = nil,
@@ -241,6 +244,7 @@ public struct LoanGrant: Codable, Equatable {
         self.supportsInterimHandback = supportsInterimHandback
         self.supportsOverrideRecords = supportsOverrideRecords
         self.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrectionEnabled
+        self.glucoseBasedApplicationFactorEnabled = glucoseBasedApplicationFactorEnabled
         self.phoneClosedLoopEnabled = phoneClosedLoopEnabled
         self.carbHistory = carbHistory
         self.glucoseHistory = glucoseHistory

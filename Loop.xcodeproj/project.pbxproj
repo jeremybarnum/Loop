@@ -13,6 +13,7 @@
 		826D1F376E69DF9D410367B3 /* NightscoutServiceKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 028762051A01C56F4C39A986 /* NightscoutServiceKit.framework */; };
 		616612D1AD65082CB8ED9C1C /* LoanRemoteUploads.swift in Sources */ = {isa = PBXBuildFile; fileRef = B998F036B1AFE137CE755FB6 /* LoanRemoteUploads.swift */; };
 		7DCBC50A4ED76D855495DAD5 /* RemoteDataServicesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 432E73CA1D24B3D6009AD15D /* RemoteDataServicesManager.swift */; };
+		6A643D509AA2E5CA5E93ABF4 /* GlucoseBasedApplicationFactorStrategy.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDC389F72A2B620B0066E2E8 /* GlucoseBasedApplicationFactorStrategy.swift */; };
 		3672F37D7AD0ADCF799182C1 /* LoopConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1C660D0252E4DD5009B5C32 /* LoopConstants.swift */; };
 		8E2E2E3DF5D4A6551D194071 /* ConstantApplicationFactorStrategy.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDC389F92A2B62470066E2E8 /* ConstantApplicationFactorStrategy.swift */; };
 		11A602D57094373065D00D79 /* ApplicationFactorStrategy.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDC389F52A2B61750066E2E8 /* ApplicationFactorStrategy.swift */; };
@@ -4152,6 +4153,7 @@
 				74EA67D0AD796D5DF8490015 /* DosingDecisionStoreProtocol.swift in Sources */,
 				616612D1AD65082CB8ED9C1C /* LoanRemoteUploads.swift in Sources */,
 				7DCBC50A4ED76D855495DAD5 /* RemoteDataServicesManager.swift in Sources */,
+				6A643D509AA2E5CA5E93ABF4 /* GlucoseBasedApplicationFactorStrategy.swift in Sources */,
 				3672F37D7AD0ADCF799182C1 /* LoopConstants.swift in Sources */,
 				8E2E2E3DF5D4A6551D194071 /* ConstantApplicationFactorStrategy.swift in Sources */,
 				11A602D57094373065D00D79 /* ApplicationFactorStrategy.swift in Sources */,

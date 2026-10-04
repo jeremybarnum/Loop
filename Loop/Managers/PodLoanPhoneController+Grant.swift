@@ -292,6 +292,7 @@ extension PodLoanPhoneController {
 
                             // Not in the settings blob.
                             integralRetrospectiveCorrectionEnabled: UserDefaults.standard.integralRetrospectiveCorrectionEnabled,
+                            glucoseBasedApplicationFactorEnabled: UserDefaults.standard.glucoseBasedApplicationFactorEnabled,
 
                             phoneClosedLoopEnabled: settings.dosingEnabled,
                             carbHistory: carbs,
@@ -338,6 +339,7 @@ extension PodLoanPhoneController {
         let activeOverride = deps.scheduleOverride().flatMap { $0.hasFinished() ? nil : $0 }
         return [Self.settingsFingerprint(s), String(describing: activeOverride),
                 "\(UserDefaults.standard.integralRetrospectiveCorrectionEnabled)",
+                "\(UserDefaults.standard.glucoseBasedApplicationFactorEnabled)",
                 String(describing: deps.pumpManager()?.status.insulinType),
                 String(describing: glucoseAlertSettingsSeen)].joined(separator: "|")
     }
