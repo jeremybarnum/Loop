@@ -302,10 +302,10 @@ final class StockRunsTests: XCTestCase {
 
         let plain = expectation(description: "no carbs")
         var withoutCarbs: Double?
-        manager.recommendManualBolus { if case .success(let r) = $0 { withoutCarbs = r.amount }; plain.fulfill() }
+        manager.recommendManualBolus { if case .success(let r) = $0 { withoutCarbs = r?.amount }; plain.fulfill() }
         let meal = expectation(description: "potential carbs")
         var withCarbs: Double?
-        manager.recommendManualBolus(potentialCarbEntry: carbs(60)) { if case .success(let r) = $0 { withCarbs = r.amount }; meal.fulfill() }
+        manager.recommendManualBolus(potentialCarbEntry: carbs(60)) { if case .success(let r) = $0 { withCarbs = r?.amount }; meal.fulfill() }
         await fulfillment(of: [plain, meal], timeout: 20)
         XCTAssertGreaterThan(try XCTUnwrap(withCarbs), try XCTUnwrap(withoutCarbs) + 1, "the carbs reached that run")
 
@@ -352,7 +352,7 @@ final class StockRunsTests: XCTestCase {
 
         let done = expectation(description: "recommendation")
         var amount: Double?
-        manager.recommendManualBolus { if case .success(let r) = $0 { amount = r.amount }; done.fulfill() }
+        manager.recommendManualBolus { if case .success(let r) = $0 { amount = r?.amount }; done.fulfill() }
         await fulfillment(of: [done], timeout: 20)
         XCTAssertGreaterThan(try XCTUnwrap(amount, "the recommended bolus is produced"), 0)
     }
@@ -410,11 +410,7 @@ final class StockRunsTests: XCTestCase {
 
     // MARK: - Enact refusals, as stock `loop()`
 
-    private func pendingTemp(_ manager: WatchLoopManager) {
-        let recommendation = AutomaticDoseRecommendation(basalAdjustment: TempBasalRecommendation(unitsPerHour: 2.0, duration: .minutes(30)),
-                                                         direction: .increase)
-        manager.recommendedAutomaticDose = (recommendation: recommendation, enactTempBasal: true, date: manager.now())
-    }
+    private let highTemp = TempBasalRecommendation(unitsPerHour: 2.0, duration: .minutes(30))
 
     func testAManualTempIsLeftRunning() async throws {
         let manager = await makeManager()
@@ -426,9 +422,8 @@ final class StockRunsTests: XCTestCase {
         manager.pumpManager = pump
         manager.doseEnactor = enactor
 
-        let error = manager.dataAccessQueue.sync { () -> WatchLoopError? in
-            pendingTemp(manager)
-            return manager.enactRecommendedAutomaticDose()
+        let error = manager.dataAccessQueue.sync { () -> LoopError? in
+            manager.enactAutomaticDose(bolus: nil, tempBasal: highTemp, decisionId: nil)
         }
 
         guard case .manualTempBasalRunning? = error else { return XCTFail("refused as stock does; got \(String(describing: error))") }
@@ -446,9 +441,8 @@ final class StockRunsTests: XCTestCase {
                                      scheduledCertainty: .certain, insulinType: .novolog)
         manager.pumpManager = try makePump(unfinalizedTemp: manual)
 
-        let error = manager.dataAccessQueue.sync { () -> WatchLoopError? in
-            manager.recommendedAutomaticDose = nil
-            return manager.enactRecommendedAutomaticDose()
+        let error = manager.dataAccessQueue.sync { () -> LoopError? in
+            manager.enactAutomaticDose(bolus: nil, tempBasal: nil, decisionId: nil)
         }
 
         guard case .manualTempBasalRunning? = error else { return XCTFail("refused as stock does; got \(String(describing: error))") }
@@ -462,9 +456,8 @@ final class StockRunsTests: XCTestCase {
         manager.pumpManager = try makePump(fault: status)
         manager.doseEnactor = enactor
 
-        let error = manager.dataAccessQueue.sync { () -> WatchLoopError? in
-            pendingTemp(manager)
-            return manager.enactRecommendedAutomaticDose()
+        let error = manager.dataAccessQueue.sync { () -> LoopError? in
+            manager.enactAutomaticDose(bolus: nil, tempBasal: highTemp, decisionId: nil)
         }
 
         guard case .pumpInoperable? = error else { return XCTFail("refused as stock does; got \(String(describing: error))") }
@@ -663,8 +656,7 @@ final class StockRunsTests: XCTestCase {
         let loops = try await storedDecisions(manager).filter { $0.reason == "loop" }
         XCTAssertEqual(loops.count, 1, "stored on the error arm too")
         let error = try XCTUnwrap(loops.first?.errors.first)
-        XCTAssertEqual(error.id, "missingDataError")
-        XCTAssertTrue(error.details?["detail"]?.contains("pumpDataTooOld") == true, "got \(String(describing: error.details))")
+        XCTAssertEqual(error.id, "pumpDataTooOld", "stock's id")
         XCTAssertTrue(enactor.calls.isEmpty, "nothing sent")
     }
 
