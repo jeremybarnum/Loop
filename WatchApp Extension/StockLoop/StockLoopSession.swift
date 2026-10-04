@@ -38,8 +38,12 @@ final class StockLoopSession {
 
         loanController.isPhoneReachable = { WCSession.default.isReachable }
 
-        // The per-cycle renewal is the phone's liveness signal.
-        stack.loopManager.onCycleLanded = { [weak loanController] in loanController?.renewHold() }
+        // The per-cycle renewal is the phone's liveness signal; republishing the glance mirror
+        // feeds the Sport complications.
+        stack.loopManager.onCycleLanded = { [weak loanController, weak loopManager = stack.loopManager] in
+            loanController?.renewHold()
+            loopManager?.refreshGlanceData()
+        }
         stack.loopManager.onLoopOpened = { [weak loanController] in loanController?.endPreMealOverride(reason: "loop opened on the wrist") }
 
         // Cancel queued requests that have not started transferring: delivered at reunion they could

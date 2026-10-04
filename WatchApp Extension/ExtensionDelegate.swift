@@ -72,6 +72,15 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
             }
         })
 
+        // During a loan the Sport complications (SportComplications widget extension) show the
+        // WATCH's loop, published through the glance mirror (republished at every landed cycle).
+        notifications.append(NotificationCenter.default.addObserver(forName: WatchLoopManager.glanceMirrorDidUpdate, object: nil, queue: nil) { [weak self] (_) in
+            DispatchQueue.main.async {
+                guard let self, self.stockLoopSession?.loanController.isLoanActiveNonBlocking == true else { return }
+                SportComplicationPublisher.publish(from: self)
+            }
+        })
+
         session.activate()
     }
 
@@ -234,6 +243,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
             log.default("Reloading complication timeline")
             server.reloadTimeline(for: complication)
         }
+        SportComplicationPublisher.publish(from: self)
     }
 }
 
