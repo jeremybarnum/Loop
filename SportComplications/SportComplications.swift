@@ -18,6 +18,8 @@ struct SportEntry: TimelineEntry {
 }
 
 struct SportProvider: TimelineProvider {
+    let kind: SportComplicationSnapshot.Kind
+
     func placeholder(in context: Context) -> SportEntry {
         SportEntry(date: Date(), snapshot: .sample)
     }
@@ -30,6 +32,7 @@ struct SportProvider: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping (Timeline<SportEntry>) -> Void) {
         let now = Date()
         let snapshot = SportComplicationSnapshot.load()
+        SportComplicationSnapshot.noteServed(kind.rawValue, at: now)
         let moments = [now] + (snapshot?.staleMoments(after: now) ?? [])
         completion(Timeline(entries: moments.map { SportEntry(date: $0, snapshot: snapshot) }, policy: .never))
     }
@@ -137,7 +140,7 @@ protocol SportComplicationWidget: Widget {
 
 extension SportComplicationWidget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: Self.kind.rawValue, provider: SportProvider()) { entry in
+        StaticConfiguration(kind: Self.kind.rawValue, provider: SportProvider(kind: Self.kind)) { entry in
             SportComplicationView(kind: Self.kind, entry: entry)
         }
         .configurationDisplayName(Self.kind.title)

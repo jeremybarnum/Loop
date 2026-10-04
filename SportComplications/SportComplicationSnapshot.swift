@@ -39,6 +39,29 @@ struct SportComplicationSnapshot: Codable, Equatable {
         if let data = try? JSONEncoder().encode(self) { defaults?.set(data, forKey: Self.defaultsKey) }
     }
 
+    // MARK: - Diagnostics: which timelines the widget actually served (confirmation runs C1/C2)
+
+    static let servedKey = "SportComplicationServed"
+
+    /// Called by the widget each time it serves a timeline. "epochSeconds kind", newest last, capped.
+    static func noteServed(_ kind: String, at date: Date = Date(), defaults: UserDefaults? = sharedDefaults) {
+        guard let defaults else { return }
+        var list = defaults.stringArray(forKey: servedKey) ?? []
+        list.append("\(Int(date.timeIntervalSince1970)) \(kind)")
+        if list.count > 200 { list.removeFirst(list.count - 200) }
+        defaults.set(list, forKey: servedKey)
+    }
+
+    /// The timelines served after `date`, oldest first.
+    static func served(after date: Date, defaults: UserDefaults? = sharedDefaults) -> [(date: Date, kind: String)] {
+        (defaults?.stringArray(forKey: servedKey) ?? []).compactMap { line -> (date: Date, kind: String)? in
+            let parts = line.split(separator: " ", maxSplits: 1)
+            guard parts.count == 2, let seconds = TimeInterval(parts[0]) else { return nil }
+            let at = Date(timeIntervalSince1970: seconds)
+            return at > date ? (at, String(parts[1])) : nil
+        }
+    }
+
     static let sample = SportComplicationSnapshot(glucose: 120, glucoseDate: Date(), iob: 1.2, cob: 24, eventual: 128,
                                                   loopDate: Date(), mmol: false)
 

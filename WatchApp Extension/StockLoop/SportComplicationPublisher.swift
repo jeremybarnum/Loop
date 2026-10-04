@@ -28,12 +28,12 @@ enum SportComplicationPublisher {
     /// asserts while a test host is still launching) at each phone context update and, during a
     /// loan, each glance-mirror update.
     @MainActor static func publish(from delegate: ExtensionDelegate) {
-        reading(delegate) { snapshot in
-            DispatchQueue.main.async { store(snapshot, now: Date()) }
+        reading(delegate) { snapshot, source in
+            DispatchQueue.main.async { log(store(snapshot, now: Date()), snapshot: snapshot, source: source) }
         }
     }
 
-    @MainActor private static func reading(_ delegate: ExtensionDelegate, _ completion: @escaping (SportComplicationSnapshot?) -> Void) {
+    @MainActor private static func reading(_ delegate: ExtensionDelegate, _ completion: @escaping (SportComplicationSnapshot?, String) -> Void) {
         let context = delegate.loopManager.activeContext
         let unit = context?.displayGlucoseUnit ?? .milligramsPerDeciliter
         let mmol = unit == .millimolesPerLiter
@@ -44,29 +44,53 @@ enum SportComplicationPublisher {
             session.stack.loopManager.glanceCarbsOnBoard { cob in
                 completion(SportComplicationSnapshot(glucose: value(data.glucose), glucoseDate: data.glucoseDate,
                                                      iob: data.iob, cob: cob, eventual: value(data.eventual),
-                                                     loopDate: data.lastLoopCompleted, mmol: mmol))
+                                                     loopDate: data.lastLoopCompleted, mmol: mmol), "watch loop")
             }
             return
         }
-        guard let context else { return completion(nil) }
+        guard let context else { return completion(nil, "none") }
         completion(SportComplicationSnapshot(glucose: value(context.glucose), glucoseDate: context.glucoseDate,
                                              iob: context.iob, cob: context.cob, eventual: value(context.eventualGlucose),
-                                             loopDate: context.loopLastRunDate, mmol: mmol))
+                                             loopDate: context.loopLastRunDate, mmol: mmol), "phone context")
+    }
+
+    struct StoreResult { var changed = false; var reloaded = false; var owed = false }
+
+    /// Diagnostics for the confirmation runs: each publish, whether it changed and reloaded, and which
+    /// timelines the widget actually served since the previous publish (requested vs served redraws).
+    private static var lastServedLogged = Date()
+
+    @MainActor private static func log(_ result: StoreResult, snapshot: SportComplicationSnapshot?, source: String) {
+        let now = Date()
+        let served = SportComplicationSnapshot.served(after: lastServedLogged)
+        lastServedLogged = now
+        func age(_ date: Date?) -> String { date.map { "\(Int(now.timeIntervalSince($0)))s" } ?? "n/a" }
+        let reload = result.reloaded ? "requested" : (result.owed ? "owed" : "none")
+        let kinds = Set(served.map(\.kind)).sorted().joined(separator: ",")
+        SportLog.event("complication", "publish src=\(source) changed=\(result.changed) reload=\(reload) · served since last: \(served.count) [\(kinds)] · BG age \(age(snapshot?.glucoseDate)) · loop age \(age(snapshot?.loopDate))")
     }
 
     /// Pure apart from the save and the reload; `now` is a parameter for the tests.
+    @discardableResult
     static func store(_ snapshot: SportComplicationSnapshot?, now: Date,
                       save: (SportComplicationSnapshot) -> Void = { $0.save() },
-                      reload: () -> Void = { WidgetCenter.shared.reloadAllTimelines() }) {
+                      reload: () -> Void = { WidgetCenter.shared.reloadAllTimelines() }) -> StoreResult {
+        var result = StoreResult()
         if let snapshot, snapshot != lastPublished {
             save(snapshot)
             lastPublished = snapshot
             reloadOwed = true
+            result.changed = true
         }
-        guard reloadOwed, now.timeIntervalSince(lastReloadAt) >= minimumReloadInterval else { return }
+        guard reloadOwed, now.timeIntervalSince(lastReloadAt) >= minimumReloadInterval else {
+            result.owed = reloadOwed
+            return result
+        }
         reloadOwed = false
         lastReloadAt = now
         reload()
+        result.reloaded = true
+        return result
     }
 
     /// Tests only.
