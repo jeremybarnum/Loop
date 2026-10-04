@@ -16,14 +16,10 @@ import os.log
 
 extension WatchLoopManager {
 
-    /// Stock `DeviceDataManager.checkPumpDataAndLoop`, but returns with no pump (between loans
-    /// there is nothing to decide), noting a reading awaited by a rebuild.
+    /// Stock `DeviceDataManager.checkPumpDataAndLoop`, but returns with no pump (between loans, or
+    /// before a takeover or resume finishes, there is nothing to decide).
     func checkPumpDataAndLoop() {
         guard let pumpManager = pumpManager else {
-            awaitedPumpLock.lock()
-            if awaitingPumpManager { readingArrivedWithoutPump = true }
-            awaitedPumpLock.unlock()
-
             if !loggedIdleNoPump {
                 loggedIdleNoPump = true
                 SportLog.event("loop", "idle — no pod on the watch; cycles paused until the next grant (glucose still ingesting)")
@@ -80,9 +76,7 @@ extension WatchLoopManager {
                 }
                 input.recommendationType = dosingStrategy.recommendationType
 
-                if let error = self.loopInputRecencyError(input, at: loopBaseTime) {
-                    throw error
-                }
+                try input.checkRecency(at: loopBaseTime, lastAddedPumpData: self.doseStore.lastAddedPumpData)
 
                 var output = LoopAlgorithm.run(input: input)
                 self.loopRunState = AlgorithmDisplayState(input: input, output: output)
@@ -111,7 +105,7 @@ extension WatchLoopManager {
                     basalAdjustment = basal.adjustForCurrentDelivery(
                         at: loopBaseTime,
                         neutralBasalRate: scheduledBasalRate,
-                        currentTempBasal: self.runningTempBasal(),
+                        currentTempBasal: self.pumpManager?.status.basalDeliveryState?.currentTempBasal,
                         continuationInterval: .minutes(11),
                         neutralBasalRateMatchesPump: self.overrideHistory.activeOverride(at: loopBaseTime) == nil
                     )
@@ -172,7 +166,7 @@ extension WatchLoopManager {
             else if let enactError {
                 // The pod's or the loop's refusal before sending, versus a send that failed.
                 switch enactError {
-                case .pumpInoperable, .pumpSuspended, .manualTempBasalRunning, .configurationError, .connectionError, .recommendationExpired:
+                case .pumpInoperable, .pumpSuspended, .manualTempBasalRunning, .configurationError, .connectionError:
                     enactVerdict = "not-attempted(\(enactError.issueId))"
                 default:
                     enactVerdict = "FAILED \(enactError)"
@@ -294,28 +288,6 @@ extension WatchLoopManager {
                 ? GlucoseBasedApplicationFactorStrategy()
                 : ConstantApplicationFactorStrategy(),
             carbAbsorptionModel: .piecewiseLinear)
-    }
-
-    /// Stock `loop()`'s checks on its input, in stock's order, after the trim and before the
-    /// algorithm. As in stock, `fetchData` queries glucose up to the base time only, so a
-    /// future-dated reading never reaches the input and the future check cannot fire from `loop()`.
-    func loopInputRecencyError(_ input: StoredDataAlgorithmInput, at loopBaseTime: Date) -> LoopError? {
-        guard let latestGlucose = input.glucoseHistory.last else {
-            return .missingDataError(.glucose)
-        }
-
-        guard loopBaseTime.timeIntervalSince(latestGlucose.startDate) <= LoopAlgorithm.inputDataRecencyInterval else {
-            return .glucoseTooOld(date: latestGlucose.startDate)
-        }
-
-        guard latestGlucose.startDate.timeIntervalSince(loopBaseTime) <= LoopAlgorithm.inputDataRecencyInterval else {
-            return .invalidFutureGlucose(date: latestGlucose.startDate)
-        }
-
-        guard loopBaseTime.timeIntervalSince(doseStore.lastAddedPumpData) <= LoopAlgorithm.inputDataRecencyInterval else {
-            return .pumpDataTooOld(date: doseStore.lastAddedPumpData)
-        }
-        return nil
     }
 
     /// Stock `LoopDataManager.updateDisplayState`: the display run, fed with doses back a day,

@@ -83,6 +83,10 @@ extension ExtensionDelegate {
         stockLoopSession?.stack.loopManager.recordAlertAcknowledgement(identifier)
         guard let responder = await stockLoopSession?.loanController.pumpAlertResponder(for: identifier.managerIdentifier) else {
             SportLog.event("alert", "ACKNOWLEDGED \(identifier.value) on the wrist — not the loaned pump's, nothing to pass on")
+            // A repeating alert from a pod no longer here would otherwise go on sounding.
+            if identifier.managerIdentifier != GlucoseAlertManager.managerIdentifier {
+                stockLoopSession?.stack.loopManager.retractAlert(identifier: identifier)
+            }
             return true
         }
         await WatchAlertPresenter.acknowledge(identifier, with: responder, content: request.content)
@@ -142,6 +146,17 @@ extension ExtensionDelegate {
             return
         }
         log.default("Ignoring unexpected sendMessage: %{public}@", String(describing: Array(message.keys)))
+    }
+
+    /// Loan traffic first: it is addressed to the loan controller, not to the context machinery in
+    /// `didReceiveUserInfo`, whose switch's default arm would otherwise swallow it.
+    func podLoanRoutesUserInfo(_ userInfo: [String: Any]) -> Bool {
+        if let session = stockLoopSession {
+            return session.handleIncomingIfLoanMessage(userInfo, channel: .queued)
+        }
+        guard userInfo[LoanProtocol.userInfoKey] != nil else { return false }
+        podLoanNoteEarlyPayload()
+        return true
     }
 
     /// The queued channel's half of the same recovery, called from `didReceiveUserInfo`.

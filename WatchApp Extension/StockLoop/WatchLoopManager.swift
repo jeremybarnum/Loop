@@ -124,23 +124,6 @@ final class WatchLoopManager {
     /// Fired when the wrist opens the loop (closed to open), where stock ends a pre-meal preset.
     var onLoopOpened: (() -> Void)?
 
-    // Glucose that arrives mid-rebuild runs the cycle once the pump manager is back.
-    let awaitedPumpLock = NSLock()
-    var awaitingPumpManager = false
-    var readingArrivedWithoutPump = false
-
-    func beginAwaitingPumpManager() {
-        awaitedPumpLock.lock(); awaitingPumpManager = true; readingArrivedWithoutPump = false; awaitedPumpLock.unlock()
-    }
-
-    /// Consumes the flag: it answers true ONCE, so two callers cannot each run a catch-up cycle.
-    func endAwaitingPumpManager() -> Bool {
-        awaitedPumpLock.lock(); defer { awaitedPumpLock.unlock() }
-        let waited = readingArrivedWithoutPump
-        awaitingPumpManager = false
-        readingArrivedWithoutPump = false
-        return waited
-    }
     /// Shared by the CGM and the pump managers, which log from several queues at once during a
     /// radio storm — the throttle has to be thread-safe on its own account.
     let deviceLogThrottle = DeviceLogThrottle()
@@ -354,12 +337,6 @@ final class WatchLoopManager {
         let overrideLabel: String?
     }
 
-    /// What the pod is running, from the pump's delivery state.
-    func runningTempBasal() -> DoseEntry? {
-        if case .some(.tempBasal(let dose)) = pumpManager?.status.basalDeliveryState { return dose }
-        return nil
-    }
-
     let glanceMirrorLock = NSLock()
     var _glanceMirror: GlanceData?
     var _glanceRefreshPending = false
@@ -490,11 +467,6 @@ final class WatchLoopManager {
         refreshGlanceData()
     }
 
-    /// For glucose that arrived outside the CGM delegate, e.g. the grant seed.
-    func notePhoneGlucoseDelivered() {
-        noteGlucoseSource(directG7: false)
-    }
-
     /// One-line "who is feeding this watch" for the log at the start of a loan.
     var g7ContentionSummary: String {
         let stamps = lastGlucoseSourceStamps
@@ -550,8 +522,8 @@ final class WatchLoopManager {
 
     var lastPredictionBreakdown: PredictionBreakdown?
 
-    /// The last cycle's recommendation as enacted, for the glance; cleared when a cycle starts, so a
-    /// failed cycle shows none rather than the one before.
+    /// The last cycle's recommendation, for the glance; cleared when a cycle starts, so a cycle
+    /// whose compute failed shows none rather than the one before.
     var lastRecommendation: AutomaticDoseRecommendation?
 
     /// When a cycle last completed — the freshness ring's only input. Persisted on every write:
