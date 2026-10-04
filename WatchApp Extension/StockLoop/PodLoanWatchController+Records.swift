@@ -87,12 +87,17 @@ extension PodLoanWatchController {
         }
     }
 
-    /// Also in the local store, so this cycle's COB already sees it. Both under the event ID,
-    /// the identity the phone stores it under, so a later wrist delete matches there.
-    func loanDidRecordCarbs(_ entry: NewCarbEntry) {
+    /// Also in the local store, so the next cycle's COB sees it. Both under the event ID, the
+    /// identity the phone stores it under, so a later wrist delete matches there. `completion`
+    /// gets the local store's answer.
+    func loanDidRecordCarbs(_ entry: NewCarbEntry, completion: ((Swift.Result<StoredCarbEntry, Error>) -> Void)? = nil) {
         let grams = entry.quantity.doubleValue(for: .gram)
         let eventID = UUID()
-        loopManager.addLoanCarbEntry(entry, syncIdentifier: eventID.uuidString)
+        loopManager.addLoanCarbEntry(entry, syncIdentifier: eventID.uuidString) { result in
+            // As stock `LoopDataManager.addCarbEntry`: saved carbs end a pre-meal preset.
+            if case .success = result { self.endPreMealOverride(reason: "carbs saved on the wrist") }
+            completion?(result)
+        }
         // async, never sync: ordering with the pump's reports, and main must not wait.
         queue.async {
             guard self.phase == .active else {
@@ -135,6 +140,21 @@ extension PodLoanWatchController {
                                           syncIdentifier ?? "none", event.seq,
                                           String(event.id.uuidString.prefix(8))))
             self.streamRecords()
+        }
+    }
+
+    /// Stock `TemporaryPresetsManager.endPreMealOverride`, where stock calls it: after a carb entry
+    /// is saved and when the loop is opened. Through the wrist's override path, so the journal
+    /// carries it to the phone; the presets screen is cleared to match.
+    func endPreMealOverride(reason: String) {
+        guard let active = loopManager.scheduleOverride, active.isActive(at: now()), active.context == .preMeal else { return }
+        SportLog.event("override", "pre-meal ENDED — \(reason), as stock")
+        applyWristOverride(nil)
+        DispatchQueue.main.async {
+            let ui = LoopDataManager.shared
+            if ui.watchInfo.scheduleOverride?.context == .preMeal {
+                ui.watchInfo.scheduleOverride = nil
+            }
         }
     }
 

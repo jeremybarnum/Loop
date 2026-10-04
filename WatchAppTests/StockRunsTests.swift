@@ -20,7 +20,7 @@ import HealthKit
 @testable import WatchApp
 
 /// Records what the loop asks the pod for, and sends nothing.
-final class RecordingDoseEnactor: WatchDoseEnactor {
+final class RecordingDoseEnactor: DoseEnactor {
     private(set) var calls: [(bolus: Double?, tempBasal: TempBasalRecommendation?)] = []
     private(set) var decisionIds: [UUID?] = []
 
@@ -166,12 +166,14 @@ final class StockRunsTests: XCTestCase {
     }
 
     /// An Omnipod manager with a completed pod, optionally faulted or running a temp.
-    private func makePump(fault: DetailedStatus? = nil, unfinalizedTemp: UnfinalizedDose? = nil) throws -> OmniPumpManager {
+    private func makePump(fault: DetailedStatus? = nil, unfinalizedTemp: UnfinalizedDose? = nil,
+                          unfinalizedBolus: UnfinalizedDose? = nil) throws -> OmniPumpManager {
         var podState = PodState(address: 0x1f0b3557, firmwareVersion: "2.7.0", iFirmwareVersion: "2.7.0",
                                 lotNo: 1, lotSeq: 1, insulinType: .novolog, podType: dashType)
         podState.setupProgress = .completed
         podState.fault = fault
         podState.unfinalizedTempBasal = unfinalizedTemp
+        podState.unfinalizedBolus = unfinalizedBolus
         let raw: [String: Any] = ["basalSchedule": ["entries": [["rate": 0.7, "startTime": 0.0]]],
                                   "controllerId": UInt32(0x1234_5678), "podId": UInt32(0x1234_5679),
                                   "podState": podState.rawValue]
@@ -666,8 +668,14 @@ final class StockRunsTests: XCTestCase {
         manager.recommendManualBolus(potentialCarbEntry: meal) { _ in shown.fulfill() }
         await fulfillment(of: [shown], timeout: 20)
 
+        let mealSyncId = UUID().uuidString
+        let stored = try await withCheckedThrowingContinuation { continuation in
+            manager.carbStore.addCarbEntry(meal, syncIdentifier: mealSyncId) { continuation.resume(with: $0) }
+        }
+
         let accepted = expectation(description: "bolus")
-        manager.enactManualBolus(units: 1.0, activationType: .manualNoRecommendation, carbEntry: meal) { _ in accepted.fulfill() }
+        manager.enactManualBolus(units: 1.0, activationType: .manualNoRecommendation, carbEntry: meal,
+                                 storedCarbEntry: stored) { _ in accepted.fulfill() }
         await fulfillment(of: [accepted], timeout: 20)
         manager.dataAccessQueue.sync {}
 
@@ -677,6 +685,7 @@ final class StockRunsTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(commanded).id, decision.id, "the bolus carries the decision's id")
         XCTAssertEqual(decision.manualBolusRequested, 1.0)
         XCTAssertEqual(decision.carbEntry?.quantity.doubleValue(for: .gram) ?? 0, 30, accuracy: 0.001)
+        XCTAssertEqual(decision.carbEntry?.syncIdentifier, mealSyncId, "the entry as stored, as stock records it")
         XCTAssertNotNil(decision.manualBolusRecommendation, "the recommendation shown with this carb entry")
         XCTAssertNotNil(decision.predictedGlucose)
         XCTAssertNotNil(decision.settings)
@@ -746,6 +755,127 @@ final class StockRunsTests: XCTestCase {
         let second = try LoanHistory.decode(files[1].data)
         XCTAssertFalse(second.decisions.isEmpty)
         XCTAssertTrue(Set(second.decisions.map(\.id)).isDisjoint(with: Set(first.decisions.map(\.id))), "only what was stored since")
+    }
+
+    // MARK: - What runs a cycle, as stock
+
+    /// Every cycle with a pod held stores one "loop" decision, so the count is the cycles run.
+    private func cyclesRun(_ manager: WatchLoopManager) async throws -> Int {
+        manager.dataAccessQueue.sync {}
+        return try await storedDecisions(manager).filter { $0.reason == "loop" }.count
+    }
+
+    /// A held pod, the loop closed, recent glucose and a fresh pump report: a cycle would dose.
+    private func makeClosedLoopManager() async throws -> (WatchLoopManager, RecordingDoseEnactor) {
+        let manager = await makeManager()
+        await seedGlucose(manager)
+        await report(manager)
+        let enactor = RecordingDoseEnactor()
+        manager.pumpManager = try makePump()
+        manager.doseEnactor = enactor
+        manager.setClosedLoopEnabled(true, reason: "test")
+        manager.dataAccessQueue.sync {}
+        return (manager, enactor)
+    }
+
+    /// A labelled copy of stock `DeviceDataManager.enactBolus`: a manual bolus first cancels an
+    /// automatic bolus in progress (the pod refuses a bolus while one runs); a manual bolus in
+    /// progress is left alone.
+    func testAManualBolusCancelsAnAutomaticBolusInProgressFirst() async throws {
+        func inProgress(automatic: Bool) -> UnfinalizedDose {
+            UnfinalizedDose(decisionId: nil, bolusAmount: 2.0, startTime: Date().addingTimeInterval(-10),
+                            scheduledCertainty: .certain, insulinType: .novolog, automatic: automatic)
+        }
+        for automatic in [true, false] {
+            let manager = await makeManager()
+            manager.pumpManager = try makePump(unfinalizedBolus: inProgress(automatic: automatic))
+            var commands: [String] = []
+            manager.cancelBolusCommand = { _ in commands.append("cancel") }
+            manager.enactBolusCommand = { _, _, _, _, completion in
+                commands.append("bolus")
+                completion(nil)
+            }
+
+            let accepted = expectation(description: "bolus")
+            manager.enactManualBolus(units: 1.0, activationType: .manualNoRecommendation) { _ in accepted.fulfill() }
+            await fulfillment(of: [accepted], timeout: 10)
+
+            XCTAssertEqual(commands, automatic ? ["cancel", "bolus"] : ["bolus"],
+                           automatic ? "the automatic bolus is cancelled first" : "a manual bolus is not cancelled")
+        }
+    }
+
+    private func storedCarbs(_ manager: WatchLoopManager) async -> [StoredCarbEntry] {
+        await withCheckedContinuation { continuation in
+            manager.carbStore.getCarbEntries(start: Date().addingTimeInterval(-3600)) { result in
+                continuation.resume(returning: (try? result.get()) ?? [])
+            }
+        }
+    }
+
+    /// Stock runs no cycle when carbs are saved: on the bench, the wrist's extra cycle
+    /// auto-bolused for the meal before the manual bolus reached the pod.
+    func testSavingCarbsOnTheWristRunsNoCycle() async throws {
+        let (manager, enactor) = try await makeClosedLoopManager()
+
+        manager.addLoanCarbEntry(carbs(40), syncIdentifier: UUID().uuidString)
+        var tries = 0
+        while await storedCarbs(manager).isEmpty, tries < 50 {
+            tries += 1
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let saved = await storedCarbs(manager)
+        XCTAssertEqual(saved.count, 1, "saved")
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        let cycles = try await cyclesRun(manager)
+        XCTAssertEqual(cycles, 0, "no cycle on a carb save")
+        XCTAssertTrue(enactor.calls.isEmpty, "nothing sent to the pod")
+    }
+
+    /// Nor when carbs are deleted.
+    func testDeletingCarbsOnTheWristRunsNoCycle() async throws {
+        let (manager, enactor) = try await makeClosedLoopManager()
+        _ = try await manager.carbStore.addCarbEntry(carbs(40))
+        let stored = await storedCarbs(manager)
+        let entry = try XCTUnwrap(stored.first)
+
+        let deleted = expectation(description: "deleted")
+        manager.deleteLoanCarbEntry(entry) { ok in
+            XCTAssertTrue(ok)
+            deleted.fulfill()
+        }
+        await fulfillment(of: [deleted], timeout: 10)
+
+        let cycles = try await cyclesRun(manager)
+        XCTAssertEqual(cycles, 0, "no cycle on a carb delete")
+        XCTAssertTrue(enactor.calls.isEmpty)
+    }
+
+    /// Nor when the pod accepts a manual bolus.
+    func testAnAcceptedManualBolusRunsNoCycle() async throws {
+        let (manager, enactor) = try await makeClosedLoopManager()
+        manager.enactBolusCommand = { _, _, _, _, completion in completion(nil) }
+
+        let accepted = expectation(description: "bolus")
+        manager.enactManualBolus(units: 1.0, activationType: .manualNoRecommendation) { error in
+            XCTAssertNil(error)
+            accepted.fulfill()
+        }
+        await fulfillment(of: [accepted], timeout: 10)
+
+        let cycles = try await cyclesRun(manager)
+        XCTAssertEqual(cycles, 0, "no cycle after a bolus")
+        XCTAssertTrue(enactor.calls.isEmpty)
+    }
+
+    /// The gate both glucose sources share: one claim per 4.2 minutes.
+    func testTheCGMTriggerGateIsClaimedOncePerWindow() async {
+        let manager = await makeManager()
+        let now = Date()
+        XCTAssertTrue(manager.claimCGMLoopTrigger(at: now))
+        XCTAssertFalse(manager.claimCGMLoopTrigger(at: now.addingTimeInterval(4 * 60)))
+        XCTAssertTrue(manager.claimCGMLoopTrigger(at: now.addingTimeInterval(4.3 * 60)))
     }
 
     @MainActor

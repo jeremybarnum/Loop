@@ -162,11 +162,17 @@ final class WatchLoopManager {
 
     /// The loaned pod, or nil. This IS the loan flag for the loop's purposes: every path that
     /// asks "do we hold the pod?" asks it here, and it is set at takeover and cleared at teardown.
-    var pumpManager: PumpManager?
+    var pumpManager: PumpManager? {
+        // As stock `DeviceDataManager.setupPump`.
+        didSet { doseStore.device = pumpManager?.status.device }
+    }
 
     /// Fired by `loop()` only on a cycle that LANDED, which is what renews the phone's hold. A
     /// cycle that computed but could not reach the pod must not renew it.
     var onCycleLanded: (() -> Void)?
+
+    /// Fired when the wrist opens the loop (closed to open), where stock ends a pre-meal preset.
+    var onLoopOpened: (() -> Void)?
 
     // Glucose that arrives mid-rebuild runs the cycle once the pump manager is back.
     let awaitedPumpLock = NSLock()
@@ -293,6 +299,9 @@ final class WatchLoopManager {
         _closedLoopMirror = enabled
         closedLoopMirrorLock.unlock()
 
+        // As stock: opening the loop ends a pre-meal preset, before the temp is cancelled.
+        if wasEnabled, !enabled { onLoopOpened?() }
+
         dataAccessQueue.async {
             self._closedLoopEnabled = enabled
             SportLog.event("loop", enabled ? "CLOSED \(reason) — the watch will adjust basal" : "OPENED \(reason) — advisory only, no dosing")
@@ -362,19 +371,6 @@ final class WatchLoopManager {
         let carbMgdl: Double
         let momentumMgdl: Double
         let retrospectiveMgdl: Double
-
-        /// What the named effects leave unexplained; not zero by construction.
-        let residualMgdl: Double
-
-        let insulinRawTailMgdl: Double?
-
-        /// Nil at the only site that builds one: the "-ISF x IOB" cross-check was never carried
-        /// over. Do not read them as if they were populated.
-        let insulinExpectedMgdl: Double?
-        let isfMgdlPerU: Double?
-        let iobUnits: Double?
-        let momentumPointCount: Int
-        let computedAt: Date
 
         /// Whole mg/dL for display. The last line folds -0 into 0: a row of small effects
         /// otherwise renders "-0" beside "+0" and reads as a sign error.
@@ -653,15 +649,26 @@ final class WatchLoopManager {
     var lastLoopError: Error?
 
     /// Shared by BOTH glucose sources, so the 4.2-minute gate applies across them: a direct
-    /// reading and the phone's relay of the same reading must not each fire a cycle.
-    var lastCGMLoopTrigger: Date = .distantPast
+    /// reading and the phone's relay of the same reading must not each fire a cycle. Each source
+    /// claims it from its own background task, so it is read and written under one lock.
+    private let cgmLoopTriggerLock = NSLock()
+    private var lastCGMLoopTrigger: Date = .distantPast
+
+    /// Stock's 4.2-minute gate, checked and claimed in one step: true means this caller runs the cycle.
+    func claimCGMLoopTrigger(at now: Date) -> Bool {
+        cgmLoopTriggerLock.lock()
+        defer { cgmLoopTriggerLock.unlock() }
+        guard now.timeIntervalSince(lastCGMLoopTrigger) > .minutes(4.2) else { return false }
+        lastCGMLoopTrigger = now
+        return true
+    }
 
     /// The last phone-relayed sample taken, latched so the several copies that can arrive within
     /// milliseconds of each other are not each re-examined against an uncommitted store.
     var lastPhoneFallbackSyncId: String?
 
-    /// A labelled copy of stock's `DoseEnactor`; see that file. A `var` so tests can observe it.
-    var doseEnactor = WatchDoseEnactor()
+    /// Stock's `DoseEnactor`, unchanged. A `var` so tests can observe it.
+    var doseEnactor = DoseEnactor()
 
     /// Say "idle, no pod" once per idle stretch instead of once per reading.
     var loggedIdleNoPump = false
@@ -679,6 +686,11 @@ final class WatchLoopManager {
     var enactBolusCommand: (PumpManager, _ decisionId: UUID?, _ units: Double, BolusActivationType,
                             @escaping (PumpManagerError?) -> Void) -> Void = { pumpManager, decisionId, units, activationType, completion in
         pumpManager.enactBolus(decisionId: decisionId, units: units, activationType: activationType, completion: completion)
+    }
+
+    /// Stock's cancel of an automatic bolus before a manual one; a `var` so the suite can see it.
+    var cancelBolusCommand: (PumpManager) async -> Void = { pumpManager in
+        let _ = try? await pumpManager.cancelBolus()
     }
 
 }
