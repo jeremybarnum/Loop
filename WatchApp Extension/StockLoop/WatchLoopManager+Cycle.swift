@@ -44,12 +44,10 @@ extension WatchLoopManager {
     /// The "loop" decision is built and stored as stock builds it, on both arms, and its id goes to
     /// the pod with the dose. `lastLoopCompleted` moves, as in stock, only on an error-free
     /// closed-loop cycle. Remaining differences from stock:
-    /// - enact is gated on the watch's loop mode (`closedLoopEnabled`), not the phone's `dosingEnabled`;
+    /// - enact is gated on the watch's loop mode (`_closedLoopEnabled`), not the phone's `dosingEnabled`;
     /// - decisions are stored only while the pod is held (`storeDosingDecision`);
     /// - the dead-man watchdog (`LoopStallWatchdog`) is refreshed on any error-free cycle, open or
     ///   closed, with a pod held (stock's loop-failure notification keys off `lastLoopCompleted`);
-    /// - the predicted-low alert reads the display run's forecast, as stock, but only after a
-    ///   cycle whose compute succeeded (stock evaluates on both arms);
     /// - not stock: a recommendation older than five minutes is refused at enact.
     func loop() {
         dataAccessQueue.async {
@@ -92,10 +90,10 @@ extension WatchLoopManager {
             // Open loop first: it still computes with no error, so later arms would report an unsent command.
             let enactVerdict: String
             if !self._closedLoopEnabled { enactVerdict = "none(open-loop)" }
-            else if decided?.basalAdjustment == nil && decided != nil { enactVerdict = "none(no-change)" }
-            else if decided == nil { enactVerdict = "none(nothing-decided)" }
             else if case .enactFailed(let why)? = error { enactVerdict = "FAILED \(why)" }
             else if error != nil { enactVerdict = "not-attempted(\(error!))" }
+            else if decided?.basalAdjustment == nil && decided != nil { enactVerdict = "none(no-change)" }
+            else if decided == nil { enactVerdict = "none(nothing-decided)" }
             else { enactVerdict = "ok" }
 
             let watchdogRefreshed = (error == nil && self.pumpManager != nil)
@@ -147,8 +145,8 @@ extension WatchLoopManager {
             self.updateDisplayStateOnQueue(forceStoreRemoteRecommendation: true)
 
             // Stock's predicted-low alert reads `LoopDataManager.predictedGlucose`, the display
-            // run's forecast. Stock evaluates on both arms; the wrist keeps its compute-succeeded gate.
-            if computeSucceeded { self.evaluatePredictedLowAlert(self.displayState.output?.predictedGlucose) }
+            // run's forecast, on both arms.
+            self.evaluatePredictedLowAlert(self.displayState.output?.predictedGlucose)
         }
     }
 

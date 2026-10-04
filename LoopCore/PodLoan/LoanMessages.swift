@@ -99,13 +99,9 @@ public struct LoanPodStatus: Codable, Equatable {
     }
 }
 
-/// How the holder of the pod is dosing.
+/// How the holder of the pod is dosing; the only mode built.
 public enum LoanDosingMode: String, Codable {
     case closedDirect
-    case closedPhoneFed
-    case cgmViewer
-    case pausedStale
-    case suspended
 }
 
 /// The watch asking for the pod.
@@ -202,8 +198,6 @@ public struct LoanGrant: Codable, Equatable {
     /// Recent glucose, so the first prediction has momentum.
     public let glucoseHistory: [LoanGlucoseRecord]?
 
-    public let predictionSnapshot: LoanPredictionSnapshot?
-
     public let activeOverrideRaw: Data?
 
     /// Schedules and insulin model, which the settings blob drops.
@@ -231,7 +225,6 @@ public struct LoanGrant: Codable, Equatable {
                 phoneClosedLoopEnabled: Bool? = nil,
                 carbHistory: [LoanCarbRecord]? = nil,
                 glucoseHistory: [LoanGlucoseRecord]? = nil,
-                predictionSnapshot: LoanPredictionSnapshot? = nil,
                 activeOverrideRaw: Data? = nil,
                 therapySettingsSupplementRaw: Data? = nil,
                 lastLoopCompleted: Date? = nil,
@@ -251,7 +244,6 @@ public struct LoanGrant: Codable, Equatable {
         self.phoneClosedLoopEnabled = phoneClosedLoopEnabled
         self.carbHistory = carbHistory
         self.glucoseHistory = glucoseHistory
-        self.predictionSnapshot = predictionSnapshot
         self.activeOverrideRaw = activeOverrideRaw
         self.therapySettingsSupplementRaw = therapySettingsSupplementRaw
         self.lastLoopCompleted = lastLoopCompleted

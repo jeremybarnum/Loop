@@ -99,9 +99,10 @@ extension PodLoanWatchController: PumpManagerDelegate {
         return 0
     }
 
-    /// Only a live loan counts. A watch mid-takeover or mid-drain is not dosing automatically.
+    /// Stock returns `dosingEnabled`; here, the wrist's loop switch during a live loan. A watch
+    /// mid-takeover or mid-drain is not dosing automatically.
     var automaticDosingEnabled: Bool {
-        return phase == .active
+        return phase == .active && loopManager.closedLoopEnabledNonBlocking
     }
 
     /// Judged against the override-applied schedule.
@@ -184,7 +185,7 @@ extension LoanGrant {
                   supportsOverrideRecords: supportsOverrideRecords,
                   integralRetrospectiveCorrectionEnabled: integralRetrospectiveCorrectionEnabled,
                   phoneClosedLoopEnabled: phoneClosedLoopEnabled, carbHistory: carbHistory,
-                  glucoseHistory: glucoseHistory, predictionSnapshot: predictionSnapshot,
+                  glucoseHistory: glucoseHistory,
                   activeOverrideRaw: activeOverrideRaw,
                   therapySettingsSupplementRaw: therapySettingsSupplementRaw,
                   lastLoopCompleted: lastLoopCompleted,

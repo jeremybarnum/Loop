@@ -248,15 +248,9 @@ final class WatchLoopManager {
         }
     }
 
-    var _closedLoopEnabled = false
-
     /// The only gate on automatic dosing here; not combined with the phone's `dosingEnabled`.
-    /// Syncs onto `dataAccessQueue`, so use `closedLoopEnabledNonBlocking` from the loan queue.
-    var closedLoopEnabled: Bool {
-        RuntimeStateLog.markBlockingIfMain("blocking.closedLoopEnabled")
-        defer { RuntimeStateLog.markBlockingIfMain("blocking.closedLoopEnabled.done") }
-        return dataAccessQueue.sync { _closedLoopEnabled }
-    }
+    /// Queue-owned; `closedLoopEnabledNonBlocking` reads it from elsewhere.
+    var _closedLoopEnabled = false
 
     private let closedLoopMirrorLock = NSLock()
     private var _closedLoopMirror = false
@@ -274,10 +268,6 @@ final class WatchLoopManager {
         change(&loopState)
         loopStateStore.wrappedValue = loopState.rawValue
     }
-    /// Syncs onto `dataAccessQueue`, with the same caveat as `closedLoopEnabled`: not from the
-    /// loan controller's queue.
-    var isIntegralRetrospectiveCorrectionEnabled: Bool { dataAccessQueue.sync { integralRetrospectiveCorrectionEnabled } }
-
     /// Per session, so the next grant's mode is not mistaken for a transition.
     func resetClosedLoopForSessionEnd() {
         updateLoopState { $0.closedLoopEnabled = false }
@@ -290,7 +280,7 @@ final class WatchLoopManager {
     }
 
     /// Mirror written synchronously so an immediate hand-back carries the new value. Opening the
-    /// loop cancels the running temp, only on a real closed-to-open transition.
+    /// loop cancels an automatic temp, as stock, only on a real closed-to-open transition.
     func setClosedLoopEnabled(_ enabled: Bool, reason: String = "by user") {
         updateLoopState { $0.closedLoopEnabled = enabled }
 
@@ -312,13 +302,7 @@ final class WatchLoopManager {
             if wasEnabled != enabled { self.updateDisplayStateForChange() }
 
             guard wasEnabled, !enabled else { return }
-            let recommendation = AutomaticDoseRecommendation(basalAdjustment: .cancel, direction: .decrease)
-            self.recommendedAutomaticDose = (recommendation: recommendation, enactTempBasal: true, date: self.now())
-            if let error = self.enactRecommendedAutomaticDose() {
-                SportLog.event("loop", "OPEN: temp cancel FAILED — \(String(describing: error)); the pod keeps its current rate until the temp expires")
-            } else {
-                SportLog.event("loop", "OPEN: running temp cancelled — pod reverts to the user's schedule")
-            }
+            self.cancelActiveTempBasalOnQueue(reason: "automaticDosingDisabled")
         }
     }
 
@@ -336,7 +320,7 @@ final class WatchLoopManager {
                                               o.duration.isInfinite ? "indefinite" : ISO8601DateFormatter().string(from: o.scheduledInterval.end),
                                               o.syncIdentifier.uuidString))
         } else {
-            SportLog.event("override", "SET-ON-WRIST · CLEARED by user — the loan's schedules resolve unscaled from here")
+            SportLog.event("override", "SET-ON-WRIST · CLEARED — the loan's schedules resolve unscaled from here")
         }
         scheduleOverride = override
     }
@@ -519,13 +503,6 @@ final class WatchLoopManager {
                 self?.updateDisplayStateForChange()
             }
         }
-        #if !targetEnvironment(simulator)
-
-        NotificationCenter.default.addObserver(forName: LoopDataManager.didUpdateContextNotification,
-                                               object: nil, queue: .main) { [weak self] _ in
-            self?.ingestPhoneGlucoseFromContext()
-        }
-        #endif
     }
 
     private let bgSourceLock = NSLock()
@@ -596,7 +573,7 @@ final class WatchLoopManager {
         }
     }
 
-    /// Queue-owned; `isIntegralRetrospectiveCorrectionEnabled` is the safe way to read it.
+    /// Queue-owned.
     var integralRetrospectiveCorrectionEnabled = false
 
     /// Stock glucose alerts, built from the phone's settings for a loan; nil between loans.
@@ -620,13 +597,6 @@ final class WatchLoopManager {
     /// The pending command and WHEN it was decided. The date is not decoration — the enact path
     /// refuses a recommendation older than five minutes.
     var recommendedAutomaticDose: (recommendation: AutomaticDoseRecommendation, enactTempBasal: Bool, date: Date)?
-
-    /// The phone's prediction as of the grant, kept only so the log can compare the two devices
-    /// over the one window where they ran on the same inputs. Nothing doses from it.
-    var phonePredictionSnapshotAtGrant: LoanPredictionSnapshot?
-    func stashPhonePredictionSnapshot(_ snapshot: LoanPredictionSnapshot?) {
-        dataAccessQueue.async { self.phonePredictionSnapshotAtGrant = snapshot }
-    }
 
     /// The display's copy, kept because a successful enact clears `recommendedAutomaticDose` —
     /// without it the glance would blank the recommended rate on exactly the cycles that dosed.

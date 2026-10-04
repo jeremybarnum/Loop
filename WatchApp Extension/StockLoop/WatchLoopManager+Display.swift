@@ -36,22 +36,19 @@ extension WatchLoopManager {
         }
     }
 
-    /// Blocking; main reads `mirroredGlanceData`.
-    func glanceData() -> GlanceData {
-        RuntimeStateLog.markBlockingIfMain("blocking.glanceData")
-        defer { RuntimeStateLog.markBlockingIfMain("blocking.glanceData.done") }
-        return dataAccessQueue.sync { self.buildGlanceData() }
+    /// Stock's net basal, against the override-applied schedule as stock's watch context uses.
+    func netBasal() -> NetBasal? {
+        guard let basalDeliveryState = pumpManager?.status.basalDeliveryState,
+              let basalSchedule = basalRateScheduleApplyingOverrideHistory else { return nil }
+        return basalDeliveryState.getNetBasal(basalSchedule: basalSchedule, maximumBasalRatePerHour: settings.maximumBasalRatePerHour)
     }
 
     /// On `dataAccessQueue`.
     func buildGlanceData() -> GlanceData {
             let latest = glucoseStore.latestGlucose
+            // Stock's net rate; none while the schedule runs, so the glance shows no temp.
             var tempRate: Double?
-            // Net rate against the override-applied schedule.
-            if let dose = runningTempBasal() {
-                let scheduled = (basalRateScheduleApplyingOverrideHistory ?? settings.basalRateSchedule)?.value(at: now()) ?? 0
-                tempRate = dose.unitsPerHour - scheduled
-            }
+            if case .active? = pumpManager?.status.basalDeliveryState {} else { tempRate = netBasal()?.rate }
             let sources = self.lastGlucoseSourceStamps
 
             // The glance reads the display run, as stock's screens read `displayState`; the
@@ -162,14 +159,9 @@ extension WatchLoopManager {
         ctx.iob = displayState.activeInsulin?.value
         ctx.loopLastRunDate = lastLoopCompleted
         ctx.isClosedLoop = _closedLoopEnabled
-        // Net against the override-applied schedule.
-        if let dose = runningTempBasal() {
-            let scheduled = (basalRateScheduleApplyingOverrideHistory ?? settings.basalRateSchedule)?.value(at: now()) ?? 0
-            ctx.lastNetTempBasalDose = dose.unitsPerHour - scheduled
-            ctx.lastNetTempBasalDate = dose.startDate
-        } else {
-            ctx.lastNetTempBasalDose = 0
-            ctx.lastNetTempBasalDate = now()
+        // As stock's `WatchDataManager.createWatchContext`.
+        if let netBasal = netBasal() {
+            ctx.lastNetTempBasalDose = netBasal.rate
         }
 
         do {
