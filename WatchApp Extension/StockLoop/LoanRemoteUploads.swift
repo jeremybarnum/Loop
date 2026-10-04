@@ -211,9 +211,11 @@ extension LoanRemoteUploads: InsulinDeliveryStoreDelegate {
 // MARK: - What stock's manager asks of its owner
 
 extension LoanRemoteUploads: RemoteDataServicesManagerDelegate {
-    /// As stock DeviceDataManager: the CGM manager decides, and no manager means yes.
+    /// As stock DeviceDataManager, the CGM manager decides. With no CGM of its own the watch holds
+    /// only the phone's readings (seeded and relayed), which the phone uploads itself under its own
+    /// CGM's setting, so the watch uploads none.
     var shouldSyncGlucoseToRemoteService: Bool {
-        lock.withLock { activeLoop }?.cgmManager?.shouldSyncToRemoteService ?? true
+        lock.withLock { activeLoop }?.cgmManager?.shouldSyncToRemoteService ?? false
     }
 }
 

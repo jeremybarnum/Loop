@@ -37,6 +37,12 @@ final class LoanRemoteUploadsTests: XCTestCase {
     }
 
     /// Every way a loan ends runs through the pump's teardown; the credentials go with it.
+    /// Without its own CGM the watch holds only the phone's readings, which the phone uploads under
+    /// its own CGM's setting (the simulator's "Upload CGM Samples"); the watch uploads none.
+    func testWithoutItsOwnCGMTheWatchUploadsNoGlucose() {
+        XCTAssertFalse(LoanRemoteUploads().shouldSyncGlucoseToRemoteService)
+    }
+
     func testPumpTeardownEndsUploads() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
