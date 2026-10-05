@@ -122,12 +122,13 @@ struct GlanceComplicationSnapshot: Codable, Equatable {
 
 /// What the glance complication shows; the widget makes it an App Intent parameter.
 enum GlanceMetric: String, CaseIterable {
-    case bg, bgEventual, eventual, iob, cob, iobCob, temp, loop, override, glance
+    case bg, bigBG, bgEventual, eventual, iob, cob, iobCob, temp, loop, override, glance
 
     /// The face editor's name for the preset (plain String, see the style rules).
     var title: String {
         switch self {
         case .bg: return NSLocalizedString("BG", comment: "Glance complication: glucose")
+        case .bigBG: return NSLocalizedString("Big BG", comment: "Glance complication: glucose and trend alone, as large as the slot allows")
         case .bgEventual: return NSLocalizedString("BG → Eventual", comment: "Glance complication: glucose and eventual glucose")
         case .eventual: return NSLocalizedString("Eventual BG", comment: "Glance complication: eventual glucose")
         case .iob: return NSLocalizedString("IOB", comment: "Glance complication: insulin on board")
@@ -150,7 +151,7 @@ extension GlanceComplicationSnapshot {
     /// The labelled line: inline slots, and a corner's curved label.
     func line(_ metric: GlanceMetric, at date: Date, corner: Bool = false) -> String {
         switch metric {
-        case .bg, .loop: return corner ? bgWithTrend(at: date) : "BG " + bgWithTrend(at: date)
+        case .bg, .bigBG, .loop: return corner ? bgWithTrend(at: date) : "BG " + bgWithTrend(at: date)
         case .bgEventual: return bgWithTrend(at: date) + " → " + or(eventual(at: date))
         case .eventual: return (corner ? "EVENTUAL " : NSLocalizedString("Eventually ", comment: "Glance complication inline prefix: eventual glucose")) + or(eventual(at: date))
         case .iob: return "IOB " + or(iob(at: date))
@@ -182,7 +183,7 @@ extension GlanceComplicationSnapshot {
     /// A rectangle's big value.
     func headline(_ metric: GlanceMetric, at date: Date) -> String {
         switch metric {
-        case .bg, .loop: return bgWithTrend(at: date)
+        case .bg, .bigBG, .loop: return bgWithTrend(at: date)
         case .bgEventual: return line(.bgEventual, at: date)
         default: return value(metric, at: date)
         }
@@ -191,7 +192,7 @@ extension GlanceComplicationSnapshot {
     /// A rectangle's line under the value: BG → eventual, or the loop's numbers when the value is BG.
     func context(_ metric: GlanceMetric, at date: Date) -> String {
         switch metric {
-        case .bg, .bgEventual, .eventual, .loop: return line(.iobCob, at: date)
+        case .bg, .bigBG, .bgEventual, .eventual, .loop: return line(.iobCob, at: date)
         default: return line(.bgEventual, at: date)
         }
     }
@@ -215,7 +216,7 @@ extension GlanceComplicationSnapshot {
     /// A circular slot: a small caption over the value.
     func caption(_ metric: GlanceMetric) -> String {
         switch metric {
-        case .bg, .loop, .glance: return ""
+        case .bg, .bigBG, .loop, .glance: return ""
         case .bgEventual: return "→"
         case .eventual: return "EVT"
         case .iob: return "IOB"
@@ -228,7 +229,7 @@ extension GlanceComplicationSnapshot {
 
     func value(_ metric: GlanceMetric, at date: Date) -> String {
         switch metric {
-        case .bg, .loop, .glance: return or(bg(at: date))
+        case .bg, .bigBG, .loop, .glance: return or(bg(at: date))
         case .bgEventual, .eventual: return or(eventual(at: date))
         case .iob: return or(iob(at: date))
         case .cob: return or(cob(at: date))

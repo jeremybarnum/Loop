@@ -109,7 +109,7 @@ struct GlanceComplicationView: View {
         case .accessoryCircular:
             circular
         case .accessoryRectangular:
-            metric == .glance ? AnyView(miniGlance) : AnyView(rectangular)
+            metric == .glance ? AnyView(miniGlance) : metric == .bigBG ? AnyView(bigBG) : AnyView(rectangular)
         default:
             Text(snapshot.value(metric, at: date))
         }
@@ -124,7 +124,7 @@ struct GlanceComplicationView: View {
                 .strokeBorder(snapshot.freshness(at: date).color, lineWidth: 3)
                 .widgetAccentable()
                 .widgetLabel { label.font(.system(size: 22, weight: .bold, design: .rounded)) }
-        case .bg:
+        case .bg, .bigBG:
             Color.clear.widgetLabel { label.font(.system(size: 22, weight: .bold, design: .rounded)) }
         default:
             Color.clear.widgetLabel { label }
@@ -155,7 +155,7 @@ struct GlanceComplicationView: View {
                     let parts = snapshot.overrideParts
                     Text(parts.symbol).font(.system(size: 18))
                     Text(parts.rest).font(.system(size: 12, weight: .semibold, design: .rounded))
-                } else if metric == .bg || metric == .loop {
+                } else if metric == .bg || metric == .bigBG || metric == .loop {
                     Text(snapshot.value(metric, at: date))
                         .font(.system(size: 18, weight: .semibold, design: .rounded)).foregroundStyle(bgColor)
                     Text(snapshot.trend(at: date)).font(.system(size: 12, weight: .medium))
@@ -181,8 +181,11 @@ struct GlanceComplicationView: View {
     private var rectangular: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(metric.title.uppercased())
-                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary).widgetAccentable()
+                // The reading needs no name; the other values do (IOB and COB can read alike).
+                if metric != .bg {
+                    Text(metric.title.uppercased())
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary).widgetAccentable()
+                }
                 Spacer(minLength: 4)
                 loopAge
             }
@@ -195,6 +198,15 @@ struct GlanceComplicationView: View {
                 .minimumScaleFactor(0.7).lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The reading and its trend alone, as large as the slot allows.
+    private var bigBG: some View {
+        Text(snapshot.bgWithTrend(at: date))
+            .font(.system(size: 60, weight: .semibold, design: .rounded))
+            .foregroundStyle(bgColor).widgetAccentable()
+            .minimumScaleFactor(0.3).lineLimit(1)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
 
     /// The glance in three lines: BG → eventual, the loop's numbers, then override and loop age.

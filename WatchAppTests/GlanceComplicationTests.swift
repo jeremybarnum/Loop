@@ -124,7 +124,7 @@ final class GlanceComplicationTests: XCTestCase {
     func testEveryMetricIsRecommended() {
         let titles = GlanceMetric.allCases.map(\.title)
         XCTAssertEqual(Set(titles).count, GlanceMetric.allCases.count)
-        XCTAssertEqual(GlanceMetric.allCases.count, 10)
+        XCTAssertEqual(GlanceMetric.allCases.count, 11)
     }
 
     func testTheSnapshotRoundTripsThroughDefaults() {
@@ -164,6 +164,7 @@ final class GlanceComplicationTests: XCTestCase {
         XCTAssertEqual(s.headline(.iob, at: now), "2.3")
         XCTAssertEqual(s.context(.iob, at: now), "106\(up) → 112")
         XCTAssertEqual(s.headline(.bg, at: now), "106\(up)")
+        XCTAssertEqual(s.headline(.bigBG, at: now), "106\(up)", "Big BG is the reading and its trend alone")
         XCTAssertEqual(s.context(.bg, at: now), "IOB 2.3 · COB 15")
     }
 
