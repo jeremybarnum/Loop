@@ -187,6 +187,48 @@ final class LoanRemoteUploads {
         }
     }
 
+    /// The hand-back is starting: everything not yet uploaded goes now.
+    func flush() {
+        guard let manager = lock.withLock({ self.manager }) else { return }
+        Task { @MainActor in manager.triggerAllUploads() }
+    }
+
+    /// The types the phone would otherwise upload a second copy of, confirmed per service when the
+    /// store holds nothing past the service's upload bookmark; waits up to `within` for a flush to
+    /// land. Empty with no service running, at once.
+    func confirmUploads(within: TimeInterval, completion: @escaping ([String: [String]]) -> Void) {
+        let (service, loop) = lock.withLock { (nightscout, activeLoop) }
+        guard let service, let loop else { return completion([:]) }
+        Task {
+            let deadline = Date().addingTimeInterval(within)
+            var confirmed = await Self.typesUploaded(to: service, from: loop)
+            while confirmed.count < 2, Date() < deadline {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                confirmed = await Self.typesUploaded(to: service, from: loop)
+            }
+            completion(confirmed.isEmpty ? [:] : [service.pluginIdentifier: confirmed])
+        }
+    }
+
+    private static func typesUploaded(to service: RemoteDataService, from loop: WatchLoopManager) async -> [String] {
+        var types: [String] = []
+        let glucoseAnchor: GlucoseStore.QueryAnchor? = UserDefaults.appGroup?.getQueryAnchor(for: service, withRemoteDataType: .glucose)
+        if let pending = try? await loop.glucoseStore.executeGlucoseQuery(fromQueryAnchor: glucoseAnchor ?? GlucoseStore.QueryAnchor(), limit: 1).1,
+           pending.isEmpty {
+            types.append(RemoteDataType.glucose.rawValue)
+        }
+        if let store = loop.dosingDecisionStore {
+            let anchor: DosingDecisionStore.QueryAnchor? = UserDefaults.appGroup?.getQueryAnchor(for: service, withRemoteDataType: .dosingDecision)
+            let pending: [StoredDosingDecision]? = await withCheckedContinuation { continuation in
+                store.executeDosingDecisionQuery(fromQueryAnchor: anchor, limit: 1) { result in
+                    if case .success(_, let decisions) = result { continuation.resume(returning: decisions) } else { continuation.resume(returning: nil) }
+                }
+            }
+            if pending?.isEmpty == true { types.append(RemoteDataType.dosingDecision.rawValue) }
+        }
+        return types
+    }
+
     func trigger(_ type: RemoteDataType) {
         guard let manager = lock.withLock({ self.manager }) else { return }
         Task { @MainActor in manager.triggerUpload(for: type) }

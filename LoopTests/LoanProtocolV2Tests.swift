@@ -130,6 +130,28 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertNil(g2.phoneCGMUploadsGlucose)
     }
 
+    /// The watch's upload confirmation survives the wire on the released offer and the loan history;
+    /// an older watch sends neither.
+    func testUploadConfirmationRoundTrips() throws {
+        let now = Date(timeIntervalSince1970: 1_784_338_000.125)
+        let confirmed = ["NightscoutService": ["Glucose", "DosingDecision"]]
+        let offer = HandbackOffer(epoch: 4, handedBackAt: now, finalStatus: nil, odometer: nil, events: [], tombstones: [],
+                                  recovered: false, released: true, uploadsConfirmed: confirmed)
+        guard case .handbackOffer(let o) = try roundTrip(.handbackOffer(offer)) else { return XCTFail("not an offer") }
+        XCTAssertEqual(o.uploadsConfirmed, confirmed)
+        XCTAssertEqual(o.servicesConfirming("Glucose"), ["NightscoutService"])
+
+        let older = HandbackOffer(epoch: 4, handedBackAt: now, finalStatus: nil, odometer: nil, events: [], tombstones: [],
+                                  recovered: false, released: true)
+        guard case .handbackOffer(let o2) = try roundTrip(.handbackOffer(older)) else { return XCTFail("not an offer") }
+        XCTAssertNil(o2.uploadsConfirmed)
+        XCTAssertEqual(o2.servicesConfirming("Glucose"), [])
+
+        let history = LoanHistory(epoch: 4, decisions: [], uploadsConfirmed: confirmed)
+        let decoded = try PropertyListDecoder().decode(LoanHistory.self, from: try history.encoded())
+        XCTAssertEqual(decoded.servicesConfirming("DosingDecision"), ["NightscoutService"])
+    }
+
     /// The grant seeds the algorithm's 12 h glucose window: every five minutes, with identifiers as
     /// long as a UUID, it fits inside the 60 KB urgent limit.
     func testTwelveHoursOfGlucoseStaySmallInTheGrant() throws {

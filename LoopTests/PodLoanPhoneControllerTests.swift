@@ -74,7 +74,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     var cancelError: Error?
     /// How many times the phone stopped automatic dosing over a reconciliation difference.
     var openLoopCalls = 0
-    var glucoseUploadSkips = 0
+    var glucoseUploadSkips: [Set<String>] = []
+    var decisionsUploadedBy: [Set<String>] = []
     var pump: MockPumpManager!
     var settings: LoopSettings!
     /// Captures for the dead-watch reclaim audit.
@@ -247,8 +248,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 guard let self = self else { return }
                 self.lock.lock(); self.appliedOverrideChanges.append((override, changedAt)); self.phoneScheduleOverride = override; self.lock.unlock()
             },
-            skipLoanGlucoseUploads: { [weak self] in
-                self?.lock.lock(); self?.glucoseUploadSkips += 1; self?.lock.unlock()
+            skipLoanGlucoseUploads: { [weak self] services in
+                self?.lock.lock(); self?.glucoseUploadSkips.append(services); self?.lock.unlock()
             },
             doseHistory: { _, completion in completion([]) },
             overrideHistory: { [weak self] start, completion in
@@ -290,9 +291,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 self.lock.lock(); self.deletedGapSyncs.append(sync); let ok = self.gapDeleteSucceeds; self.lock.unlock()
                 completion(ok)
             },
-            addDosingDecisions: { [weak self] decisions, completion in
+            addDosingDecisions: { [weak self] decisions, uploadedBy, completion in
                 guard let self = self else { return completion(.success(0)) }
-                self.lock.lock(); self.addedDosingDecisions.append(decisions); self.lock.unlock()
+                self.lock.lock(); self.addedDosingDecisions.append(decisions); self.decisionsUploadedBy.append(uploadedBy); self.lock.unlock()
                 completion(.success(decisions.count))
             },
             addAlerts: { [weak self] alerts, completion in
@@ -835,6 +836,19 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
         XCTAssertEqual(addedDosingDecisions.count, 1, "only the granted loan's")
         XCTAssertEqual(addedDosingDecisions.first?.map(\.id), decisions.map(\.id))
+    }
+
+    /// The services the watch confirmed it uploaded the decisions to reach the import, which skips
+    /// their uploads; none confirmed, none skipped.
+    func testTheWatchsUploadConfirmationReachesTheDecisionImport() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        controller.handleWatchLoanHistory(LoanHistory(epoch: grant.epoch, decisions: [StoredDosingDecision(reason: "loop")],
+                                                      uploadsConfirmed: ["NightscoutService": ["Glucose", "DosingDecision"]]))
+        controller.handleWatchLoanHistory(LoanHistory(epoch: grant.epoch, decisions: [StoredDosingDecision(reason: "loop")]))
+        waitUntil(timeout: 5, "both handed over") { self.lock.lock(); defer { self.lock.unlock() }; return self.decisionsUploadedBy.count == 2 }
+        lock.lock(); let uploadedBy = decisionsUploadedBy; lock.unlock()
+        XCTAssertEqual(uploadedBy, [["NightscoutService"], []])
     }
 
     /// The watch's alert records for a loan this phone granted go to the alert store, with the
@@ -1390,13 +1404,15 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     }
 
     /// Closes the loan with a final offer whose end odometer the phone then verifies first-hand.
-    private func finishLoan(_ controller: PodLoanPhoneController, epoch: Int, finalOdometer: Double) throws {
+    private func finishLoan(_ controller: PodLoanPhoneController, epoch: Int, finalOdometer: Double,
+                            uploadsConfirmed: [String: [String]]? = nil) throws {
         MockPumpManager.testOdometer = finalOdometer
         let ackSent = expectSend()
         let offer = HandbackOffer(epoch: epoch, handedBackAt: Date().addingTimeInterval(5), finalStatus: nil,
                                   odometer: LoanOdometerSnapshot(deliveredAtStart: 10.0, deliveredLatest: finalOdometer,
                                                                  freshenSucceeded: true),
-                                  events: [], tombstones: [], recovered: false, released: true)
+                                  events: [], tombstones: [], recovered: false, released: true,
+                                  uploadsConfirmed: uploadsConfirmed)
         controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
         wait(for: [ackSent], timeout: 5)
         waitForState(controller, .owner)
@@ -1477,14 +1493,24 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
     // MARK: - Glucose uploads
 
-    /// The watch uploaded the loan's glucose: after a clean hand-back the phone's uploads resume
-    /// after the loan, once.
-    func testACleanHandbackSkipsTheLoansGlucoseUploads() throws {
+    /// After a clean hand-back the phone skips the loan's glucose only for the services the watch
+    /// confirmed it uploaded to, once.
+    func testACleanHandbackSkipsGlucoseOnlyWhereTheWatchConfirmedIt() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        try finishLoan(controller, epoch: grant.epoch, finalOdometer: 10.0,
+                       uploadsConfirmed: ["NightscoutService": ["Glucose", "DosingDecision"], "TidepoolService": ["DosingDecision"]])
+        lock.lock(); let skips = glucoseUploadSkips; lock.unlock()
+        XCTAssertEqual(skips, [["NightscoutService"]])
+    }
+
+    /// A watch that could not confirm (no network, an older watch): the phone uploads its own copies.
+    func testAnUnconfirmedHandbackSkipsNoGlucoseUploads() throws {
         let controller = makeController()
         let grant = establishLoan(controller)
         try finishLoan(controller, epoch: grant.epoch, finalOdometer: 10.0)
         lock.lock(); let skips = glucoseUploadSkips; lock.unlock()
-        XCTAssertEqual(skips, 1)
+        XCTAssertEqual(skips, [])
     }
 
     /// A watch that went silent may not have uploaded: a force reclaim skips nothing.
@@ -1495,7 +1521,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         controller.forceReclaimToOwner(reason: "test: watch silent")
         waitForState(controller, .owner)
         lock.lock(); let skips = glucoseUploadSkips; lock.unlock()
-        XCTAssertEqual(skips, 0)
+        XCTAssertEqual(skips, [])
     }
 
     /// A loan that synced then died: the force audit judges only the tail since the last sync.

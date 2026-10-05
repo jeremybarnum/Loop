@@ -28,10 +28,10 @@ extension DeviceDataManager {
         isPodLoanedToWatch
     }
 
-    /// Moves every remote service's glucose bookmark past what the store holds now, without
-    /// uploading it: the watch uploaded the loan's readings.
-    func skipLoanGlucoseUploads() {
-        let services = allActivePlugins.compactMap { $0 as? RemoteDataService }
+    /// Moves these remote services' glucose bookmarks past what the store holds now, without
+    /// uploading it: the watch confirmed it uploaded the loan's readings to them.
+    func skipLoanGlucoseUploads(services identifiers: Set<String>) {
+        let services = allActivePlugins.compactMap { $0 as? RemoteDataService }.filter { identifiers.contains($0.pluginIdentifier) }
         let glucoseStore = self.glucoseStore
         Task {
             for service in services {
@@ -40,6 +40,27 @@ extension DeviceDataManager {
                 UserDefaults.appGroup?.setQueryAnchor(for: service, withRemoteDataType: .glucose, anchor)
                 PhoneLog.event("uploads", "\(service.pluginIdentifier): skipped \(skipped.count) loan-window glucose reading(s) — the watch uploaded them")
             }
+        }
+    }
+
+    /// Moves these services' dosing-decision bookmarks past the watch's decisions just added, which
+    /// the watch confirmed it uploaded to them; stops at the first decision that is not one of them.
+    func skipLoanDosingDecisionUploads(_ ids: Set<UUID>, in store: DosingDecisionStore, services identifiers: Set<String>) async {
+        for service in allActivePlugins.compactMap({ $0 as? RemoteDataService }) where identifiers.contains(service.pluginIdentifier) {
+            var anchor: DosingDecisionStore.QueryAnchor? = UserDefaults.appGroup?.getQueryAnchor(for: service, withRemoteDataType: .dosingDecision)
+            var skipped = 0
+            while true {
+                let next: (DosingDecisionStore.QueryAnchor, [StoredDosingDecision])? = await withCheckedContinuation { continuation in
+                    store.executeDosingDecisionQuery(fromQueryAnchor: anchor, limit: 1) { result in
+                        if case .success(let anchor, let decisions) = result { continuation.resume(returning: (anchor, decisions)) } else { continuation.resume(returning: nil) }
+                    }
+                }
+                guard let (nextAnchor, decisions) = next, let decision = decisions.first, ids.contains(decision.id) else { break }
+                anchor = nextAnchor
+                skipped += 1
+            }
+            if let anchor { UserDefaults.appGroup?.setQueryAnchor(for: service, withRemoteDataType: .dosingDecision, anchor) }
+            PhoneLog.event("uploads", "\(service.pluginIdentifier): skipped \(skipped) of the watch's \(ids.count) loop status record(s) — the watch uploaded them")
         }
     }
 

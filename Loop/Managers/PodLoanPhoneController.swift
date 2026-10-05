@@ -83,8 +83,9 @@ final class PodLoanPhoneController {
         /// Recorded in the override history at `changedAt`, when the wrist made the change.
         var applyScheduleOverride: (TemporaryScheduleOverride?, _ changedAt: Date) -> Void = { _, _ in }
 
-        /// After a clean hand-back: the phone's glucose uploads resume after the loan, not across it.
-        var skipLoanGlucoseUploads: () -> Void = { }
+        /// After a clean hand-back, for the services the watch confirmed: the phone's glucose uploads
+        /// resume after the loan, not across it.
+        var skipLoanGlucoseUploads: (_ services: Set<String>) -> Void = { _ in }
 
         var noteWatchClosedLoop: (Bool) -> Void = { _ in }
 
@@ -131,7 +132,8 @@ final class PodLoanPhoneController {
 
         /// The watch's dosing decisions into this phone's store, skipping any already there; the
         /// result is how many were added.
-        var addDosingDecisions: (_ decisions: [StoredDosingDecision], _ completion: @escaping (Result<Int, Error>) -> Void) -> Void = { _, done in done(.success(0)) }
+        /// Adds the watch's decisions; `uploadedBy` are the services the watch confirmed it uploaded them to.
+        var addDosingDecisions: (_ decisions: [StoredDosingDecision], _ uploadedBy: Set<String>, _ completion: @escaping (Result<Int, Error>) -> Void) -> Void = { _, _, done in done(.success(0)) }
 
         /// The watch's alert records into this phone's `AlertStore`, one per sync identifier; the
         /// result is how many were added or updated.

@@ -68,6 +68,13 @@ final class LoanRemoteUploadsTests: XCTestCase {
         XCTAssertNil(NightscoutService(adopting: NightscoutService().exportConfiguration(), localState: nil), "no secret")
     }
 
+    /// With no service running there is nothing to confirm, and the answer comes at once.
+    func testWithNoServiceRunningNothingIsConfirmed() {
+        var answer: [String: [String]]?
+        LoanRemoteUploads().confirmUploads(within: 5) { answer = $0 }
+        XCTAssertEqual(answer, [:])
+    }
+
     func testPumpTeardownEndsUploads() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

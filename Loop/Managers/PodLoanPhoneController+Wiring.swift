@@ -147,7 +147,7 @@ extension WatchDataManager {
             },
 
             // The wrist's loop mode coming home; a settings write, so via main.
-            skipLoanGlucoseUploads: { [weak self] in self?.deviceManager.skipLoanGlucoseUploads() },
+            skipLoanGlucoseUploads: { [weak self] services in self?.deviceManager.skipLoanGlucoseUploads(services: services) },
             noteWatchClosedLoop: { [weak self] closed in
                 DispatchQueue.main.async {
                     self?.settingsManager.mutateLoopSettings { $0.dosingEnabled = closed }
@@ -329,11 +329,14 @@ extension WatchDataManager {
                 }
             },
 
-            addDosingDecisions: { [weak self] decisions, completion in
-                guard let store = self?.loopDataManager.dosingDecisionStore as? DosingDecisionStore else {
+            addDosingDecisions: { [weak self] decisions, uploadedBy, completion in
+                guard let self, let store = self.loopDataManager.dosingDecisionStore as? DosingDecisionStore else {
                     return completion(.success(0))
                 }
-                PodLoanPhoneController.addNewDosingDecisions(decisions, to: store, completion: completion)
+                let deviceManager = self.deviceManager
+                PodLoanPhoneController.addNewDosingDecisions(decisions, to: store, skipUploads: uploadedBy.isEmpty ? nil : { ids in
+                    await deviceManager.skipLoanDosingDecisionUploads(ids, in: store, services: uploadedBy)
+                }, completion: completion)
             },
 
             addAlerts: { [weak self] alerts, completion in

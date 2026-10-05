@@ -310,11 +310,17 @@ public struct HandbackOffer: Codable, Equatable {
 
     public let lastLoopCompleted: Date?
 
+    /// Per remote service (its `pluginIdentifier`), the data types the watch confirmed it uploaded
+    /// in full before releasing ("Glucose", "DosingDecision"): the phone skips those, and uploads
+    /// the rest itself. Released offers only; nil from an older watch.
+    public let uploadsConfirmed: [String: [String]]?
+
     public init(epoch: Int, handedBackAt: Date, finalStatus: LoanPodStatus?,
                 odometer: LoanOdometerSnapshot?, events: [LoanEvent], tombstones: [UUID],
                 recovered: Bool, released: Bool? = nil, watchClosedLoopEnabled: Bool? = nil,
                 seizeToken: UUID? = nil,
-                lastLoopCompleted: Date? = nil) {
+                lastLoopCompleted: Date? = nil,
+                uploadsConfirmed: [String: [String]]? = nil) {
         self.epoch = epoch
         self.handedBackAt = handedBackAt
         self.finalStatus = finalStatus
@@ -326,6 +332,12 @@ public struct HandbackOffer: Codable, Equatable {
         self.watchClosedLoopEnabled = watchClosedLoopEnabled
         self.seizeToken = seizeToken
         self.lastLoopCompleted = lastLoopCompleted
+        self.uploadsConfirmed = uploadsConfirmed
+    }
+
+    /// The services whose `type` the watch confirmed it uploaded in full.
+    public func servicesConfirming(_ type: String) -> Set<String> {
+        Set((uploadsConfirmed ?? [:]).filter { $0.value.contains(type) }.keys)
     }
 }
 

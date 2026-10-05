@@ -404,6 +404,7 @@ extension PodLoanWatchController {
         phoneSupportsOverrideRecords = grant.supportsOverrideRecords ?? false
         handbackRequested = false
         finalOfferSent = false
+        uploadsConfirmed = nil
 
         // Timed from the grant, so the ladder measures the pod, not the phone.
         attemptStartedAt = self.now()
