@@ -371,7 +371,7 @@ extension PodLoanWatchController {
             return
         }
 
-        // Nightscout credentials, in memory until uploads start at ACTIVE.
+        // The phone's upload services, staged until uploads start at ACTIVE.
         LoanRemoteUploads.shared.stage(services: grant.sharedServiceConfigurations, phoneCGMUploadsGlucose: grant.phoneCGMUploadsGlucose)
 
         // A seize over a parked drain folds the old events into this epoch, keeping their identities.
@@ -422,7 +422,9 @@ extension PodLoanWatchController {
                                        supportsInterimHandback: grant.supportsInterimHandback ?? false,
                                        supportsOverrideRecords: grant.supportsOverrideRecords ?? false,
                                        glucoseAlertSettings: grant.glucoseAlertSettings,
-                                       settingsHistory: grant.settingsHistory)
+                                       settingsHistory: grant.settingsHistory,
+                                       serviceConfigurations: grant.serviceConfigurations,
+                                       phoneCGMUploadsGlucose: grant.phoneCGMUploadsGlucose)
         }
         loopManager.settings = decodedSettings!
         loopManager.settingsProvider.history = grant.settingsHistory

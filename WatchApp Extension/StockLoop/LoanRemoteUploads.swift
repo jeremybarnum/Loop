@@ -2,15 +2,14 @@
 //  LoanRemoteUploads.swift
 //  WatchApp
 //
-//  Nightscout uploads from the wrist while it holds the pod. Stock's RemoteDataServicesManager,
-//  compiled into this target unchanged, drives an in-memory NightscoutService built from the
-//  site and secret the Start grant carried. Its triggers are the store delegates stock's
-//  DeviceDataManager uses on the phone.
+//  Uploads from the wrist while it holds the pod. Stock's RemoteDataServicesManager, compiled
+//  into this target unchanged, drives services adopted from the configurations the Start grant
+//  carried. Its triggers are the store delegates stock's DeviceDataManager uses on the phone.
 //
-//  Nothing here persists a credential: the site and secret live in memory from grant acceptance
-//  until the pump is torn down, and are never logged. A relaunch mid-loan therefore resumes
-//  without uploads. The query anchors are stock's, in this app's defaults, so a later loan
-//  carries on from where the last one stopped.
+//  This file persists no credential. The loan's saved state keeps the grant's configurations
+//  beside the pump's own state, so a relaunch mid-loan stages them again; both go at teardown.
+//  Credentials are never logged. The query anchors are stock's, in this app's defaults, so a
+//  later loan carries on from where the last one stopped.
 //
 
 import Foundation
@@ -179,7 +178,8 @@ final class LoanRemoteUploads {
         }
 
         // An upload already under way finds no credentials and returns. Tidepool's session is only
-        // dropped here, never logged out: that would end the phone's.
+        // dropped here, never logged out: that would end the phone's. Dropping it calls Tidepool's
+        // "reauthenticate" alert, which goes nowhere: the wrist never sets a serviceDelegate.
         for service in services {
             if let nightscout = service as? NightscoutService {
                 nightscout.siteURL = nil
