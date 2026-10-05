@@ -201,8 +201,10 @@ extension PodLoanPhoneController {
                 return
             }
             // Start grants only; the standing copy never carries them.
-            grant.nightscout = self.deps.nightscoutCredentials()
-            PhoneLog.event("loan", "[uploads] grant carries Nightscout credentials: \(grant.nightscout == nil ? "no" : "yes")")
+            let services = self.deps.serviceConfigurations()
+            grant.serviceConfigurations = services.compactMap(\.propertyList)
+            grant.phoneCGMUploadsGlucose = self.deps.cgmUploadsGlucose()
+            PhoneLog.event("loan", "[uploads] grant carries service configuration(s): \(services.isEmpty ? "none" : services.map(\.managerIdentifier).joined(separator: ", "))")
             self.sendMessage(.grant(grant))
             self.armT1(for: grantEpoch)
         }

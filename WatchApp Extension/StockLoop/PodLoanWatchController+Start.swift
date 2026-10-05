@@ -372,7 +372,7 @@ extension PodLoanWatchController {
         }
 
         // Nightscout credentials, in memory until uploads start at ACTIVE.
-        LoanRemoteUploads.shared.stage(nightscout: grant.nightscout)
+        LoanRemoteUploads.shared.stage(services: grant.sharedServiceConfigurations, phoneCGMUploadsGlucose: grant.phoneCGMUploadsGlucose)
 
         // A seize over a parked drain folds the old events into this epoch, keeping their identities.
         if seizeActivationInFlight, journal.hasUndrainedEvents {

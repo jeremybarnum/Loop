@@ -2,20 +2,21 @@
 //  LoanRemoteUploadsTests.swift
 //  WatchAppTests
 //
-//  Nightscout credentials on the wrist: a grant without them keeps what is staged, and the
-//  pump's teardown drops them with the loan.
+//  The phone's shared Nightscout configuration on the wrist: a grant without it keeps what is
+//  staged, and the pump's teardown drops it with the loan.
 //
 
 import XCTest
 import LoopKit
 import LoopCore
 import LoopAlgorithm
+import NightscoutServiceKit
 @testable import WatchApp
 
 final class LoanRemoteUploadsTests: XCTestCase {
 
-    private let credentials = LoanNightscoutCredentials(siteURL: URL(string: "https://fixture-site.example")!,
-                                                        apiSecret: "fixture-secret")
+    private let nightscout = SharedDeviceConfiguration(managerIdentifier: "NightscoutService", asOf: Date(),
+                                                       state: ["siteURL": "https://fixture-site.example", "apiSecret": "fixture-secret"])
 
     override func tearDown() {
         LoanRemoteUploads.shared.end()
@@ -28,8 +29,8 @@ final class LoanRemoteUploadsTests: XCTestCase {
         let uploads = LoanRemoteUploads()
         XCTAssertFalse(uploads.holdsNightscoutCredentials)
 
-        uploads.stage(nightscout: credentials)
-        uploads.stage(nightscout: nil)
+        uploads.stage(services: [nightscout], phoneCGMUploadsGlucose: true)
+        uploads.stage(services: [], phoneCGMUploadsGlucose: nil)
         XCTAssertTrue(uploads.holdsNightscoutCredentials, "a credential-less grant cleared the staged credentials")
 
         uploads.end()
@@ -40,15 +41,31 @@ final class LoanRemoteUploadsTests: XCTestCase {
     /// Without its own CGM the watch follows the phone's CGM (the simulator's "Upload CGM Samples"),
     /// carried in the grant; a phone that sends no answer gets stock's yes.
     func testWithoutItsOwnCGMTheWatchFollowsThePhonesGlucoseUploadSetting() {
-        let site = URL(string: "https://fixture-site.example")!
         for answer in [false, true] {
             let uploads = LoanRemoteUploads()
-            uploads.stage(nightscout: LoanNightscoutCredentials(siteURL: site, apiSecret: "fixture", uploadsGlucose: answer))
+            uploads.stage(services: [nightscout], phoneCGMUploadsGlucose: answer)
             XCTAssertEqual(uploads.shouldSyncGlucoseToRemoteService, answer)
         }
         let older = LoanRemoteUploads()
-        older.stage(nightscout: LoanNightscoutCredentials(siteURL: site, apiSecret: "fixture"))
+        older.stage(services: [nightscout], phoneCGMUploadsGlucose: nil)
         XCTAssertTrue(older.shouldSyncGlucoseToRemoteService)
+    }
+
+    /// The phone's service exports its site and secret; the wrist's, built from that export,
+    /// uploads to the same site, says it was configured elsewhere, and refuses an incomplete export.
+    func testTheWristAdoptsThePhonesNightscoutService() throws {
+        let phone = NightscoutService()
+        phone.siteURL = URL(string: "https://fixture-site.example")
+        phone.apiSecret = "fixture-secret"
+
+        let wrist = try XCTUnwrap(NightscoutService(adopting: phone.exportConfiguration(), localState: nil))
+        XCTAssertEqual(wrist.siteURL, phone.siteURL)
+        XCTAssertEqual(wrist.apiSecret, phone.apiSecret)
+        XCTAssertTrue(wrist.isOnboarded)
+        XCTAssertTrue(wrist.isConfiguredByAnotherController)
+        XCTAssertFalse(phone.isConfiguredByAnotherController)
+
+        XCTAssertNil(NightscoutService(adopting: NightscoutService().exportConfiguration(), localState: nil), "no secret")
     }
 
     func testPumpTeardownEndsUploads() async throws {
@@ -69,7 +86,7 @@ final class LoanRemoteUploadsTests: XCTestCase {
                                                 journal: LoanEventJournal(directory: directory),
                                                 stateDirectory: directory)
 
-        LoanRemoteUploads.shared.stage(nightscout: credentials)
+        LoanRemoteUploads.shared.stage(services: [nightscout], phoneCGMUploadsGlucose: true)
         XCTAssertTrue(LoanRemoteUploads.shared.holdsNightscoutCredentials)
 
         controller.queue.sync { controller.teardownPump() }

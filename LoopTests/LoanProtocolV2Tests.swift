@@ -95,25 +95,28 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertNil(g2.glucoseHistory)
     }
 
-    /// The Nightscout site and secret survive the wire, and no textual or reflected form of the
-    /// grant shows either; a grant from an older phone decodes with none.
-    func testGrantNightscoutCredentialsRoundTripRedacted() throws {
+    /// A service's shared configuration (its site and secret) survives the wire, and no textual or
+    /// reflected form of the grant shows it; a grant from an older phone decodes with none.
+    func testGrantServiceConfigurationsRoundTripRedacted() throws {
         let now = Date(timeIntervalSince1970: 1_784_338_000.125)
-        let site = URL(string: "https://fixture-site.example")!
         let secret = "fixture-secret-0123456789"
+        let shared = SharedDeviceConfiguration(managerIdentifier: "NightscoutService", asOf: now,
+                                               state: ["siteURL": "https://fixture-site.example", "apiSecret": secret])
         var grant = LoanGrant(epoch: 9, expiresAt: now.addingTimeInterval(300),
                               pumpConfiguration: Data([1]), podAddress: 0,
                               therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
                               doseHistory: [])
-        grant.nightscout = LoanNightscoutCredentials(siteURL: site, apiSecret: secret)
+        grant.serviceConfigurations = [try XCTUnwrap(shared.propertyList)]
+        grant.phoneCGMUploadsGlucose = false
         guard case .grant(let g) = try roundTrip(.grant(grant)) else { return XCTFail("not a grant") }
-        XCTAssertEqual(g.nightscout?.siteURL, site)
-        XCTAssertEqual(g.nightscout?.apiSecret, secret)
+        let decoded = try XCTUnwrap(g.sharedServiceConfigurations.first)
+        XCTAssertEqual(decoded.managerIdentifier, "NightscoutService")
+        XCTAssertEqual(decoded.state["apiSecret"] as? String, secret)
+        XCTAssertEqual(g.phoneCGMUploadsGlucose, false)
 
         var dumped = ""
         dump(grant, to: &dumped)
-        for text in [String(describing: grant), String(reflecting: grant), dumped,
-                     String(describing: grant.nightscout!), String(reflecting: grant.nightscout!)] {
+        for text in [String(describing: grant), String(reflecting: grant), dumped] {
             XCTAssertFalse(text.contains(secret), "the secret leaked")
             XCTAssertFalse(text.contains("fixture-site"), "the site leaked")
         }
@@ -123,7 +126,8 @@ final class LoanProtocolV2Tests: XCTestCase {
                             therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
                             doseHistory: [])
         guard case .grant(let g2) = try roundTrip(.grant(old)) else { return XCTFail("not a grant") }
-        XCTAssertNil(g2.nightscout)
+        XCTAssertTrue(g2.sharedServiceConfigurations.isEmpty)
+        XCTAssertNil(g2.phoneCGMUploadsGlucose)
     }
 
     /// The grant seeds the algorithm's 12 h glucose window: every five minutes, with identifiers as

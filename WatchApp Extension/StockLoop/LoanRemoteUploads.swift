@@ -30,7 +30,7 @@ final class LoanRemoteUploads {
     private let lock = UnfairLock()
 
     /// From accepted grants; consumed when the service starts. Cleared only by `end`.
-    private var stagedNightscout: LoanNightscoutCredentials?
+    private var stagedNightscout: SharedDeviceConfiguration?
 
     /// The phone's CGM's answer to "upload glucose?", from the grant. Cleared by `end`.
     private var phoneUploadsGlucose: Bool?
@@ -58,17 +58,19 @@ final class LoanRemoteUploads {
         lock.withLock { stagedNightscout != nil || nightscout != nil }
     }
 
-    /// Called on grant acceptance. A grant without credentials never clears what is already
-    /// staged (only `end` does); credentials arriving while the loan is ACTIVE start at once.
-    func stage(nightscout: LoanNightscoutCredentials?) {
+    /// Called on grant acceptance with the phone's shared service configurations. A grant without
+    /// Nightscout's never clears what is already staged (only `end` does); one arriving while the
+    /// loan is ACTIVE starts at once.
+    func stage(services: [SharedDeviceConfiguration], phoneCGMUploadsGlucose: Bool?) {
+        let nightscout = services.first { $0.managerIdentifier == "NightscoutService" }
         let active = lock.withLock { () -> WatchLoopManager? in
             if let nightscout {
                 stagedNightscout = nightscout
-                phoneUploadsGlucose = nightscout.uploadsGlucose
+                phoneUploadsGlucose = phoneCGMUploadsGlucose
             }
             return activeLoop
         }
-        SportLog.event("uploads", "grant: Nightscout credentials \(nightscout == nil ? "absent (staged kept)" : "present")")
+        SportLog.event("uploads", "grant: Nightscout configuration \(nightscout == nil ? "absent (staged kept)" : "present")")
         if let active { startStaged(loopManager: active) }
     }
 
@@ -79,7 +81,7 @@ final class LoanRemoteUploads {
     }
 
     private func startStaged(loopManager: WatchLoopManager) {
-        let (credentials, running, beganIn) = lock.withLock { () -> (LoanNightscoutCredentials?, Bool, Int) in
+        let (credentials, running, beganIn) = lock.withLock { () -> (SharedDeviceConfiguration?, Bool, Int) in
             defer { if nightscout == nil { stagedNightscout = nil } }
             return (nightscout == nil ? stagedNightscout : nil, nightscout != nil, generation)
         }
@@ -144,11 +146,11 @@ final class LoanRemoteUploads {
     }
 
     @MainActor
-    private func startNightscout(_ credentials: LoanNightscoutCredentials, manager: RemoteDataServicesManager, beganIn: Int) {
-        let service = NightscoutService()
-        service.siteURL = credentials.siteURL
-        service.apiSecret = credentials.apiSecret
-        service.isOnboarded = true
+    private func startNightscout(_ configuration: SharedDeviceConfiguration, manager: RemoteDataServicesManager, beganIn: Int) {
+        guard let service = NightscoutService(adopting: configuration, localState: nil) else {
+            SportLog.event("uploads", "the phone's Nightscout configuration could not be adopted — uploads OFF for this loan")
+            return
+        }
         guard lock.withLock({ () -> Bool in
             guard generation == beganIn else { return false }
             nightscout = service

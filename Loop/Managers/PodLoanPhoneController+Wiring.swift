@@ -71,17 +71,13 @@ extension WatchDataManager {
                 })
                 if grantRidesBothChannels { session.transferUserInfo(dictionary) }
             },
-            // Read off the live service by reflection, so the app need not link NightscoutServiceKit
-            // (a plugin). Never logged.
-            nightscoutCredentials: { [weak self] in
-                guard let service = self?.deviceManager.allActivePlugins.first(where: { $0.pluginIdentifier == "NightscoutService" }) else { return nil }
-                let fields = Dictionary(Mirror(reflecting: service).children.compactMap { child in child.label.map { ($0, child.value) } },
-                                        uniquingKeysWith: { first, _ in first })
-                guard let siteURL = fields["siteURL"] as? URL, let apiSecret = fields["apiSecret"] as? String,
-                      !apiSecret.isEmpty else { return nil }
-                return LoanNightscoutCredentials(siteURL: siteURL, apiSecret: apiSecret,
-                                                 uploadsGlucose: self?.deviceManager.cgmManager?.shouldSyncToRemoteService ?? true)
+            // Services only: the pump shares its configuration through the grant's own field. Never logged.
+            serviceConfigurations: { [weak self] in
+                (self?.deviceManager.allActivePlugins ?? []).compactMap { plugin in
+                    plugin is Service ? (plugin as? DeviceConfigurationSharing)?.exportConfiguration() : nil
+                }
             },
+            cgmUploadsGlucose: { [weak self] in self?.deviceManager.cgmManager?.shouldSyncToRemoteService ?? true },
             addPumpEvents: { [weak self] events, lastReconciliation, completion in
                 guard let self = self else { completion(nil); return }
 
