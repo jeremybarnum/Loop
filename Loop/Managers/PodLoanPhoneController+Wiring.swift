@@ -79,7 +79,8 @@ extension WatchDataManager {
                                         uniquingKeysWith: { first, _ in first })
                 guard let siteURL = fields["siteURL"] as? URL, let apiSecret = fields["apiSecret"] as? String,
                       !apiSecret.isEmpty else { return nil }
-                return LoanNightscoutCredentials(siteURL: siteURL, apiSecret: apiSecret)
+                return LoanNightscoutCredentials(siteURL: siteURL, apiSecret: apiSecret,
+                                                 uploadsGlucose: self?.deviceManager.cgmManager?.shouldSyncToRemoteService ?? true)
             },
             addPumpEvents: { [weak self] events, lastReconciliation, completion in
                 guard let self = self else { completion(nil); return }
@@ -150,6 +151,7 @@ extension WatchDataManager {
             },
 
             // The wrist's loop mode coming home; a settings write, so via main.
+            skipLoanGlucoseUploads: { [weak self] in self?.deviceManager.skipLoanGlucoseUploads() },
             noteWatchClosedLoop: { [weak self] closed in
                 DispatchQueue.main.async {
                     self?.settingsManager.mutateLoopSettings { $0.dosingEnabled = closed }

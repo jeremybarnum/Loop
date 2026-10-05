@@ -80,6 +80,9 @@ final class PodLoanPhoneController {
         /// Recorded in the override history at `changedAt`, when the wrist made the change.
         var applyScheduleOverride: (TemporaryScheduleOverride?, _ changedAt: Date) -> Void = { _, _ in }
 
+        /// After a clean hand-back: the phone's glucose uploads resume after the loan, not across it.
+        var skipLoanGlucoseUploads: () -> Void = { }
+
         var noteWatchClosedLoop: (Bool) -> Void = { _ in }
 
         var lastLoopCompleted: () -> Date? = { nil }

@@ -74,6 +74,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     var cancelError: Error?
     /// How many times the phone stopped automatic dosing over a reconciliation difference.
     var openLoopCalls = 0
+    var glucoseUploadSkips = 0
     var pump: MockPumpManager!
     var settings: LoopSettings!
     /// Captures for the dead-watch reclaim audit.
@@ -245,6 +246,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             applyScheduleOverride: { [weak self] override, changedAt in
                 guard let self = self else { return }
                 self.lock.lock(); self.appliedOverrideChanges.append((override, changedAt)); self.phoneScheduleOverride = override; self.lock.unlock()
+            },
+            skipLoanGlucoseUploads: { [weak self] in
+                self?.lock.lock(); self?.glucoseUploadSkips += 1; self?.lock.unlock()
             },
             doseHistory: { _, completion in completion([]) },
             overrideHistory: { [weak self] start, completion in
@@ -1469,6 +1473,29 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         try finishLoan(controller, epoch: grant.epoch, finalOdometer: 10.25)
         XCTAssertEqual(openLoopCalls, 0, "the bolus is in the records; the loop must stay closed")
         XCTAssertNil(diagMatching("OPEN LOOP — residual"))
+    }
+
+    // MARK: - Glucose uploads
+
+    /// The watch uploaded the loan's glucose: after a clean hand-back the phone's uploads resume
+    /// after the loan, once.
+    func testACleanHandbackSkipsTheLoansGlucoseUploads() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        try finishLoan(controller, epoch: grant.epoch, finalOdometer: 10.0)
+        lock.lock(); let skips = glucoseUploadSkips; lock.unlock()
+        XCTAssertEqual(skips, 1)
+    }
+
+    /// A watch that went silent may not have uploaded: a force reclaim skips nothing.
+    func testAForceReclaimSkipsNoGlucoseUploads() throws {
+        let controller = makeController()
+        _ = establishLoan(controller)
+        MockPumpManager.testOdometer = 10.0
+        controller.forceReclaimToOwner(reason: "test: watch silent")
+        waitForState(controller, .owner)
+        lock.lock(); let skips = glucoseUploadSkips; lock.unlock()
+        XCTAssertEqual(skips, 0)
     }
 
     /// A loan that synced then died: the force audit judges only the tail since the last sync.

@@ -23,6 +23,26 @@ extension DeviceDataManager {
         podLoanController?.watchOwnsAlerts ?? false
     }
 
+    /// While the pod is away the watch uploads glucose to the remote services, and the phone none.
+    var podLoanHoldsGlucoseUploads: Bool {
+        isPodLoanedToWatch
+    }
+
+    /// Moves every remote service's glucose bookmark past what the store holds now, without
+    /// uploading it: the watch uploaded the loan's readings.
+    func skipLoanGlucoseUploads() {
+        let services = allActivePlugins.compactMap { $0 as? RemoteDataService }
+        let glucoseStore = self.glucoseStore
+        Task {
+            for service in services {
+                let saved: GlucoseStore.QueryAnchor? = UserDefaults.appGroup?.getQueryAnchor(for: service, withRemoteDataType: .glucose)
+                guard let (anchor, skipped) = try? await glucoseStore.executeGlucoseQuery(fromQueryAnchor: saved ?? GlucoseStore.QueryAnchor(), limit: Int.max) else { continue }
+                UserDefaults.appGroup?.setQueryAnchor(for: service, withRemoteDataType: .glucose, anchor)
+                PhoneLog.event("uploads", "\(service.pluginIdentifier): skipped \(skipped.count) loan-window glucose reading(s) — the watch uploaded them")
+            }
+        }
+    }
+
     /// Revoke the watch's loan and bring the pod home. Dosing stays paused until the records
     /// the watch is holding have been reconciled.
     func reclaimPodLoanFromWatch() {

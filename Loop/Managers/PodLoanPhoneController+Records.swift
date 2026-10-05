@@ -136,6 +136,10 @@ extension PodLoanPhoneController {
             state = .reconciling
 
             handbackDiag(offer.epoch, "commit done — ACKing now; the watch cannot release the pod until this lands")
+            // The watch uploaded this loan's glucose. Nightscout tells readings apart only by their
+            // time, which each device stamps from its own receipt, so the phone's copies would be a
+            // second row each: its uploads resume after the loan. A force reclaim skips nothing.
+            deps.skipLoanGlucoseUploads()
             // Loop mode and recency come home with the pod.
             if let watchClosed = offer.watchClosedLoopEnabled {
                 deps.noteWatchClosedLoop(watchClosed)

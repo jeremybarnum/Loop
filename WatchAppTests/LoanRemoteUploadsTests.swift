@@ -37,10 +37,18 @@ final class LoanRemoteUploadsTests: XCTestCase {
     }
 
     /// Every way a loan ends runs through the pump's teardown; the credentials go with it.
-    /// Without its own CGM the watch holds only the phone's readings, which the phone uploads under
-    /// its own CGM's setting (the simulator's "Upload CGM Samples"); the watch uploads none.
-    func testWithoutItsOwnCGMTheWatchUploadsNoGlucose() {
-        XCTAssertFalse(LoanRemoteUploads().shouldSyncGlucoseToRemoteService)
+    /// Without its own CGM the watch follows the phone's CGM (the simulator's "Upload CGM Samples"),
+    /// carried in the grant; a phone that sends no answer gets stock's yes.
+    func testWithoutItsOwnCGMTheWatchFollowsThePhonesGlucoseUploadSetting() {
+        let site = URL(string: "https://fixture-site.example")!
+        for answer in [false, true] {
+            let uploads = LoanRemoteUploads()
+            uploads.stage(nightscout: LoanNightscoutCredentials(siteURL: site, apiSecret: "fixture", uploadsGlucose: answer))
+            XCTAssertEqual(uploads.shouldSyncGlucoseToRemoteService, answer)
+        }
+        let older = LoanRemoteUploads()
+        older.stage(nightscout: LoanNightscoutCredentials(siteURL: site, apiSecret: "fixture"))
+        XCTAssertTrue(older.shouldSyncGlucoseToRemoteService)
     }
 
     func testPumpTeardownEndsUploads() async throws {

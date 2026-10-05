@@ -32,6 +32,9 @@ final class LoanRemoteUploads {
     /// From accepted grants; consumed when the service starts. Cleared only by `end`.
     private var stagedNightscout: LoanNightscoutCredentials?
 
+    /// The phone's CGM's answer to "upload glucose?", from the grant. Cleared by `end`.
+    private var phoneUploadsGlucose: Bool?
+
     /// Set while the loan is ACTIVE; credentials staged then start the service at once.
     private weak var activeLoop: WatchLoopManager?
 
@@ -59,7 +62,10 @@ final class LoanRemoteUploads {
     /// staged (only `end` does); credentials arriving while the loan is ACTIVE start at once.
     func stage(nightscout: LoanNightscoutCredentials?) {
         let active = lock.withLock { () -> WatchLoopManager? in
-            if let nightscout { stagedNightscout = nightscout }
+            if let nightscout {
+                stagedNightscout = nightscout
+                phoneUploadsGlucose = nightscout.uploadsGlucose
+            }
             return activeLoop
         }
         SportLog.event("uploads", "grant: Nightscout credentials \(nightscout == nil ? "absent (staged kept)" : "present")")
@@ -158,7 +164,7 @@ final class LoanRemoteUploads {
     func end() {
         let (service, loopManager) = lock.withLock { () -> (NightscoutService?, WatchLoopManager?) in
             defer {
-                manager = nil; nightscout = nil; stagedNightscout = nil; activeLoop = nil
+                manager = nil; nightscout = nil; stagedNightscout = nil; activeLoop = nil; phoneUploadsGlucose = nil
                 generation += 1
             }
             return (nightscout, activeLoop)
@@ -211,11 +217,12 @@ extension LoanRemoteUploads: InsulinDeliveryStoreDelegate {
 // MARK: - What stock's manager asks of its owner
 
 extension LoanRemoteUploads: RemoteDataServicesManagerDelegate {
-    /// As stock DeviceDataManager, the CGM manager decides. With no CGM of its own the watch holds
-    /// only the phone's readings (seeded and relayed), which the phone uploads itself under its own
-    /// CGM's setting, so the watch uploads none.
+    /// As stock DeviceDataManager, the CGM manager decides. During a loan the watch is the only
+    /// glucose uploader (the phone holds its own); with no CGM of its own it follows the phone's
+    /// CGM, whose readings it holds (seeded and relayed). An older phone sends no answer: stock's yes.
     var shouldSyncGlucoseToRemoteService: Bool {
-        lock.withLock { activeLoop }?.cgmManager?.shouldSyncToRemoteService ?? false
+        let (loop, phone) = lock.withLock { (activeLoop, phoneUploadsGlucose) }
+        return loop?.cgmManager?.shouldSyncToRemoteService ?? phone ?? true
     }
 }
 

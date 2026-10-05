@@ -153,10 +153,14 @@ public struct LoanNightscoutCredentials: Codable, Equatable, CustomStringConvert
                                          CustomDebugStringConvertible, CustomReflectable {
     public let siteURL: URL
     public let apiSecret: String
+    /// The phone's CGM's own answer to "upload glucose?" (the CGM simulator's "Upload CGM Samples");
+    /// the watch follows it while it has no CGM of its own. Nil from an older phone.
+    public let uploadsGlucose: Bool?
 
-    public init(siteURL: URL, apiSecret: String) {
+    public init(siteURL: URL, apiSecret: String, uploadsGlucose: Bool? = nil) {
         self.siteURL = siteURL
         self.apiSecret = apiSecret
+        self.uploadsGlucose = uploadsGlucose
     }
 
     public var description: String { "LoanNightscoutCredentials(<redacted>)" }
