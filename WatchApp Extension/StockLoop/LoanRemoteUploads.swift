@@ -18,6 +18,7 @@ import LoopKit
 import LoopAlgorithm
 import LoopCore
 import NightscoutServiceKit
+import TidepoolServiceKit
 
 /// Stock declares this in DeviceDataManager.swift, which the watch does not compile.
 protocol UploadEventListener {
@@ -29,8 +30,11 @@ final class LoanRemoteUploads {
 
     private let lock = UnfairLock()
 
-    /// From accepted grants; consumed when the service starts. Cleared only by `end`.
-    private var stagedNightscout: SharedDeviceConfiguration?
+    /// The services the wrist can adopt from the phone's shared configurations.
+    private static let adoptable: [DeviceConfigurationSharing.Type] = [NightscoutService.self, TidepoolService.self]
+
+    /// From accepted grants, by plugin identifier; consumed when each service starts. Cleared only by `end`.
+    private var staged: [String: SharedDeviceConfiguration] = [:]
 
     /// The phone's CGM's answer to "upload glucose?", from the grant. Cleared by `end`.
     private var phoneUploadsGlucose: Bool?
@@ -39,7 +43,7 @@ final class LoanRemoteUploads {
     private weak var activeLoop: WatchLoopManager?
 
     private var manager: RemoteDataServicesManager?
-    private var nightscout: NightscoutService?
+    private var running: [RemoteDataService] = []
 
     /// Bumped by `end`, so a start still waiting for main does not outlive its loan.
     private var generation = 0
@@ -53,24 +57,23 @@ final class LoanRemoteUploads {
 
     init() {}
 
-    /// Credentials are staged or a running service holds them. For tests; says nothing of their values.
-    var holdsNightscoutCredentials: Bool {
-        lock.withLock { stagedNightscout != nil || nightscout != nil }
+    /// Configurations are staged or a running service holds them. For tests; says nothing of their values.
+    var holdsServiceConfigurations: Bool {
+        lock.withLock { !staged.isEmpty || !running.isEmpty }
     }
 
     /// Called on grant acceptance with the phone's shared service configurations. A grant without
-    /// Nightscout's never clears what is already staged (only `end` does); one arriving while the
-    /// loan is ACTIVE starts at once.
+    /// them never clears what is already staged (only `end` does); one arriving while the loan is
+    /// ACTIVE starts at once.
     func stage(services: [SharedDeviceConfiguration], phoneCGMUploadsGlucose: Bool?) {
-        let nightscout = services.first { $0.managerIdentifier == "NightscoutService" }
         let active = lock.withLock { () -> WatchLoopManager? in
-            if let nightscout {
-                stagedNightscout = nightscout
+            if !services.isEmpty {
+                services.forEach { staged[$0.managerIdentifier] = $0 }
                 phoneUploadsGlucose = phoneCGMUploadsGlucose
             }
             return activeLoop
         }
-        SportLog.event("uploads", "grant: Nightscout configuration \(nightscout == nil ? "absent (staged kept)" : "present")")
+        SportLog.event("uploads", "grant: service configuration(s) \(services.isEmpty ? "absent (staged kept)" : services.map(\.managerIdentifier).joined(separator: ", "))")
         if let active { startStaged(loopManager: active) }
     }
 
@@ -81,13 +84,15 @@ final class LoanRemoteUploads {
     }
 
     private func startStaged(loopManager: WatchLoopManager) {
-        let (credentials, running, beganIn) = lock.withLock { () -> (SharedDeviceConfiguration?, Bool, Int) in
-            defer { if nightscout == nil { stagedNightscout = nil } }
-            return (nightscout == nil ? stagedNightscout : nil, nightscout != nil, generation)
+        let (configurations, anyRunning, beganIn) = lock.withLock { () -> ([SharedDeviceConfiguration], Bool, Int) in
+            let started = Set(running.map(\.pluginIdentifier))
+            let pending = staged.values.filter { !started.contains($0.managerIdentifier) }
+            staged = [:]
+            return (pending, !running.isEmpty, generation)
         }
-        guard let credentials else {
-            if !running {
-                SportLog.event("uploads", "loan active, no Nightscout credentials yet — uploads start if a grant brings them")
+        guard !configurations.isEmpty else {
+            if !anyRunning {
+                SportLog.event("uploads", "loan active, no service configuration yet — uploads start if a grant brings one")
             }
             return
         }
@@ -95,7 +100,7 @@ final class LoanRemoteUploads {
         DispatchQueue.main.async { [self] in
             MainActor.assumeIsolated {
                 guard let manager = managerForLoan(loopManager, beganIn: beganIn) else { return }
-                startNightscout(credentials, manager: manager, beganIn: beganIn)
+                configurations.forEach { start($0, manager: manager, beganIn: beganIn) }
             }
         }
     }
@@ -146,37 +151,44 @@ final class LoanRemoteUploads {
     }
 
     @MainActor
-    private func startNightscout(_ configuration: SharedDeviceConfiguration, manager: RemoteDataServicesManager, beganIn: Int) {
-        guard let service = NightscoutService(adopting: configuration, localState: nil) else {
-            SportLog.event("uploads", "the phone's Nightscout configuration could not be adopted — uploads OFF for this loan")
+    private func start(_ configuration: SharedDeviceConfiguration, manager: RemoteDataServicesManager, beganIn: Int) {
+        let adopted = Self.adoptable.lazy.compactMap { $0.init(adopting: configuration, localState: nil) as? RemoteDataService }.first
+        guard let service = adopted else {
+            SportLog.event("uploads", "the phone's \(configuration.managerIdentifier) configuration could not be adopted — its uploads OFF for this loan")
             return
         }
         guard lock.withLock({ () -> Bool in
             guard generation == beganIn else { return false }
-            nightscout = service
+            running.append(service)
             return true
         }) else { return }
         // As stock's addService: everything past the saved anchors goes up now.
         manager.addService(service)
-        SportLog.event("uploads", "uploads ON — stock RemoteDataServicesManager driving NightscoutService (site and secret not logged)")
+        SportLog.event("uploads", "uploads ON — stock RemoteDataServicesManager driving \(service.pluginIdentifier) (credentials not logged)")
     }
 
     /// Pump teardown or loan end. Synchronous, so nothing the teardown writes afterwards is
     /// uploaded; idempotent.
     func end() {
-        let (service, loopManager) = lock.withLock { () -> (NightscoutService?, WatchLoopManager?) in
+        let (services, loopManager) = lock.withLock { () -> ([RemoteDataService], WatchLoopManager?) in
             defer {
-                manager = nil; nightscout = nil; stagedNightscout = nil; activeLoop = nil; phoneUploadsGlucose = nil
+                manager = nil; running = []; staged = [:]; activeLoop = nil; phoneUploadsGlucose = nil
                 generation += 1
             }
-            return (nightscout, activeLoop)
+            return (running, activeLoop)
         }
 
-        // An upload already under way finds no configuration and returns.
-        if let service {
-            service.siteURL = nil
-            service.apiSecret = nil
-            SportLog.event("uploads", "uploads OFF — loan over, service dropped")
+        // An upload already under way finds no credentials and returns. Tidepool's session is only
+        // dropped here, never logged out: that would end the phone's.
+        for service in services {
+            if let nightscout = service as? NightscoutService {
+                nightscout.siteURL = nil
+                nightscout.apiSecret = nil
+            }
+            if let tidepool = service as? TidepoolService {
+                Task { await tidepool.tapi.setSession(nil) }
+            }
+            SportLog.event("uploads", "uploads OFF — loan over, \(service.pluginIdentifier) dropped")
         }
         if let loopManager {
             loopManager.alertStore?.delegate = nil
@@ -197,16 +209,19 @@ final class LoanRemoteUploads {
     /// store holds nothing past the service's upload bookmark; waits up to `within` for a flush to
     /// land. Empty with no service running, at once.
     func confirmUploads(within: TimeInterval, completion: @escaping ([String: [String]]) -> Void) {
-        let (service, loop) = lock.withLock { (nightscout, activeLoop) }
-        guard let service, let loop else { return completion([:]) }
+        let (services, loop) = lock.withLock { (running, activeLoop) }
+        guard !services.isEmpty, let loop else { return completion([:]) }
         Task {
             let deadline = Date().addingTimeInterval(within)
-            var confirmed = await Self.typesUploaded(to: service, from: loop)
-            while confirmed.count < 2, Date() < deadline {
+            var confirmed: [String: [String]] = [:]
+            repeat {
+                for service in services {
+                    confirmed[service.pluginIdentifier] = await Self.typesUploaded(to: service, from: loop)
+                }
+                if confirmed.values.allSatisfy({ $0.count == 2 }) { break }
                 try? await Task.sleep(nanoseconds: 500_000_000)
-                confirmed = await Self.typesUploaded(to: service, from: loop)
-            }
-            completion(confirmed.isEmpty ? [:] : [service.pluginIdentifier: confirmed])
+            } while Date() < deadline
+            completion(confirmed.filter { !$0.value.isEmpty })
         }
     }
 

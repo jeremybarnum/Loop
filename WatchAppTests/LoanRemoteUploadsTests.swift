@@ -11,6 +11,8 @@ import LoopKit
 import LoopCore
 import LoopAlgorithm
 import NightscoutServiceKit
+import TidepoolServiceKit
+import TidepoolKit
 @testable import WatchApp
 
 final class LoanRemoteUploadsTests: XCTestCase {
@@ -27,14 +29,14 @@ final class LoanRemoteUploadsTests: XCTestCase {
     /// not switch uploads off; only the loan's end does.
     func testACredentialLessGrantKeepsStagedCredentials() {
         let uploads = LoanRemoteUploads()
-        XCTAssertFalse(uploads.holdsNightscoutCredentials)
+        XCTAssertFalse(uploads.holdsServiceConfigurations)
 
         uploads.stage(services: [nightscout], phoneCGMUploadsGlucose: true)
         uploads.stage(services: [], phoneCGMUploadsGlucose: nil)
-        XCTAssertTrue(uploads.holdsNightscoutCredentials, "a credential-less grant cleared the staged credentials")
+        XCTAssertTrue(uploads.holdsServiceConfigurations, "a credential-less grant cleared the staged credentials")
 
         uploads.end()
-        XCTAssertFalse(uploads.holdsNightscoutCredentials, "the loan's end left credentials behind")
+        XCTAssertFalse(uploads.holdsServiceConfigurations, "the loan's end left credentials behind")
     }
 
     /// Every way a loan ends runs through the pump's teardown; the credentials go with it.
@@ -68,6 +70,24 @@ final class LoanRemoteUploadsTests: XCTestCase {
         XCTAssertNil(NightscoutService(adopting: NightscoutService().exportConfiguration(), localState: nil), "no secret")
     }
 
+    /// The phone's Tidepool service exports its session and data set; the wrist's, built from that
+    /// export, uploads into the same data set as the same user, and is given no refresh token.
+    func testTheWristAdoptsThePhonesTidepoolServiceWithoutItsRefreshToken() throws {
+        let phone = TidepoolService(hostIdentifier: "com.example.phone-host", hostVersion: "3.4")
+        phone.session = TSession(environment: TEnvironment(host: "fixture.example", port: 443), accessToken: "fixture-access",
+                                 accessTokenExpiration: Date().addingTimeInterval(3600), refreshToken: "fixture-refresh",
+                                 userId: "fixture-user", username: "fixture@example.com", userRoles: [])
+
+        let wrist = try XCTUnwrap(TidepoolService(adopting: phone.exportConfiguration(), localState: nil))
+        XCTAssertEqual(wrist.session?.accessToken, "fixture-access")
+        XCTAssertEqual(wrist.session?.userId, "fixture-user")
+        XCTAssertNil(wrist.session?.refreshToken, "only the phone renews the session")
+        XCTAssertTrue(wrist.isOnboarded)
+        XCTAssertTrue(wrist.isConfiguredByAnotherController)
+        XCTAssertNil(TidepoolService(adopting: TidepoolService(hostIdentifier: "h", hostVersion: "1").exportConfiguration(),
+                                     localState: nil), "no session")
+    }
+
     /// With no service running there is nothing to confirm, and the answer comes at once.
     func testWithNoServiceRunningNothingIsConfirmed() {
         var answer: [String: [String]]?
@@ -94,9 +114,9 @@ final class LoanRemoteUploadsTests: XCTestCase {
                                                 stateDirectory: directory)
 
         LoanRemoteUploads.shared.stage(services: [nightscout], phoneCGMUploadsGlucose: true)
-        XCTAssertTrue(LoanRemoteUploads.shared.holdsNightscoutCredentials)
+        XCTAssertTrue(LoanRemoteUploads.shared.holdsServiceConfigurations)
 
         controller.queue.sync { controller.teardownPump() }
-        XCTAssertFalse(LoanRemoteUploads.shared.holdsNightscoutCredentials, "uploads outlived the pump's teardown")
+        XCTAssertFalse(LoanRemoteUploads.shared.holdsServiceConfigurations, "uploads outlived the pump's teardown")
     }
 }
