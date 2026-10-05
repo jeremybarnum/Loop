@@ -124,23 +124,6 @@ final class WatchLoopManager {
     /// Fired when the wrist opens the loop (closed to open), where stock ends a pre-meal preset.
     var onLoopOpened: (() -> Void)?
 
-    // Glucose that arrives mid-rebuild runs the cycle once the pump manager is back.
-    let awaitedPumpLock = NSLock()
-    var awaitingPumpManager = false
-    var readingArrivedWithoutPump = false
-
-    func beginAwaitingPumpManager() {
-        awaitedPumpLock.lock(); awaitingPumpManager = true; readingArrivedWithoutPump = false; awaitedPumpLock.unlock()
-    }
-
-    /// Consumes the flag: it answers true ONCE, so two callers cannot each run a catch-up cycle.
-    func endAwaitingPumpManager() -> Bool {
-        awaitedPumpLock.lock(); defer { awaitedPumpLock.unlock() }
-        let waited = readingArrivedWithoutPump
-        awaitingPumpManager = false
-        readingArrivedWithoutPump = false
-        return waited
-    }
     /// Shared by the CGM and the pump managers, which log from several queues at once during a
     /// radio storm — the throttle has to be thread-safe on its own account.
     let deviceLogThrottle = DeviceLogThrottle()
@@ -354,12 +337,6 @@ final class WatchLoopManager {
         let overrideLabel: String?
     }
 
-    /// What the pod is running, from the pump's delivery state.
-    func runningTempBasal() -> DoseEntry? {
-        if case .some(.tempBasal(let dose)) = pumpManager?.status.basalDeliveryState { return dose }
-        return nil
-    }
-
     let glanceMirrorLock = NSLock()
     var _glanceMirror: GlanceData?
     var _glanceRefreshPending = false
@@ -433,6 +410,7 @@ final class WatchLoopManager {
         self._closedLoopEnabled = loopState.closedLoopEnabled
         self._closedLoopMirror = loopState.closedLoopEnabled
         self.integralRetrospectiveCorrectionEnabled = loopState.integralRetrospectiveCorrectionEnabled
+        self.glucoseBasedApplicationFactorEnabled = loopState.glucoseBasedApplicationFactorEnabled
 
         // The store asks us for the scheduled basal it nets doses against; see the
         // `DoseStoreDelegate` conformance.
@@ -489,11 +467,6 @@ final class WatchLoopManager {
         refreshGlanceData()
     }
 
-    /// For glucose that arrived outside the CGM delegate, e.g. the grant seed.
-    func notePhoneGlucoseDelivered() {
-        noteGlucoseSource(directG7: false)
-    }
-
     /// One-line "who is feeding this watch" for the log at the start of a loan.
     var g7ContentionSummary: String {
         let stamps = lastGlucoseSourceStamps
@@ -514,17 +487,22 @@ final class WatchLoopManager {
         settings.basalRateSchedule.map { overrideHistory.resolvingRecentBasalSchedule($0) }
     }
 
-    /// Applied on `dataAccessQueue`, ahead of the first prediction.
-    func setIntegralRetrospectiveCorrection(_ enabled: Bool) {
-        updateLoopState { $0.integralRetrospectiveCorrectionEnabled = enabled }
+    /// The phone's Algorithm Experiments. Applied on `dataAccessQueue`, ahead of the first prediction.
+    func setAlgorithmExperiments(integralRetrospectiveCorrection: Bool, glucoseBasedApplicationFactor: Bool) {
+        updateLoopState {
+            $0.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrection
+            $0.glucoseBasedApplicationFactorEnabled = glucoseBasedApplicationFactor
+        }
         dataAccessQueue.async {
-            self.integralRetrospectiveCorrectionEnabled = enabled
-            SportLog.event("loan", "retrospective correction: \(enabled ? "INTEGRAL" : "standard") (from grant)")
+            self.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrection
+            self.glucoseBasedApplicationFactorEnabled = glucoseBasedApplicationFactor
+            SportLog.event("loan", "retrospective correction: \(integralRetrospectiveCorrection ? "INTEGRAL" : "standard") · bolus application factor: \(glucoseBasedApplicationFactor ? "GLUCOSE-BASED" : "constant") (from grant)")
         }
     }
 
     /// Queue-owned.
     var integralRetrospectiveCorrectionEnabled = false
+    var glucoseBasedApplicationFactorEnabled = false
 
     /// Stock glucose alerts, built from the phone's settings for a loan; nil between loans.
     @MainActor var glucoseAlerts: GlucoseAlertManager?
@@ -544,8 +522,8 @@ final class WatchLoopManager {
 
     var lastPredictionBreakdown: PredictionBreakdown?
 
-    /// The last cycle's recommendation as enacted, for the glance; cleared when a cycle starts, so a
-    /// failed cycle shows none rather than the one before.
+    /// The last cycle's recommendation, for the glance; cleared when a cycle starts, so a cycle
+    /// whose compute failed shows none rather than the one before.
     var lastRecommendation: AutomaticDoseRecommendation?
 
     /// When a cycle last completed — the freshness ring's only input. Persisted on every write:
@@ -644,6 +622,7 @@ extension WatchLoopManager: TemporaryScheduleOverrideHistoryDelegate {
 struct WatchLoopState: RawRepresentable {
     var closedLoopEnabled = false
     var integralRetrospectiveCorrectionEnabled = false
+    var glucoseBasedApplicationFactorEnabled = false
     var lastLoopCompleted: Date?
     /// The override history's events, as LoopKit encodes them; read back only by a resume.
     var overrideEvents: Data?
@@ -653,13 +632,15 @@ struct WatchLoopState: RawRepresentable {
     init?(rawValue: [String: Any]) {
         closedLoopEnabled = rawValue["closedLoopEnabled"] as? Bool ?? false
         integralRetrospectiveCorrectionEnabled = rawValue["integralRetrospectiveCorrectionEnabled"] as? Bool ?? false
+        glucoseBasedApplicationFactorEnabled = rawValue["glucoseBasedApplicationFactorEnabled"] as? Bool ?? false
         lastLoopCompleted = rawValue["lastLoopCompleted"] as? Date
         overrideEvents = rawValue["overrideEvents"] as? Data
     }
 
     var rawValue: [String: Any] {
         var raw: [String: Any] = ["closedLoopEnabled": closedLoopEnabled,
-                                  "integralRetrospectiveCorrectionEnabled": integralRetrospectiveCorrectionEnabled]
+                                  "integralRetrospectiveCorrectionEnabled": integralRetrospectiveCorrectionEnabled,
+                                  "glucoseBasedApplicationFactorEnabled": glucoseBasedApplicationFactorEnabled]
         raw["lastLoopCompleted"] = lastLoopCompleted
         raw["overrideEvents"] = overrideEvents
         return raw
