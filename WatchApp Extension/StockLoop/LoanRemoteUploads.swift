@@ -14,6 +14,7 @@
 
 import Foundation
 import LoopKit
+import Network
 import LoopAlgorithm
 import LoopCore
 import NightscoutServiceKit
@@ -53,6 +54,11 @@ final class LoanRemoteUploads {
         let cacheStore = LoopKit.PersistenceController(directoryURL: documents.appendingPathComponent("LoanUploadsCgmEvents"), isReadOnly: false)
         return LoopKit.CgmEventStore(cacheStore: cacheStore)
     }()
+
+    /// The wrist's route to the internet, logged at each change once uploads first start. Uploads
+    /// wait for one, so this says why they waited.
+    private let pathMonitor = NWPathMonitor()
+    private var pathLogStarted = false
 
     init() {}
 
@@ -161,6 +167,7 @@ final class LoanRemoteUploads {
             running.append(service)
             return true
         }) else { return }
+        startPathLog()
         // As stock's addService: everything past the saved anchors goes up now.
         manager.addService(service)
         SportLog.event("uploads", "uploads ON — stock RemoteDataServicesManager driving \(service.pluginIdentifier) (credentials not logged)")
@@ -244,9 +251,27 @@ final class LoanRemoteUploads {
         return types
     }
 
+    /// Stock's trigger, through its own awaitable variant so each outcome reaches this log; stock
+    /// reports a failure only to the system log.
     func trigger(_ type: RemoteDataType) {
         guard let manager = lock.withLock({ self.manager }) else { return }
-        Task { @MainActor in manager.triggerUpload(for: type) }
+        Task { @MainActor in
+            let started = Date()
+            await manager.performUpload(for: type)
+            let failing = manager.failedUploads.map { "\($0.serviceIdentifier) \($0.remoteDataType.rawValue)" }.sorted()
+            SportLog.event("uploads", "\(type.rawValue) upload settled in \(String(format: "%.1f", Date().timeIntervalSince(started))) s · failing: \(failing.isEmpty ? "none" : failing.joined(separator: ", "))")
+        }
+    }
+
+    private func startPathLog() {
+        guard lock.withLock({ () -> Bool in defer { pathLogStarted = true }; return !pathLogStarted }) else { return }
+        pathMonitor.pathUpdateHandler = { path in
+            let kinds: [(NWInterface.InterfaceType, String)] = [(.wifi, "Wi-Fi"), (.cellular, "cellular"), (.wiredEthernet, "wired"), (.other, "other")]
+            let via = kinds.filter { path.usesInterfaceType($0.0) }.map(\.1)
+            let interfaces = path.availableInterfaces.map(\.name).joined(separator: ",")
+            SportLog.event("net", "internet path \(path.status) via \(via.isEmpty ? "nothing" : via.joined(separator: "+")) · interfaces [\(interfaces)]\(path.isExpensive ? " · expensive" : "")\(path.isConstrained ? " · constrained" : "")")
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "LoanRemoteUploads.path", qos: .utility))
     }
 }
 

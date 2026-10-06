@@ -102,7 +102,9 @@ enum GlanceComplicationPublisher {
         if decision.save { snapshot.save() }
         if decision.reload { WidgetCenter.shared.reloadTimelines(ofKind: GlanceComplicationKind.kind) }
 
-        // Confirmation runs C1/C2: requested vs served redraws, and how old the shown values are.
+        // Confirmation runs C1/C2: requested vs served redraws, and how old the shown values are. Only
+        // when something happened: the glance republishes on every 2 s repaint while it is on screen.
+        guard decision.save || decision.reload else { return }
         let served = GlanceComplicationSnapshot.served(after: lastLoggedAt)
         lastLoggedAt = now
         func age(_ date: Date?) -> String { date.map { "\(Int(now.timeIntervalSince($0)))s" } ?? "n/a" }
