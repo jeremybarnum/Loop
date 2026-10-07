@@ -6,23 +6,24 @@
 //  glance's: during a loan the watch's own loop, through `GlanceViewModel.activeState` over the glance
 //  mirror; otherwise the phone's context, which on next-dev carries the watch's own G7 reading. So a
 //  complication never disagrees with the Start screen. Published at every wake — each landed cycle
-//  during a loan, each context update otherwise — and WidgetKit is asked to redraw only when a shown
-//  string changed (ComplicationReloadThrottle).
+//  during a loan, each context update otherwise. Every change is saved; WidgetKit is asked to redraw
+//  by GlanceReloadPolicy, which spends watchOS's reload budget on the reading.
 //
 
 import Foundation
 import LoopAlgorithm
 import LoopCore
 import LoopKit
+import WatchKit
 import WidgetKit
 
 enum GlanceComplicationPublisher {
 
-    private static var throttle = ComplicationReloadThrottle<GlanceComplicationSnapshot>()
+    private static var policy = GlanceReloadPolicy()
 
     /// Called on main by the extension delegate, which passes itself (`ExtensionDelegate.shared()`
     /// asserts while a test host is still launching).
-    @MainActor static func publish(from delegate: ExtensionDelegate) {
+    @MainActor static func publish(from delegate: ExtensionDelegate, onOpen: Bool = false) {
         let context = delegate.loopManager.activeContext
         let unit = context?.displayGlucoseUnit ?? .milligramsPerDeciliter
 
@@ -30,13 +31,15 @@ enum GlanceComplicationPublisher {
            let data = session.stack.loopManager.mirroredGlanceData {
             session.stack.loopManager.glanceCarbsOnBoard { cob in
                 Task { @MainActor in
-                    store(snapshot(loan: data, cob: cob, unit: unit, now: Date()), source: "watch loop")
+                    store(snapshot(loan: data, cob: cob, unit: unit, now: Date()), source: "watch loop", onOpen: onOpen)
                 }
             }
             return
         }
         guard let context else { return }
-        store(snapshot(phone: context, override: delegate.loopManager.watchInfo.scheduleOverride), source: "phone context")
+        store(snapshot(phone: context, override: delegate.loopManager.watchInfo.scheduleOverride,
+                       suspendThreshold: delegate.loopManager.watchInfo.loopSettings.suspendThreshold?.quantity),
+              source: "phone context", onOpen: onOpen)
     }
 
     /// The watch holds the pod: the glance's own frame, with the reading in the display unit.
@@ -49,6 +52,8 @@ enum GlanceComplicationPublisher {
         s.bgText = text(data.glucose)
         s.trendSymbol = data.trend?.symbol
         s.bgStaleAt = data.glucoseDate.map { $0.addingTimeInterval(LoopAlgorithm.inputDataRecencyInterval) }
+        s.bgDate = data.glucoseDate
+        s.bgMgdl = data.glucose?.doubleValue(for: .milligramsPerDeciliter)
         switch glance.bgColor {
         case .low: s.bgRange = .low
         case .inRange: s.bgRange = .inRange
@@ -65,7 +70,8 @@ enum GlanceComplicationPublisher {
     }
 
     /// The phone loops: its context, formatted as the glance formats.
-    static func snapshot(phone context: WatchContext, override: TemporaryScheduleOverride?) -> GlanceComplicationSnapshot {
+    static func snapshot(phone context: WatchContext, override: TemporaryScheduleOverride?,
+                         suspendThreshold: LoopQuantity? = nil) -> GlanceComplicationSnapshot {
         let unit = context.displayGlucoseUnit ?? .milligramsPerDeciliter
         let formatter = NumberFormatter.glucoseFormatter(for: unit)
 
@@ -73,13 +79,24 @@ enum GlanceComplicationPublisher {
         s.bgText = context.glucoseCondition?.localizedDescription
             ?? context.glucose.flatMap { formatter.string(from: $0.doubleValue(for: unit)) }
         s.trendSymbol = context.glucoseTrend?.symbol
+        // Coloured as during a loan; who holds the pod is the icon's job, not the colour's.
+        s.bgRange = context.glucose.map { range(mgdl: $0.doubleValue(for: .milligramsPerDeciliter), suspendThreshold: suspendThreshold) }
         s.bgStaleAt = context.glucoseDate.map { $0.addingTimeInterval(LoopAlgorithm.inputDataRecencyInterval) }
+        s.bgDate = context.glucoseDate
+        s.bgMgdl = context.glucose?.doubleValue(for: .milligramsPerDeciliter)
         s.eventualText = context.eventualGlucose.flatMap { formatter.string(from: $0.doubleValue(for: unit)) }
         s.iobText = context.iob.map { String(format: "%.1f", $0) }
         s.cobText = context.cob.map { String(format: "%.0f", $0) }
         s.tempText = context.lastNetTempBasalDose.map { String(format: "%+.2f", $0) }
         s.overrideLabel = WatchLoopManager.overrideLabel(for: override)
         return s
+    }
+
+    /// The glance's colour rule (GlanceViewModel.activeState): low below the suspend threshold (70 if
+    /// unknown), high above 180.
+    static func range(mgdl: Double, suspendThreshold: LoopQuantity?) -> GlanceComplicationSnapshot.BGRange {
+        let low = suspendThreshold?.doubleValue(for: .milligramsPerDeciliter) ?? 70
+        return mgdl < low ? .low : (mgdl > 180 ? .high : .inRange)
     }
 
     /// The loop's ring and the moment its values go stale, from one cycle date.
@@ -96,21 +113,75 @@ enum GlanceComplicationPublisher {
     /// The last publish, for the diagnostics line.
     private static var lastLoggedAt = Date()
 
-    @MainActor private static func store(_ snapshot: GlanceComplicationSnapshot, source: String) {
+    @MainActor private static func store(_ snapshot: GlanceComplicationSnapshot, source: String, onOpen: Bool = false) {
         let now = Date()
-        let decision = throttle.offer(snapshot, now: now)
+        // In front, a reload costs no budget (Apple DTS); chronod logs each request's treatment.
+        let free = WKApplication.shared().applicationState == .active
+        let decision = policy.offer(snapshot, now: now, free: free, opened: onOpen && free)
         if decision.save { snapshot.save() }
-        if decision.reload { WidgetCenter.shared.reloadTimelines(ofKind: GlanceComplicationKind.kind) }
+        if decision.reload != nil { WidgetCenter.shared.reloadTimelines(ofKind: GlanceComplicationKind.kind) }
 
-        // Confirmation runs C1/C2: requested vs served redraws, and how old the shown values are. Only
-        // when something happened: the glance republishes on every 2 s repaint while it is on screen.
-        guard decision.save || decision.reload else { return }
+        // Requested vs served redraws, and how old the shown values are. Only when something happened:
+        // the glance republishes on every 2 s repaint while it is on screen.
+        guard decision.save || decision.reload != nil else { return }
         let served = GlanceComplicationSnapshot.served(after: lastLoggedAt)
         lastLoggedAt = now
         func age(_ date: Date?) -> String { date.map { "\(Int(now.timeIntervalSince($0)))s" } ?? "n/a" }
-        let reload = decision.reload ? "requested" : (throttle.reloadOwed ? "owed" : "none")
+        let reload = decision.reload.map { "requested(\($0))" } ?? (policy.owed ? "owed" : "none")
         let metrics = Set(served.map(\.metric)).sorted().joined(separator: ",")
-        let bgAge = snapshot.bgStaleAt.map { $0.addingTimeInterval(-LoopAlgorithm.inputDataRecencyInterval) }
-        SportLog.event("complication", "glance publish src=\(source) changed=\(decision.save) reload=\(reload) · served since last: \(served.count) [\(metrics)] · BG age \(age(bgAge)) · loop age \(age(snapshot.loopDate))")
+        SportLog.event("complication", "glance publish src=\(source) changed=\(decision.save) reload=\(reload) · served since last: \(served.count) [\(metrics)] · BG age \(age(snapshot.bgDate)) · loop age \(age(snapshot.loopDate))")
+    }
+}
+
+/// When to ask WidgetKit to redraw the glance complication. In the background watchOS budgets reloads
+/// (on a user's watch, one every 15–20 min at best), so they go to the reading: a move of more than
+/// 2 mg/dL, a new trend arrow, the pod changing hands, or a value the face already shows as a dash that
+/// is fresh again. Other changes are saved and ride along with the next reload. In front, reloads are
+/// free, so any change goes, and opening the app always reloads: a budgeted request is not a drawn one
+/// (watchOS may never run it), so only an unconditional reload guarantees the face matches the app.
+struct GlanceReloadPolicy {
+    static let bgThreshold = 2.0
+    /// A shown value turns into a dash 15 min after its reading, which is seconds before the next reading
+    /// lands (both on the 5-min grid). Waiting this long past the dash lets the reload carry the new
+    /// reading instead of spending itself on the old one (seen 2026-10-06 11:16: the stale reload took
+    /// the free slot 13 s before the reading that mattered).
+    static let staleGrace: TimeInterval = 30
+
+    private(set) var lastSaved: GlanceComplicationSnapshot?
+    /// What the face was last asked to draw.
+    private(set) var lastRequested: GlanceComplicationSnapshot?
+
+    /// A change the face has not been asked to draw.
+    var owed: Bool { lastSaved != nil && lastSaved != lastRequested }
+
+    /// `save`: the snapshot changed. `reload`: why WidgetKit is asked to redraw now, nil if it is not.
+    mutating func offer(_ snapshot: GlanceComplicationSnapshot, now: Date, free: Bool, opened: Bool = false) -> (save: Bool, reload: String?) {
+        let changed = snapshot != lastSaved
+        if changed { lastSaved = snapshot }
+        if opened {
+            lastRequested = snapshot
+            return (changed, "opened")
+        }
+        guard snapshot != lastRequested else { return (changed, nil) }
+        guard let reason = free ? "free" : Self.reason(snapshot, since: lastRequested, now: now) else { return (changed, nil) }
+        lastRequested = snapshot
+        return (changed, reason)
+    }
+
+    static func reason(_ s: GlanceComplicationSnapshot, since drawn: GlanceComplicationSnapshot?, now: Date) -> String? {
+        guard let drawn else { return "first" }
+        if s.watchHasPod != drawn.watchHasPod { return "holder" }
+        switch (s.bgMgdl, drawn.bgMgdl) {
+        case let (new?, old?) where abs(new - old) > bgThreshold: return "bg"
+        case (nil, nil) where s.bgText != drawn.bgText: return "bg"     // the sensor's condition ("LOW")
+        case (.some, .none), (.none, .some): return "bg"
+        default: break
+        }
+        if s.trendSymbol != drawn.trendSymbol { return "arrow" }
+        func refreshes(_ shown: Date?, _ new: Date?) -> Bool {
+            (shown.map { $0.addingTimeInterval(staleGrace) < now } ?? true) && (new.map { $0 > now } ?? false)
+        }
+        if refreshes(drawn.bgStaleAt, s.bgStaleAt) || refreshes(drawn.loopValuesStaleAt, s.loopValuesStaleAt) { return "stale" }
+        return nil
     }
 }

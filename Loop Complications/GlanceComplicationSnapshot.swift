@@ -18,6 +18,10 @@ struct GlanceComplicationSnapshot: Codable, Equatable {
     var bgRange: BGRange?
     /// After this the reading, and the eventual computed from it, show a dash.
     var bgStaleAt: Date?
+    /// When the sensor took the reading (Big BG shows its age), and its value in mg/dL whatever the
+    /// display unit (the publisher's redraw rule measures movement in it).
+    var bgDate: Date?
+    var bgMgdl: Double?
 
     var eventualText: String?
     var iobText: String?
@@ -90,10 +94,11 @@ struct GlanceComplicationSnapshot: Codable, Equatable {
     static let servedKey = "GlanceComplicationServed"
 
     /// Called by the widget each time it serves a timeline: "epochSeconds metric", newest last, capped.
+    /// Fractional seconds: the reload is served within a second of the publish that requested it.
     static func noteServed(_ metric: String, at date: Date = Date(), defaults: UserDefaults? = ComplicationSnapshot.sharedDefaults) {
         guard let defaults else { return }
         var list = defaults.stringArray(forKey: servedKey) ?? []
-        list.append("\(Int(date.timeIntervalSince1970)) \(metric)")
+        list.append("\(date.timeIntervalSince1970) \(metric)")
         if list.count > 200 { list.removeFirst(list.count - 200) }
         defaults.set(list, forKey: servedKey)
     }
@@ -111,7 +116,8 @@ struct GlanceComplicationSnapshot: Codable, Equatable {
     static var sample: GlanceComplicationSnapshot {
         let now = Date()
         return GlanceComplicationSnapshot(bgText: "106", trendSymbol: "↗", bgRange: .inRange,
-                                          bgStaleAt: now.addingTimeInterval(15 * 60), eventualText: "112",
+                                          bgStaleAt: now.addingTimeInterval(15 * 60), bgDate: now, bgMgdl: 106,
+                                          eventualText: "112",
                                           iobText: "2.3", cobText: "15", tempText: "+0.75",
                                           loopValuesStaleAt: now.addingTimeInterval(15 * 60),
                                           overrideLabel: "🏃 70% 140", watchHasPod: true, loopClosed: true,
@@ -165,19 +171,29 @@ extension GlanceComplicationSnapshot {
 
     /// The loop's age in whole minutes ("now", "4m", "30m+"), not WidgetKit's ticking relative date
     /// ("33sec"). The timeline carries an entry at each minute mark, which costs no reload budget.
-    func loopAge(at date: Date) -> String {
-        guard let loopDate else { return Self.dash }
-        let minutes = Int(max(0, date.timeIntervalSince(loopDate)) / 60)
-        if minutes < 1 { return "now" }
-        return minutes >= Self.loopAgeMinutes ? "\(Self.loopAgeMinutes)m+" : "\(minutes)m"
-    }
+    func loopAge(at date: Date) -> String { Self.age(since: loopDate, at: date) }
+
+    /// The reading's age, as `loopAge`. Empty once the reading shows a dash.
+    func bgAge(at date: Date) -> String { bg(at: date) == nil ? "" : Self.age(since: bgDate, at: date) }
 
     static let loopAgeMinutes = 30
 
     /// The minute marks after `date` at which `loopAge` changes.
-    func loopAgeMarks(after date: Date) -> [Date] {
-        guard let loopDate else { return [] }
-        return (1...Self.loopAgeMinutes).map { loopDate.addingTimeInterval(TimeInterval($0 * 60)) }.filter { $0 > date }
+    func loopAgeMarks(after date: Date) -> [Date] { Self.minuteMarks(from: loopDate, after: date) }
+
+    /// The minute marks after `date` at which `bgAge` changes.
+    func bgAgeMarks(after date: Date) -> [Date] { Self.minuteMarks(from: bgDate, after: date) }
+
+    private static func age(since start: Date?, at date: Date) -> String {
+        guard let start else { return dash }
+        let minutes = Int(max(0, date.timeIntervalSince(start)) / 60)
+        if minutes < 1 { return "now" }
+        return minutes >= loopAgeMinutes ? "\(loopAgeMinutes)m+" : "\(minutes)m"
+    }
+
+    private static func minuteMarks(from start: Date?, after date: Date) -> [Date] {
+        guard let start else { return [] }
+        return (1...loopAgeMinutes).map { start.addingTimeInterval(TimeInterval($0 * 60)) }.filter { $0 > date }
     }
 
     /// A rectangle's big value.

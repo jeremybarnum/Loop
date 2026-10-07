@@ -24,6 +24,19 @@ final class StockLoopSession {
 
     /// Restart a session the system ended while holders remain.
     func ensureKeepalive() { keepalive.ensureRunning() }
+
+    var workoutRunning: Bool { keepalive.isRunning }
+
+    /// TEST ONLY (diagnostics toggle): holds the workout through a loan, to see what a running
+    /// session changes in the background (cellular for uploads, complication reload budget).
+    /// Dropped at loan end and by a relaunch.
+    private(set) var testWorkoutHold = false
+    func setTestWorkoutHold(_ on: Bool) {
+        guard on != testWorkoutHold else { return }
+        testWorkoutHold = on
+        setKeepalive(on, reason: "test")
+        SportLog.event("keepalive", "TEST workout hold \(on ? "ON" : "OFF")")
+    }
     let loanController: PodLoanWatchController
 
     private let log = OSLog(subsystem: "com.loopkit.Loop", category: "StockLoopSession")
@@ -156,6 +169,7 @@ final class StockLoopSession {
             } else {
                 // Normally already done by teardownPump.
                 LoanRemoteUploads.shared.end()
+                self.setTestWorkoutHold(false)
 
                 os_log("Loan ended: stopping G7 transport", log: self.log, type: .default)
                 LoopStallWatchdog.disarm()

@@ -15,6 +15,7 @@
 import Foundation
 import LoopKit
 import Network
+import WatchKit
 import LoopAlgorithm
 import LoopCore
 import NightscoutServiceKit
@@ -59,6 +60,13 @@ final class LoanRemoteUploads {
     /// wait for one, so this says why they waited.
     private let pathMonitor = NWPathMonitor()
     private var pathLogStarted = false
+
+    /// The route the wrist last reported, for the gate; `.unknown` until the monitor first reports.
+    private var route: Route = .unknown
+    /// Types whose upload was held because it could not succeed yet; sent when the way opens.
+    private var held: Set<RemoteDataType> = []
+
+    enum Route { case unknown, cellularOnly, other }
 
     init() {}
 
@@ -171,6 +179,26 @@ final class LoanRemoteUploads {
         // As stock's addService: everything past the saved anchors goes up now.
         manager.addService(service)
         SportLog.event("uploads", "uploads ON — stock RemoteDataServicesManager driving \(service.pluginIdentifier) (credentials not logged)")
+        if let tidepool = service as? TidepoolService { Self.logTidepoolSession(tidepool) }
+    }
+
+    /// Whether the wrist can renew Tidepool's session itself: a refresh token from the grant, and the
+    /// client ID the renewal is made under. Presence and the access token's remaining minutes only.
+    private static func logTidepoolSession(_ tidepool: TidepoolService) {
+        let session = tidepool.session
+        let clientID = Bundle.main.url(forResource: "BuildDetails", withExtension: "plist")
+            .flatMap { NSDictionary(contentsOf: $0)?["TidepoolServiceClientId"] as? String } != nil
+        // The access token is a JWT; its `exp` claim is not secret.
+        let minutesLeft = session.flatMap { s -> String? in
+            let parts = s.accessToken.split(separator: ".")
+            guard parts.count == 3 else { return nil }
+            var payload = String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+            payload += String(repeating: "=", count: (4 - payload.count % 4) % 4)
+            guard let data = Data(base64Encoded: payload),
+                  let exp = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["exp"] as? Double else { return nil }
+            return String(Int((exp - Date().timeIntervalSince1970) / 60))
+        }
+        SportLog.event("uploads", "Tidepool session: refresh token \(session?.refreshToken == nil ? "ABSENT" : "present") · client ID \(clientID ? "present" : "ABSENT") · access token \(minutesLeft.map { "expires in \($0) min" } ?? "expiry unknown")")
     }
 
     /// Pump teardown or loan end. Synchronous, so nothing the teardown writes afterwards is
@@ -178,7 +206,7 @@ final class LoanRemoteUploads {
     func end() {
         let (services, loopManager) = lock.withLock { () -> ([RemoteDataService], WatchLoopManager?) in
             defer {
-                manager = nil; running = []; staged = [:]; activeLoop = nil; phoneUploadsGlucose = nil
+                manager = nil; running = []; staged = [:]; activeLoop = nil; phoneUploadsGlucose = nil; held = []
                 generation += 1
             }
             return (running, activeLoop)
@@ -251,11 +279,37 @@ final class LoanRemoteUploads {
         return types
     }
 
+    /// Whether a request made now can go out. watchOS refuses cellular to a backgrounded app's
+    /// requests ("Interface type 'cellular' is prohibited by parameters") and leaves them waiting until a
+    /// timeout or a route change; the phone link and Wi-Fi are allowed in the background, and a running
+    /// workout lifts the refusal (all measured on the wrist, 2026-10-05/06). An unknown route never holds.
+    static func mayUpload(inFront: Bool, workoutRunning: Bool, route: Route) -> Bool {
+        inFront || workoutRunning || route != .cellularOnly
+    }
+
+    /// Held types go up now, through the gate again (it decides with the current state).
+    func releaseHeld(reason: String) {
+        let types = lock.withLock { () -> Set<RemoteDataType> in defer { held = [] }; return held }
+        guard !types.isEmpty else { return }
+        SportLog.event("uploads", "releasing \(types.count) held upload type(s) — \(reason)")
+        types.forEach { trigger($0) }
+    }
+
     /// Stock's trigger, through its own awaitable variant so each outcome reaches this log; stock
-    /// reports a failure only to the system log.
+    /// reports a failure only to the system log. Held instead while it could only wait (see `mayUpload`).
     func trigger(_ type: RemoteDataType) {
         guard let manager = lock.withLock({ self.manager }) else { return }
         Task { @MainActor in
+            let inFront = WKApplication.shared().applicationState != .background
+            let workout = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.workoutRunning ?? false
+            let route = lock.withLock { self.route }
+            guard Self.mayUpload(inFront: inFront, workoutRunning: workout, route: route) else {
+                let first = lock.withLock { () -> Bool in held.insert(type).inserted }
+                if first {
+                    SportLog.event("uploads", "\(type.rawValue) upload HELD — in the background on cellular only, where it could only wait; it goes when the app opens or the route changes")
+                }
+                return
+            }
             let started = Date()
             await manager.performUpload(for: type)
             let failing = manager.failedUploads.map { "\($0.serviceIdentifier) \($0.remoteDataType.rawValue)" }.sorted()
@@ -265,7 +319,16 @@ final class LoanRemoteUploads {
 
     private func startPathLog() {
         guard lock.withLock({ () -> Bool in defer { pathLogStarted = true }; return !pathLogStarted }) else { return }
-        pathMonitor.pathUpdateHandler = { path in
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            let available = path.availableInterfaces
+            let newRoute: Route = !available.isEmpty && available.allSatisfy({ $0.type == .cellular }) ? .cellularOnly : .other
+            if let self {
+                let opened = self.lock.withLock { () -> Bool in
+                    defer { self.route = newRoute }
+                    return self.route == .cellularOnly && newRoute == .other
+                }
+                if opened { self.releaseHeld(reason: "route no longer cellular-only") }
+            }
             let kinds: [(NWInterface.InterfaceType, String)] = [(.wifi, "Wi-Fi"), (.cellular, "cellular"), (.wiredEthernet, "wired"), (.other, "other")]
             let via = kinds.filter { path.usesInterfaceType($0.0) }.map(\.1)
             let interfaces = path.availableInterfaces.map(\.name).joined(separator: ",")

@@ -101,6 +101,11 @@ struct LoanDebugView: View {
 
                 Text("POD LOAN").font(.footnote).foregroundColor(.secondary)
 
+                // TEST ONLY: does a running workout let background uploads use cellular?
+                Toggle("Hold workout (test)", isOn: Binding(
+                    get: { session?.testWorkoutHold ?? false },
+                    set: { session?.setTestWorkoutHold($0); lastAction = $0 ? "test workout ON" : "test workout OFF" }))
+
                 Button("Read Pod Status") {
                     lastAction = "reading…"
                     session?.loanController.debugReadStatus { ok in

@@ -76,8 +76,16 @@ final class GlanceComplicationTests: XCTestCase {
         XCTAssertEqual(s.line(.iobCob, at: now), "IOB 0.0 · COB 23")
         XCTAssertEqual(s.value(.temp, at: now), "-0.40")
         XCTAssertEqual(s.overrideLabel, "⏱ 70%")
-        XCTAssertNil(s.bgRange, "the glance does not vouch for the phone's reading")
+        XCTAssertEqual(s.bgRange, .inRange, "coloured as during a loan; the icon says who holds the pod")
         XCTAssertFalse(s.watchHasPod)
+
+        // The phone's suspend threshold sets the low line, as the glance's own rule; 180 the high one.
+        let low = WatchContext(glucose: mgdl(78), displayGlucoseUnit: .milligramsPerDeciliter, glucoseTrend: .flat,
+                               glucoseDate: now.addingTimeInterval(-60), loopLastRunDate: now.addingTimeInterval(-120),
+                               lastNetTempBasalDose: 0, cob: 0, iob: 0, isClosedLoop: true)
+        XCTAssertEqual(GlanceComplicationPublisher.snapshot(phone: low, override: nil, suspendThreshold: mgdl(80)).bgRange, .low)
+        XCTAssertEqual(GlanceComplicationPublisher.snapshot(phone: low, override: nil).bgRange, .inRange, "70 when unknown")
+        XCTAssertEqual(GlanceComplicationPublisher.range(mgdl: 181, suspendThreshold: nil), .high)
     }
 
     // MARK: - Staleness
@@ -177,5 +185,89 @@ final class GlanceComplicationTests: XCTestCase {
         XCTAssertEqual(s.overrideParts.rest, "70% 140")
         s.overrideLabel = "⏱"
         XCTAssertEqual(s.overrideParts.rest, "")
+    }
+
+    /// A reload is served within a second of the publish that asked for it: still counted.
+    func testATimelineServedInTheSameSecondIsCounted() {
+        let defaults = UserDefaults(suiteName: "GlanceComplicationServedSubsecond")!
+        defaults.removePersistentDomain(forName: "GlanceComplicationServedSubsecond")
+        let publish = Date(timeIntervalSince1970: 1_000_000.4)
+        GlanceComplicationSnapshot.noteServed("bigBG", at: publish.addingTimeInterval(0.5), defaults: defaults)
+        XCTAssertEqual(GlanceComplicationSnapshot.served(after: publish, defaults: defaults).map(\.metric), ["bigBG"])
+    }
+
+    /// Big BG's age counts from the reading, and goes with it once the reading dashes.
+    func testTheReadingsAgeCountsFromTheReading() {
+        let s = GlanceComplicationPublisher.snapshot(loan: glanceData(glucoseAge: 130), cob: 10,
+                                                     unit: .milligramsPerDeciliter, now: now)
+        XCTAssertEqual(s.bgAge(at: now), "2m")
+        XCTAssertEqual(s.bgAge(at: now.addingTimeInterval(16 * 60)), "")
+        XCTAssertEqual(s.bgAgeMarks(after: now).first, s.bgDate?.addingTimeInterval(3 * 60))
+    }
+
+    // MARK: - Redraw rule
+
+    private func reading(_ mgdl: Double, trend: String = "→", holder: Bool = false, takenAgo: TimeInterval = 0,
+                         iob: String = "1.0") -> GlanceComplicationSnapshot {
+        var s = GlanceComplicationSnapshot()
+        s.bgMgdl = mgdl
+        s.bgText = String(Int(mgdl))
+        s.trendSymbol = trend
+        s.bgDate = now.addingTimeInterval(-takenAgo)
+        s.bgStaleAt = s.bgDate?.addingTimeInterval(15 * 60)
+        s.iobText = iob
+        s.watchHasPod = holder
+        return s
+    }
+
+    /// In the background the reading drives redraws: more than 2 mg/dL from what the face shows.
+    func testABudgetedRedrawNeedsTheReadingToMove() {
+        var policy = GlanceReloadPolicy()
+        XCTAssertEqual(policy.offer(reading(100), now: now, free: false).reload, "first")
+        XCTAssertNil(policy.offer(reading(102), now: now, free: false).reload, "2 mg/dL is not enough")
+        XCTAssertNil(policy.offer(reading(101, iob: "2.0"), now: now, free: false).reload, "IOB alone waits")
+        XCTAssertTrue(policy.owed)
+        XCTAssertEqual(policy.offer(reading(97), now: now, free: false).reload, "bg", "measured from the face, not the last reading")
+        XCTAssertFalse(policy.owed)
+    }
+
+    func testANewArrowOrHolderRedraws() {
+        var policy = GlanceReloadPolicy()
+        _ = policy.offer(reading(100), now: now, free: false)
+        XCTAssertEqual(policy.offer(reading(100, trend: "↗"), now: now, free: false).reload, "arrow")
+        XCTAssertEqual(policy.offer(reading(100, trend: "↗", holder: true), now: now, free: false).reload, "holder")
+    }
+
+    /// A face already showing a dash gets the fresh value, even when it has barely moved.
+    func testAStaleFaceIsRefreshed() {
+        var policy = GlanceReloadPolicy()
+        _ = policy.offer(reading(100, takenAgo: 20 * 60), now: now, free: false)
+        XCTAssertEqual(policy.offer(reading(100), now: now, free: false).reload, "stale")
+    }
+
+    /// In front any change is drawn (no budget); an unchanged snapshot never is.
+    func testInFrontAnyChangeRedraws() {
+        var policy = GlanceReloadPolicy()
+        _ = policy.offer(reading(100), now: now, free: false)
+        XCTAssertNil(policy.offer(reading(100), now: now, free: true).reload)
+        XCTAssertEqual(policy.offer(reading(100, iob: "2.0"), now: now, free: true).reload, "free")
+    }
+
+    /// Opening the app always reloads, even with nothing new: a budgeted request may never have run.
+    func testOpeningTheAppAlwaysReloads() {
+        var policy = GlanceReloadPolicy()
+        XCTAssertEqual(policy.offer(reading(120), now: now, free: false).reload, "first")
+        XCTAssertNil(policy.offer(reading(120), now: now, free: true).reload, "in front, nothing new")
+        XCTAssertEqual(policy.offer(reading(120), now: now, free: true, opened: true).reload, "opened")
+    }
+
+    /// A face that has only just turned to a dash waits for the reading due seconds later.
+    func testAJustStaleFaceWaitsForTheNextReading() {
+        var policy = GlanceReloadPolicy()
+        _ = policy.offer(reading(100, takenAgo: 15 * 60 + 10), now: now, free: false)
+        var fresher = reading(100, takenAgo: 5 * 60)
+        fresher.iobText = "2.0"
+        XCTAssertNil(policy.offer(fresher, now: now, free: false).reload, "10 s past the dash: wait")
+        XCTAssertEqual(policy.offer(reading(100, takenAgo: 0), now: now.addingTimeInterval(31), free: false).reload, "stale")
     }
 }

@@ -62,6 +62,7 @@ struct GlanceProvider: AppIntentTimelineProvider {
         GlanceComplicationSnapshot.noteServed(configuration.metric.rawValue, at: now)
         glanceWidgetLog.notice("timeline metric=\(configuration.metric.rawValue, privacy: .public) family=\(String(describing: context.family), privacy: .public)")
         let marks = (snapshot?.changeMoments(after: now) ?? []) + (snapshot?.loopAgeMarks(after: now) ?? [])
+            + (configuration.metric == .bigBG ? snapshot?.bgAgeMarks(after: now) ?? [] : [])
         let moments = [now] + Set(marks).sorted()
         return Timeline(entries: moments.map { GlanceEntry(date: $0, metric: configuration.metric, snapshot: snapshot) },
                         policy: .never)
@@ -125,9 +126,9 @@ struct GlanceComplicationView: View {
                 .widgetAccentable()
                 .widgetLabel { label.font(.system(size: 22, weight: .bold, design: .rounded)) }
         case .bg, .bigBG:
-            Color.clear.widgetLabel { label.font(.system(size: 22, weight: .bold, design: .rounded)) }
+            holderIcon(size: 15).widgetLabel { label.font(.system(size: 22, weight: .bold, design: .rounded)) }
         default:
-            Color.clear.widgetLabel { label }
+            holderIcon(size: 15).widgetLabel { label }
         }
     }
 
@@ -187,6 +188,7 @@ struct GlanceComplicationView: View {
                         .font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary).widgetAccentable()
                 }
                 Spacer(minLength: 4)
+                holderIcon(size: 12)
                 loopAge
             }
             Text(snapshot.headline(metric, at: date))
@@ -200,13 +202,27 @@ struct GlanceComplicationView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The reading and its trend alone, as large as the slot allows.
+    /// The reading and its trend, centred and as large as the slot allows, flanked by who holds the pod
+    /// and the reading's age (between reloads, which watchOS budgets, the number can be minutes old).
     private var bigBG: some View {
-        Text(snapshot.bgWithTrend(at: date))
-            .font(.system(size: 60, weight: .semibold, design: .rounded))
-            .foregroundStyle(bgColor).widgetAccentable()
-            .minimumScaleFactor(0.3).lineLimit(1)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        HStack(spacing: 4) {
+            holderIcon(size: 15)
+            Text(snapshot.bgWithTrend(at: date))
+                .font(.system(size: 60, weight: .semibold, design: .rounded))
+                .foregroundStyle(bgColor).widgetAccentable()
+                .minimumScaleFactor(0.3).lineLimit(1)
+                .frame(maxWidth: .infinity)
+            Text(snapshot.bgAge(at: date))
+                .font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
+                .lineLimit(1).fixedSize()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Who holds the pod: the watch (a loan) or the phone. By shape, not colour, so tinted faces keep it.
+    private func holderIcon(size: CGFloat) -> some View {
+        Image(systemName: snapshot.watchHasPod ? "applewatch" : "iphone")
+            .font(.system(size: size, weight: .semibold)).foregroundStyle(.secondary)
     }
 
     /// The glance in three lines: BG → eventual, the loop's numbers, then override and loop age.
@@ -216,8 +232,7 @@ struct GlanceComplicationView: View {
                 Text(snapshot.bgWithTrend(at: date)).font(.headline).foregroundStyle(bgColor).widgetAccentable()
                 Text(snapshot.miniGlanceEventual(at: date)).font(.headline)
                 Spacer(minLength: 0)
-                // Who holds the pod, by shape rather than colour (tinted faces drop colour).
-                Text(snapshot.watchHasPod ? "⌚︎" : "📱").font(.caption2)
+                holderIcon(size: 12)
             }
             Text(snapshot.miniGlanceNumbers(at: date))
                 .font(.system(size: 15, weight: .medium, design: .rounded)).minimumScaleFactor(0.7).lineLimit(1)

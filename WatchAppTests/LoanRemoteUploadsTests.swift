@@ -71,8 +71,9 @@ final class LoanRemoteUploadsTests: XCTestCase {
     }
 
     /// The phone's Tidepool service exports its session and data set; the wrist's, built from that
-    /// export, uploads into the same data set as the same user, and is given no refresh token.
-    func testTheWristAdoptsThePhonesTidepoolServiceWithoutItsRefreshToken() throws {
+    /// export, uploads into the same data set as the same user, and can renew the session itself:
+    /// an access token outlives no loan, and the phone may be out of reach when it expires.
+    func testTheWristAdoptsThePhonesTidepoolServiceWithItsRefreshToken() throws {
         let phone = TidepoolService(hostIdentifier: "com.example.phone-host", hostVersion: "3.4")
         phone.session = TSession(environment: TEnvironment(host: "fixture.example", port: 443), accessToken: "fixture-access",
                                  accessTokenExpiration: Date().addingTimeInterval(3600), refreshToken: "fixture-refresh",
@@ -81,7 +82,7 @@ final class LoanRemoteUploadsTests: XCTestCase {
         let wrist = try XCTUnwrap(TidepoolService(adopting: phone.exportConfiguration(), localState: nil))
         XCTAssertEqual(wrist.session?.accessToken, "fixture-access")
         XCTAssertEqual(wrist.session?.userId, "fixture-user")
-        XCTAssertNil(wrist.session?.refreshToken, "only the phone renews the session")
+        XCTAssertEqual(wrist.session?.refreshToken, "fixture-refresh", "the wrist renews the session itself")
         XCTAssertTrue(wrist.isOnboarded)
         XCTAssertTrue(wrist.isConfiguredByAnotherController)
         XCTAssertNil(TidepoolService(adopting: TidepoolService(hostIdentifier: "h", hostVersion: "1").exportConfiguration(),
@@ -118,5 +119,16 @@ final class LoanRemoteUploadsTests: XCTestCase {
 
         controller.queue.sync { controller.teardownPump() }
         XCTAssertFalse(LoanRemoteUploads.shared.holdsServiceConfigurations, "uploads outlived the pump's teardown")
+    }
+
+    /// Only a background request on cellular alone is held: watchOS refuses it cellular and it waits.
+    /// In front, during a workout, over Wi-Fi or the phone link, or with the route not yet known, it goes.
+    func testTheUploadGateHoldsOnlyBackgroundCellular() {
+        typealias U = LoanRemoteUploads
+        XCTAssertFalse(U.mayUpload(inFront: false, workoutRunning: false, route: .cellularOnly))
+        XCTAssertTrue(U.mayUpload(inFront: true, workoutRunning: false, route: .cellularOnly))
+        XCTAssertTrue(U.mayUpload(inFront: false, workoutRunning: true, route: .cellularOnly))
+        XCTAssertTrue(U.mayUpload(inFront: false, workoutRunning: false, route: .other))
+        XCTAssertTrue(U.mayUpload(inFront: false, workoutRunning: false, route: .unknown))
     }
 }
