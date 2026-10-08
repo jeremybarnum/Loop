@@ -207,8 +207,8 @@ final class GlanceComplicationTests: XCTestCase {
 
     // MARK: - Redraw rule
 
-    /// Background requests 300 s apart, outside each other's free window.
-    private func later(_ windows: Int) -> Date { now.addingTimeInterval(Double(windows) * GlanceReloadPolicy.freeWindow) }
+    /// Background requests one reading apart.
+    private func later(_ readings: Int) -> Date { now.addingTimeInterval(Double(readings) * 300) }
 
     private func reading(_ mgdl: Double, trend: String = "→", holder: Bool = false, takenAgo: TimeInterval = 0,
                          iob: String = "1.0") -> GlanceComplicationSnapshot {
@@ -222,7 +222,7 @@ final class GlanceComplicationTests: XCTestCase {
         return s
     }
 
-    /// In the background any change to what the face shows asks for a reload, 300 s apart at most.
+    /// In the background any change to what the face shows asks for a reload, once per reading.
     func testABackgroundChangeRedrawsOncePerWindow() {
         var policy = GlanceReloadPolicy()
         XCTAssertEqual(policy.offer(reading(100), now: now, free: false).reload, "first")
@@ -248,13 +248,29 @@ final class GlanceComplicationTests: XCTestCase {
         XCTAssertEqual(policy.offer(reading(120), now: now, free: true, opened: true).reload, "opened")
     }
 
-    /// In the background a second request within 300 s of the last one waits: it could only be refused.
-    func testABackgroundRequestWaitsOutTheFreeWindow() {
+    /// In the background a second request in the same cycle waits for the next reading.
+    func testABackgroundRequestWaitsOutTheSpacing() {
         var policy = GlanceReloadPolicy()
         XCTAssertEqual(policy.offer(reading(100), now: now, free: false).reload, "first")
-        XCTAssertNil(policy.offer(reading(110), now: now.addingTimeInterval(13), free: false).reload, "inside the window")
+        XCTAssertNil(policy.offer(reading(110), now: now.addingTimeInterval(13), free: false).reload, "same cycle")
         XCTAssertTrue(policy.owed)
         XCTAssertEqual(policy.offer(reading(110), now: now.addingTimeInterval(300), free: false).reload, "changed")
         XCTAssertEqual(policy.offer(reading(120), now: now.addingTimeInterval(310), free: true).reload, "free", "in front: always")
+    }
+
+    /// A reading that lands a little early is not held: readings come 298–302 s apart (2026-10-08 09:31 was
+    /// held 291 s after a late request under the old 300-s rule).
+    func testAnEarlyReadingIsNotHeld() {
+        var policy = GlanceReloadPolicy()
+        XCTAssertEqual(policy.offer(reading(100), now: now, free: false).reload, "first")
+        XCTAssertEqual(policy.offer(reading(104), now: now.addingTimeInterval(291), free: false).reload, "changed")
+    }
+
+    /// A background request waits until the link has settled, and only right after a link-up.
+    func testARequestAtLinkUpWaitsForTheLinkToSettle() {
+        XCTAssertEqual(GlanceReloadPolicy.settleDelay(sensorLinkUp: now, now: now.addingTimeInterval(0.2)), 1.0, accuracy: 0.001)
+        XCTAssertEqual(GlanceReloadPolicy.settleDelay(sensorLinkUp: now, now: now.addingTimeInterval(1.3)), 0, "already settled")
+        XCTAssertEqual(GlanceReloadPolicy.settleDelay(sensorLinkUp: now.addingTimeInterval(-200), now: now), 0, "between readings")
+        XCTAssertEqual(GlanceReloadPolicy.settleDelay(sensorLinkUp: nil, now: now), 0, "no sensor")
     }
 }
