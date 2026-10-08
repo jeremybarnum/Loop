@@ -266,6 +266,15 @@ final class GlanceComplicationTests: XCTestCase {
         XCTAssertEqual(policy.offer(reading(104), now: now.addingTimeInterval(291), free: false).reload, "changed")
     }
 
+    /// Opening the app (a free request) does not hold the next reading's background request.
+    func testAFreeRequestDoesNotHoldTheNextReading() {
+        var policy = GlanceReloadPolicy()
+        XCTAssertEqual(policy.offer(reading(100), now: now, free: false).reload, "first")
+        XCTAssertEqual(policy.offer(reading(100), now: now.addingTimeInterval(100), free: true, opened: true).reload, "opened")
+        XCTAssertEqual(policy.offer(reading(105), now: now.addingTimeInterval(300), free: false).reload, "changed",
+                       "205 s after the open, 300 s after the last background request")
+    }
+
     /// A background request waits until the link has settled, and only right after a link-up.
     func testARequestAtLinkUpWaitsForTheLinkToSettle() {
         XCTAssertEqual(GlanceReloadPolicy.settleDelay(sensorLinkUp: now, now: now.addingTimeInterval(0.2)), 1.0, accuracy: 0.001)

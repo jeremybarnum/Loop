@@ -183,6 +183,7 @@ struct GlanceReloadPolicy {
     private(set) var lastSaved: GlanceComplicationSnapshot?
     /// What the face was last asked to draw, and when.
     private(set) var lastRequested: GlanceComplicationSnapshot?
+    /// When the last background request went.
     private(set) var lastRequestAt: Date?
 
     /// A change the face has not been asked to draw.
@@ -201,7 +202,9 @@ struct GlanceReloadPolicy {
             reason = free ? "free" : (lastRequested == nil ? "first" : "changed")
         }
         lastRequested = snapshot
-        lastRequestAt = now
+        // Only a background request spends the spacing: one in front is free, and counting it held the
+        // next reading (2026-10-08 14:21, 205 s after opening the app at 14:17).
+        if !free { lastRequestAt = now }
         return (changed, reason)
     }
 }
