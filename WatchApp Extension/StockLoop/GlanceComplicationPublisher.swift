@@ -53,7 +53,6 @@ enum GlanceComplicationPublisher {
         s.trendSymbol = data.trend?.symbol
         s.bgStaleAt = data.glucoseDate.map { $0.addingTimeInterval(LoopAlgorithm.inputDataRecencyInterval) }
         s.bgDate = data.glucoseDate
-        s.bgMgdl = data.glucose?.doubleValue(for: .milligramsPerDeciliter)
         switch glance.bgColor {
         case .low: s.bgRange = .low
         case .inRange: s.bgRange = .inRange
@@ -83,7 +82,6 @@ enum GlanceComplicationPublisher {
         s.bgRange = context.glucose.map { range(mgdl: $0.doubleValue(for: .milligramsPerDeciliter), suspendThreshold: suspendThreshold) }
         s.bgStaleAt = context.glucoseDate.map { $0.addingTimeInterval(LoopAlgorithm.inputDataRecencyInterval) }
         s.bgDate = context.glucoseDate
-        s.bgMgdl = context.glucose?.doubleValue(for: .milligramsPerDeciliter)
         s.eventualText = context.eventualGlucose.flatMap { formatter.string(from: $0.doubleValue(for: unit)) }
         s.iobText = context.iob.map { String(format: "%.1f", $0) }
         s.cobText = context.cob.map { String(format: "%.0f", $0) }
@@ -133,23 +131,21 @@ enum GlanceComplicationPublisher {
     }
 }
 
-/// When to ask WidgetKit to redraw the glance complication. In the background watchOS budgets reloads
-/// (on a user's watch, one every 15–20 min at best), so they go to the reading: a move of more than
-/// 2 mg/dL, a new trend arrow, the pod changing hands, or a value the face already shows as a dash that
-/// is fresh again. Other changes are saved and ride along with the next reload. In front, reloads are
-/// free, so any change goes, and opening the app always reloads: a budgeted request is not a drawn one
-/// (watchOS may never run it), so only an unconditional reload guarantees the face matches the app.
+/// When to ask WidgetKit to redraw the glance complication: whenever what the face would show has
+/// changed. In front a reload is free, so it goes at once, and opening the app always reloads (a request
+/// is not a drawn reload: watchOS may never run it). In the background, at most one request per
+/// `freeWindow`; a change inside the window waits for the next chance, carrying everything since.
 struct GlanceReloadPolicy {
-    static let bgThreshold = 2.0
-    /// A shown value turns into a dash 15 min after its reading, which is seconds before the next reading
-    /// lands (both on the 5-min grid). Waiting this long past the dash lets the reload carry the new
-    /// reading instead of spending itself on the old one (seen 2026-10-06 11:16: the stale reload took
-    /// the free slot 13 s before the reading that mattered).
-    static let staleGrace: TimeInterval = 30
+    /// On a watch with the developer exemption, watchOS grants a complication one free background reload
+    /// per 300 s and charges any other request in that window to the reload budget (measured 2026-10-07:
+    /// granted at ≥ 300 s, refused at < 300 s, no daily cap). Any request starts the window, in front or
+    /// not; a background request inside it can only be refused. 300 s is also the G7's cadence.
+    static let freeWindow: TimeInterval = 300
 
     private(set) var lastSaved: GlanceComplicationSnapshot?
-    /// What the face was last asked to draw.
+    /// What the face was last asked to draw, and when.
     private(set) var lastRequested: GlanceComplicationSnapshot?
+    private(set) var lastRequestAt: Date?
 
     /// A change the face has not been asked to draw.
     var owed: Bool { lastSaved != nil && lastSaved != lastRequested }
@@ -158,30 +154,16 @@ struct GlanceReloadPolicy {
     mutating func offer(_ snapshot: GlanceComplicationSnapshot, now: Date, free: Bool, opened: Bool = false) -> (save: Bool, reload: String?) {
         let changed = snapshot != lastSaved
         if changed { lastSaved = snapshot }
+        let reason: String
         if opened {
-            lastRequested = snapshot
-            return (changed, "opened")
+            reason = "opened"
+        } else {
+            guard snapshot != lastRequested else { return (changed, nil) }
+            if !free, let last = lastRequestAt, now.timeIntervalSince(last) < Self.freeWindow { return (changed, nil) }
+            reason = free ? "free" : (lastRequested == nil ? "first" : "changed")
         }
-        guard snapshot != lastRequested else { return (changed, nil) }
-        guard let reason = free ? "free" : Self.reason(snapshot, since: lastRequested, now: now) else { return (changed, nil) }
         lastRequested = snapshot
+        lastRequestAt = now
         return (changed, reason)
-    }
-
-    static func reason(_ s: GlanceComplicationSnapshot, since drawn: GlanceComplicationSnapshot?, now: Date) -> String? {
-        guard let drawn else { return "first" }
-        if s.watchHasPod != drawn.watchHasPod { return "holder" }
-        switch (s.bgMgdl, drawn.bgMgdl) {
-        case let (new?, old?) where abs(new - old) > bgThreshold: return "bg"
-        case (nil, nil) where s.bgText != drawn.bgText: return "bg"     // the sensor's condition ("LOW")
-        case (.some, .none), (.none, .some): return "bg"
-        default: break
-        }
-        if s.trendSymbol != drawn.trendSymbol { return "arrow" }
-        func refreshes(_ shown: Date?, _ new: Date?) -> Bool {
-            (shown.map { $0.addingTimeInterval(staleGrace) < now } ?? true) && (new.map { $0 > now } ?? false)
-        }
-        if refreshes(drawn.bgStaleAt, s.bgStaleAt) || refreshes(drawn.loopValuesStaleAt, s.loopValuesStaleAt) { return "stale" }
-        return nil
     }
 }

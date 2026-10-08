@@ -207,10 +207,12 @@ final class GlanceComplicationTests: XCTestCase {
 
     // MARK: - Redraw rule
 
+    /// Background requests 300 s apart, outside each other's free window.
+    private func later(_ windows: Int) -> Date { now.addingTimeInterval(Double(windows) * GlanceReloadPolicy.freeWindow) }
+
     private func reading(_ mgdl: Double, trend: String = "→", holder: Bool = false, takenAgo: TimeInterval = 0,
                          iob: String = "1.0") -> GlanceComplicationSnapshot {
         var s = GlanceComplicationSnapshot()
-        s.bgMgdl = mgdl
         s.bgText = String(Int(mgdl))
         s.trendSymbol = trend
         s.bgDate = now.addingTimeInterval(-takenAgo)
@@ -220,29 +222,14 @@ final class GlanceComplicationTests: XCTestCase {
         return s
     }
 
-    /// In the background the reading drives redraws: more than 2 mg/dL from what the face shows.
-    func testABudgetedRedrawNeedsTheReadingToMove() {
+    /// In the background any change to what the face shows asks for a reload, 300 s apart at most.
+    func testABackgroundChangeRedrawsOncePerWindow() {
         var policy = GlanceReloadPolicy()
         XCTAssertEqual(policy.offer(reading(100), now: now, free: false).reload, "first")
-        XCTAssertNil(policy.offer(reading(102), now: now, free: false).reload, "2 mg/dL is not enough")
-        XCTAssertNil(policy.offer(reading(101, iob: "2.0"), now: now, free: false).reload, "IOB alone waits")
-        XCTAssertTrue(policy.owed)
-        XCTAssertEqual(policy.offer(reading(97), now: now, free: false).reload, "bg", "measured from the face, not the last reading")
+        XCTAssertNil(policy.offer(reading(100), now: later(1), free: false).reload, "nothing changed")
+        XCTAssertEqual(policy.offer(reading(101), now: later(2), free: false).reload, "changed", "1 mg/dL is enough")
+        XCTAssertEqual(policy.offer(reading(101, iob: "2.0"), now: later(3), free: false).reload, "changed", "IOB alone")
         XCTAssertFalse(policy.owed)
-    }
-
-    func testANewArrowOrHolderRedraws() {
-        var policy = GlanceReloadPolicy()
-        _ = policy.offer(reading(100), now: now, free: false)
-        XCTAssertEqual(policy.offer(reading(100, trend: "↗"), now: now, free: false).reload, "arrow")
-        XCTAssertEqual(policy.offer(reading(100, trend: "↗", holder: true), now: now, free: false).reload, "holder")
-    }
-
-    /// A face already showing a dash gets the fresh value, even when it has barely moved.
-    func testAStaleFaceIsRefreshed() {
-        var policy = GlanceReloadPolicy()
-        _ = policy.offer(reading(100, takenAgo: 20 * 60), now: now, free: false)
-        XCTAssertEqual(policy.offer(reading(100), now: now, free: false).reload, "stale")
     }
 
     /// In front any change is drawn (no budget); an unchanged snapshot never is.
@@ -261,13 +248,13 @@ final class GlanceComplicationTests: XCTestCase {
         XCTAssertEqual(policy.offer(reading(120), now: now, free: true, opened: true).reload, "opened")
     }
 
-    /// A face that has only just turned to a dash waits for the reading due seconds later.
-    func testAJustStaleFaceWaitsForTheNextReading() {
+    /// In the background a second request within 300 s of the last one waits: it could only be refused.
+    func testABackgroundRequestWaitsOutTheFreeWindow() {
         var policy = GlanceReloadPolicy()
-        _ = policy.offer(reading(100, takenAgo: 15 * 60 + 10), now: now, free: false)
-        var fresher = reading(100, takenAgo: 5 * 60)
-        fresher.iobText = "2.0"
-        XCTAssertNil(policy.offer(fresher, now: now, free: false).reload, "10 s past the dash: wait")
-        XCTAssertEqual(policy.offer(reading(100, takenAgo: 0), now: now.addingTimeInterval(31), free: false).reload, "stale")
+        XCTAssertEqual(policy.offer(reading(100), now: now, free: false).reload, "first")
+        XCTAssertNil(policy.offer(reading(110), now: now.addingTimeInterval(13), free: false).reload, "inside the window")
+        XCTAssertTrue(policy.owed)
+        XCTAssertEqual(policy.offer(reading(110), now: now.addingTimeInterval(300), free: false).reload, "changed")
+        XCTAssertEqual(policy.offer(reading(120), now: now.addingTimeInterval(310), free: true).reload, "free", "in front: always")
     }
 }

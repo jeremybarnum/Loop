@@ -287,6 +287,14 @@ final class LoanRemoteUploads {
         inFront || workoutRunning || route != .cellularOnly
     }
 
+    /// Every type goes up now, held or not: what a relaunch forgot, and what stock's own catch-up
+    /// left waiting in the background, both resume from stock's anchors. Free in front.
+    func releaseAll(reason: String) {
+        guard lock.withLock({ () -> Bool in held = []; return manager != nil }) else { return }
+        SportLog.event("uploads", "sending every upload type — \(reason)")
+        flush()
+    }
+
     /// Held types go up now, through the gate again (it decides with the current state).
     func releaseHeld(reason: String) {
         let types = lock.withLock { () -> Set<RemoteDataType> in defer { held = [] }; return held }

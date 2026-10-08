@@ -18,10 +18,8 @@ struct GlanceComplicationSnapshot: Codable, Equatable {
     var bgRange: BGRange?
     /// After this the reading, and the eventual computed from it, show a dash.
     var bgStaleAt: Date?
-    /// When the sensor took the reading (Big BG shows its age), and its value in mg/dL whatever the
-    /// display unit (the publisher's redraw rule measures movement in it).
+    /// When the sensor took the reading (Big BG shows its age).
     var bgDate: Date?
-    var bgMgdl: Double?
 
     var eventualText: String?
     var iobText: String?
@@ -116,7 +114,7 @@ struct GlanceComplicationSnapshot: Codable, Equatable {
     static var sample: GlanceComplicationSnapshot {
         let now = Date()
         return GlanceComplicationSnapshot(bgText: "106", trendSymbol: "↗", bgRange: .inRange,
-                                          bgStaleAt: now.addingTimeInterval(15 * 60), bgDate: now, bgMgdl: 106,
+                                          bgStaleAt: now.addingTimeInterval(15 * 60), bgDate: now,
                                           eventualText: "112",
                                           iobText: "2.3", cobText: "15", tempText: "+0.75",
                                           loopValuesStaleAt: now.addingTimeInterval(15 * 60),
