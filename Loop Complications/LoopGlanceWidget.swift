@@ -62,7 +62,7 @@ struct GlanceProvider: AppIntentTimelineProvider {
         GlanceComplicationSnapshot.noteServed(configuration.metric.rawValue, at: now)
         glanceWidgetLog.notice("timeline metric=\(configuration.metric.rawValue, privacy: .public) family=\(String(describing: context.family), privacy: .public)")
         let marks = (snapshot?.changeMoments(after: now) ?? []) + (snapshot?.loopAgeMarks(after: now) ?? [])
-            + (configuration.metric == .bigBG ? snapshot?.bgAgeMarks(after: now) ?? [] : [])
+            + ([.bg, .bigBG].contains(configuration.metric) ? snapshot?.bgAgeMarks(after: now) ?? [] : [])
         let moments = [now] + Set(marks).sorted()
         return Timeline(entries: moments.map { GlanceEntry(date: $0, metric: configuration.metric, snapshot: snapshot) },
                         policy: .never)
@@ -117,6 +117,7 @@ struct GlanceComplicationView: View {
     }
 
     // The tip stays empty except for the loop ring, which is information rather than decoration.
+    // BG and Loop carry an age after the value, as the Big BG rectangle and the loop inline do.
     @ViewBuilder private var corner: some View {
         let label = Text(snapshot.line(metric, at: date, corner: true))
         switch metric {
@@ -124,12 +125,17 @@ struct GlanceComplicationView: View {
             Circle()
                 .strokeBorder(snapshot.freshness(at: date).color, lineWidth: 3)
                 .widgetAccentable()
-                .widgetLabel { label.font(.system(size: 22, weight: .bold, design: .rounded)) }
+                .widgetLabel { cornerValue(label, age: snapshot.loopAge(at: date)) }
         case .bg, .bigBG:
-            holderIcon(size: 15).widgetLabel { label.font(.system(size: 22, weight: .bold, design: .rounded)) }
+            holderIcon(size: 15).widgetLabel { cornerValue(label, age: snapshot.bgAge(at: date)) }
         default:
-            holderIcon(size: 15).widgetLabel { label }
+            holderIcon(size: 15).widgetLabel { label.font(.system(size: 18, weight: .bold, design: .rounded)) }
         }
+    }
+
+    private func cornerValue(_ value: Text, age: String) -> Text {
+        value.font(.system(size: 22, weight: .bold, design: .rounded))
+            + Text(age.isEmpty ? "" : " " + age).font(.system(size: 15, weight: .medium, design: .rounded))
     }
 
     @ViewBuilder private var circular: some View {
