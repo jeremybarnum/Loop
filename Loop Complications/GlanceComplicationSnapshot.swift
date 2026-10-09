@@ -111,6 +111,11 @@ struct GlanceComplicationSnapshot: Codable, Equatable {
         }
     }
 
+    /// When the widget last built a timeline: the face shows whatever was saved before that.
+    static func lastServed(defaults: UserDefaults? = ComplicationSnapshot.sharedDefaults) -> Date? {
+        served(after: .distantPast, defaults: defaults).last?.date
+    }
+
     static var sample: GlanceComplicationSnapshot {
         let now = Date()
         return GlanceComplicationSnapshot(bgText: "106", trendSymbol: "↗", bgRange: .inRange,

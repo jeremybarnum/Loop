@@ -219,69 +219,64 @@ final class GlanceComplicationTests: XCTestCase {
         return s
     }
 
-    /// Plans a background request for a reading that linked up at `linkUp`, publishing at `at`, and records it.
-    @discardableResult
-    private func requestReading(_ policy: inout GlanceReloadPolicy, _ snapshot: GlanceComplicationSnapshot,
-                                linkUp: Date, at: Date) -> Date? {
-        _ = policy.save(snapshot)
-        guard let plan = policy.plan(now: at, inFront: false, opened: false, sensorLinkUp: linkUp) else { return nil }
-        policy.requested(at: plan.at, attached: GlanceReloadPolicy.attached(at: plan.at, sensorLinkUp: linkUp))
-        return plan.at
-    }
+    private func offset(_ d: Date?, from base: Date) -> TimeInterval { d.map { $0.timeIntervalSince(base) } ?? -1 }
 
-    /// A reading goes just after its link settles when the spacing allows.
+    /// A reading goes just after its link settles when the last build is 300.1 s back.
     func testAReadingGoesWhenItsLinkSettles() {
         var policy = GlanceReloadPolicy()
-        let t = requestReading(&policy, reading(100), linkUp: now, at: now.addingTimeInterval(0.4))
-        XCTAssertEqual(t?.timeIntervalSince(now) ?? -1, 1.2, accuracy: 0.001)
-        let next = now.addingTimeInterval(301)
-        let second = requestReading(&policy, reading(104, at: next), linkUp: next, at: next.addingTimeInterval(0.5))
-        XCTAssertEqual(second?.timeIntervalSince(next) ?? -1, 1.2, accuracy: 0.001, "301 s later: clear of the 300-s period")
+        _ = policy.save(reading(100), at: now.addingTimeInterval(0.4))
+        let plan = policy.plan(now: now.addingTimeInterval(0.4), inFront: false, opened: false, sensorLinkUp: now,
+                               lastRenderAt: now.addingTimeInterval(-400))
+        XCTAssertEqual(offset(plan?.at, from: now), 1.2, accuracy: 0.001)
     }
 
-    /// A reading that comes early waits to be 300.1 s clear: inside its link if that is enough, else at the
+    /// An early reading waits to be 300.1 s after the last build: inside its link if that is enough, else at the
     /// re-lodge, whose pending connect still counts as connected.
     func testAnEarlyReadingWaitsForTheSpacing() {
         var policy = GlanceReloadPolicy()
-        requestReading(&policy, reading(100), linkUp: now, at: now)                         // goes at +1.2
+        let built = now.addingTimeInterval(1.5)                       // the last reading's build
         let early = now.addingTimeInterval(298.5)
-        let second = requestReading(&policy, reading(103, at: early), linkUp: early, at: early.addingTimeInterval(0.3))
-        XCTAssertEqual(second?.timeIntervalSince(early) ?? -1, 2.8, accuracy: 0.001, "300.1 s clear, still inside the link")
-        let earlier = now.addingTimeInterval(1.2 + 300.1 + 296.0)
-        let third = requestReading(&policy, reading(99, at: earlier), linkUp: earlier, at: earlier.addingTimeInterval(0.3))
-        XCTAssertEqual(third?.timeIntervalSince(earlier) ?? -1, 35.5, accuracy: 0.001, "too early for its link: at the re-lodge")
+        _ = policy.save(reading(103, at: early), at: early.addingTimeInterval(0.3))
+        let inLink = policy.plan(now: early.addingTimeInterval(0.3), inFront: false, opened: false, sensorLinkUp: early,
+                                 lastRenderAt: built)
+        XCTAssertEqual(offset(inLink?.at, from: early), 3.1, accuracy: 0.001, "300.1 s after the build, still inside the link")
+        let earlier = now.addingTimeInterval(296.0)
+        let atLodge = policy.plan(now: earlier.addingTimeInterval(0.3), inFront: false, opened: false, sensorLinkUp: earlier,
+                                  lastRenderAt: built)
+        XCTAssertEqual(offset(atLodge?.at, from: earlier), 35.5, accuracy: 0.001, "too early for its link: at the re-lodge")
+    }
+
+    /// A refused request builds nothing, so the face stays behind and the next window tries again.
+    func testARefusedRequestIsTriedAgainAtTheReLodge() {
+        var policy = GlanceReloadPolicy()
+        _ = policy.save(reading(100), at: now.addingTimeInterval(1))
+        let lastBuild = now.addingTimeInterval(-500)
+        XCTAssertTrue(policy.behind(lastRenderAt: lastBuild))
+        let retry = policy.plan(now: now.addingTimeInterval(3.7), inFront: false, opened: false, sensorLinkUp: now,
+                                lastRenderAt: lastBuild)
+        XCTAssertEqual(offset(retry?.at, from: now), 35.5, accuracy: 0.001)
     }
 
     /// A change outside this cycle's windows waits for the next reading instead of spending its slot.
     func testAChangeBetweenReadingsWaits() {
         var policy = GlanceReloadPolicy()
-        requestReading(&policy, reading(100), linkUp: now, at: now)
-        XCTAssertNil(requestReading(&policy, reading(100, iob: "2.0"), linkUp: now, at: now.addingTimeInterval(120)))
-        XCTAssertTrue(policy.owed)
+        _ = policy.save(reading(100, iob: "2.0"), at: now.addingTimeInterval(120))
+        XCTAssertNil(policy.plan(now: now.addingTimeInterval(120), inFront: false, opened: false, sensorLinkUp: now,
+                                 lastRenderAt: now.addingTimeInterval(2)))
+        XCTAssertTrue(policy.behind(lastRenderAt: now.addingTimeInterval(2)))
     }
 
-    /// In front, only a reading the face hasn't drawn is requested; a current face is left alone, so opening the
-    /// app doesn't spend the next reading's slot.
-    func testInFrontOnlyAnUndrawnReadingIsRequested() {
+    /// In front, only a reading the face hasn't built is requested: opening the app with a current face
+    /// leaves the slot alone, and a face stuck on an old reading is caught up whatever we asked before.
+    func testInFrontOnlyAnUnbuiltReadingIsRequested() {
         var policy = GlanceReloadPolicy()
-        requestReading(&policy, reading(100), linkUp: now, at: now)
-        _ = policy.save(reading(100, iob: "2.0"))
-        XCTAssertNil(policy.plan(now: now.addingTimeInterval(60), inFront: true, opened: true, sensorLinkUp: now),
-                     "the face shows the reading; IOB alone doesn't spend the slot")
-        _ = policy.save(reading(108, at: now.addingTimeInterval(300)))
-        XCTAssertEqual(policy.plan(now: now.addingTimeInterval(320), inFront: true, opened: true, sensorLinkUp: now)?.reason, "opened")
-    }
-
-    /// Only a connected request starts the daemon's period: one in front while disconnected doesn't hold the next reading.
-    func testOnlyAConnectedRequestCountsTowardTheSpacing() {
-        var policy = GlanceReloadPolicy()
-        requestReading(&policy, reading(100), linkUp: now, at: now)
-        _ = policy.save(reading(110, at: now.addingTimeInterval(10)))
-        policy.requested(at: now.addingTimeInterval(10), attached: GlanceReloadPolicy.attached(at: now.addingTimeInterval(10), sensorLinkUp: now))
-        let next = now.addingTimeInterval(300.5)
-        let t = requestReading(&policy, reading(112, at: next), linkUp: next, at: next.addingTimeInterval(0.2))
-        XCTAssertEqual(t?.timeIntervalSince(next) ?? -1, 1.2, accuracy: 0.001,
-                       "the 10-s request was between the link and the re-lodge: not connected")
+        _ = policy.save(reading(100), at: now)
+        _ = policy.save(reading(100, iob: "2.0"), at: now.addingTimeInterval(30))
+        XCTAssertNil(policy.plan(now: now.addingTimeInterval(60), inFront: true, opened: true, sensorLinkUp: now,
+                                 lastRenderAt: now.addingTimeInterval(2)), "built after the reading; IOB alone doesn't spend the slot")
+        _ = policy.save(reading(108, at: now.addingTimeInterval(300)), at: now.addingTimeInterval(301))
+        XCTAssertEqual(policy.plan(now: now.addingTimeInterval(320), inFront: true, opened: true, sensorLinkUp: now,
+                                   lastRenderAt: now.addingTimeInterval(2))?.reason, "opened")
     }
 
     /// Connected by timing: the link's first seconds, and the pending connect from the re-lodge on.

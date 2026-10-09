@@ -123,9 +123,11 @@ enum GlanceComplicationPublisher {
                                          sensorLinkUp: Date? = nil) {
         let now = Date()
         let inFront = WKApplication.shared().applicationState == .active
-        let changed = policy.save(snapshot)
+        let changed = policy.save(snapshot, at: now)
         if changed { snapshot.save() }
-        let plan = policy.plan(now: now, inFront: inFront, opened: onOpen && inFront, sensorLinkUp: sensorLinkUp)
+        let lastRender = GlanceComplicationSnapshot.lastServed()
+        let plan = policy.plan(now: now, inFront: inFront, opened: onOpen && inFront, sensorLinkUp: sensorLinkUp,
+                               lastRenderAt: lastRender)
         if let plan { schedule(plan.at, sensorLinkUp: sensorLinkUp) }
 
         // Requested vs served redraws, and how old the shown values are. Only when something happened:
@@ -136,7 +138,7 @@ enum GlanceComplicationPublisher {
         func age(_ date: Date?) -> String { date.map { "\(Int(now.timeIntervalSince($0)))s" } ?? "n/a" }
         let wait = plan.map { $0.at.timeIntervalSince(now) } ?? 0
         let reload = plan.map { wait > 0.05 ? String(format: "requested(%@, in %.1f s)", $0.reason, wait) : "requested(\($0.reason))" }
-            ?? (policy.owed ? "owed" : "none")
+            ?? (policy.behind(lastRenderAt: lastRender) ? "owed" : "none")
         let metrics = Set(served.map(\.metric)).sorted().joined(separator: ",")
         SportLog.event("complication", "glance publish src=\(source) changed=\(changed) reload=\(reload) · served since last: \(served.count) [\(metrics)] · BG age \(age(snapshot.bgDate)) · loop age \(age(snapshot.loopDate))")
     }
@@ -159,14 +161,26 @@ enum GlanceComplicationPublisher {
         }
     }
 
-    /// Plans again at the moment: an app open in the meantime may have spent the slot, or drawn the reading.
+    /// Plans again at the moment (the widget may have rendered meanwhile); after asking, looks again a few seconds
+    /// later: a refused request renders nothing, and the cycle's next window can try again.
     @MainActor private static func fire(sensorLinkUp: Date?) {
         let now = Date()
         let inFront = WKApplication.shared().applicationState == .active
-        guard let plan = policy.plan(now: now, inFront: inFront, opened: false, sensorLinkUp: sensorLinkUp),
+        guard let plan = policy.plan(now: now, inFront: inFront, opened: false, sensorLinkUp: sensorLinkUp,
+                                     lastRenderAt: GlanceComplicationSnapshot.lastServed()),
               plan.at.timeIntervalSince(now) <= 0.05 else { return }
-        policy.requested(at: now, attached: GlanceReloadPolicy.attached(at: now, sensorLinkUp: sensorLinkUp))
         WidgetCenter.shared.reloadTimelines(ofKind: GlanceComplicationKind.kind)
+        guard !inFront else { return }
+        let release = holdProcess(reason: "glance complication check", upTo: GlanceReloadPolicy.renderCheck + 1)
+        DispatchQueue.main.asyncAfter(deadline: .now() + GlanceReloadPolicy.renderCheck) {
+            let later = Date()
+            if let retry = policy.plan(now: later, inFront: false, opened: false, sensorLinkUp: sensorLinkUp,
+                                       lastRenderAt: GlanceComplicationSnapshot.lastServed()) {
+                SportLog.event("complication", String(format: "glance request not rendered — trying again in %.1f s", retry.at.timeIntervalSince(later)))
+                schedule(retry.at, sensorLinkUp: sensorLinkUp)
+            }
+            release()
+        }
     }
 
     /// As G7WatchAcquisition's process hold (performExpiringActivity, once-only): released when the returned
@@ -189,13 +203,17 @@ enum GlanceComplicationPublisher {
 /// grants a background reload free only while the app is connected to a Bluetooth peripheral — the G7 link, or a
 /// pending connect — and only one per 300 s; anything else is charged to a reload budget this complication does
 /// not have. The G7 reads every 300 s too, with ±2 s of jitter, so a request tied to each reading is refused about
-/// half the time. And an app open while connected spends the 300-s slot as well.
+/// half the time. An app open while connected spends the 300-s slot as well.
 ///
-/// So: in the background, the newest change goes at the first moment that is connected and 300.1 s clear of our
-/// last connected request — just after link-up if the spacing allows, else at the re-lodge, 35 s after link-up
-/// (its pending connect counts). Outside those moments a change waits for the next reading. In front, a request
-/// goes only when the face is behind on the reading; a current face is left alone, so opening the app does not
-/// spend the slot the next reading needs (modelled: readings never drawn 43 % → ~1–2 %, typical delay ~40 s).
+/// What the face shows comes from the widget's own record: each granted reload builds a timeline from the saved
+/// snapshot and notes the time (`GlanceComplicationSnapshot.noteServed`). So the face is behind when nothing was
+/// built since the snapshot changed, and the daemon's 300-s period runs from that build. A request is not a draw.
+///
+/// In the background, a change goes at the first moment that is connected and 300.1 s after the last build — just
+/// after the link settles, else at the re-lodge 35 s after link-up (its pending connect counts); a request that
+/// built nothing is tried again in the next window. Outside those windows a change waits for the next reading.
+/// In front, a request goes only when the face is behind on the reading, so opening the app does not spend the
+/// slot the next reading needs (modelled: readings never drawn 43 % → ~1–2 %, typical delay ~40 s).
 struct GlanceReloadPolicy {
     /// The daemon's 300-s period, plus a margin.
     static let minimumSpacing: TimeInterval = 300.1
@@ -208,23 +226,33 @@ struct GlanceReloadPolicy {
     static let lodgeStart: TimeInterval = 35.5
     /// How long after link-up a deferred request may still wait for, holding the process.
     static let lodgeEnd: TimeInterval = 45
+    /// A granted reload builds within about a second; after this, no build means refused.
+    static let renderCheck: TimeInterval = 2.5
 
     private(set) var lastSaved: GlanceComplicationSnapshot?
-    /// What the face was last asked to draw.
-    private(set) var lastRequested: GlanceComplicationSnapshot?
-    /// When we last asked while connected: the daemon's 300-s period runs from a grant like this.
-    private(set) var lastAttachedRequestAt: Date?
-
-    /// A change the face has not been asked to draw.
-    var owed: Bool { lastSaved != nil && lastSaved != lastRequested }
-    /// The face has not been asked to draw the latest reading.
-    var readingOwed: Bool { lastSaved != nil && (lastRequested == nil || lastSaved?.bgDate != lastRequested?.bgDate) }
+    /// When the saved snapshot last changed, and when its reading did.
+    private(set) var changedAt: Date?
+    private(set) var readingChangedAt: Date?
 
     /// Keeps the snapshot; true when it changed.
-    mutating func save(_ snapshot: GlanceComplicationSnapshot) -> Bool {
+    mutating func save(_ snapshot: GlanceComplicationSnapshot, at now: Date) -> Bool {
         guard snapshot != lastSaved else { return false }
+        if snapshot.bgDate != lastSaved?.bgDate { readingChangedAt = now }
         lastSaved = snapshot
+        changedAt = now
         return true
+    }
+
+    /// Nothing built since the snapshot changed.
+    func behind(lastRenderAt: Date?) -> Bool {
+        guard let changedAt else { return false }
+        return (lastRenderAt ?? .distantPast) < changedAt
+    }
+
+    /// Nothing built since the reading changed.
+    func readingBehind(lastRenderAt: Date?) -> Bool {
+        guard let readingChangedAt else { return false }
+        return (lastRenderAt ?? .distantPast) < readingChangedAt
     }
 
     /// Connected at `t`, as far as timing tells: the G7 link, or the pending connect from the re-lodge on.
@@ -235,24 +263,18 @@ struct GlanceReloadPolicy {
     }
 
     /// When to ask, and why; nil = not now and not in this cycle's windows.
-    func plan(now: Date, inFront: Bool, opened: Bool, sensorLinkUp: Date?) -> (at: Date, reason: String)? {
+    func plan(now: Date, inFront: Bool, opened: Bool, sensorLinkUp: Date?, lastRenderAt: Date?) -> (at: Date, reason: String)? {
         if inFront {
-            guard readingOwed else { return nil }
+            guard readingBehind(lastRenderAt: lastRenderAt) else { return nil }
             return (now, opened ? "opened" : "free")
         }
-        guard owed, let linkUp = sensorLinkUp else { return nil }
-        let reason = lastRequested == nil ? "first" : "changed"
-        let earliest = max(now, lastAttachedRequestAt.map { $0.addingTimeInterval(Self.minimumSpacing) } ?? now)
+        guard behind(lastRenderAt: lastRenderAt), let linkUp = sensorLinkUp else { return nil }
+        let reason = lastRenderAt == nil ? "first" : "changed"
+        let earliest = max(now, lastRenderAt.map { $0.addingTimeInterval(Self.minimumSpacing) } ?? now)
         for (a, b) in [(Self.linkSettle, Self.linkEnd), (Self.lodgeStart, Self.lodgeEnd)] {
             let t = max(earliest, linkUp.addingTimeInterval(a))
             if t <= linkUp.addingTimeInterval(b) { return (t, reason) }
         }
         return nil
-    }
-
-    /// A request went at `t`; only a connected one starts the daemon's period.
-    mutating func requested(at t: Date, attached: Bool) {
-        lastRequested = lastSaved
-        if attached { lastAttachedRequestAt = t }
     }
 }
