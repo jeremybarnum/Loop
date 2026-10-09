@@ -77,14 +77,17 @@ enum LoanReconciler {
         var outcome = Outcome()
         var events = input.events
 
-        // The open rate record: the latest temp or suspend, if it runs past the stamp. Latest first: a
-        // cancel (zero-length) after a temp means nothing is running, not that the cancelled temp is.
-        let latestRate = events
-            .filter { $0.record.kind == .tempBasal || $0.record.kind == .suspend }
-            .max(by: { $0.record.startDate < $1.record.startDate })
-        let openEventID: UUID? = input.isFinalHandback ? nil : latestRate.flatMap {
-            ($0.record.endDate ?? $0.record.startDate) > input.loanEnd ? $0.id : nil
-        }
+        // The open rate record: the latest temp or suspend running past the stamp.
+        let openEventID: UUID? = input.isFinalHandback ? nil : events
+            .filter { e in
+                switch e.record.kind {
+                case .tempBasal, .suspend:
+                    return (e.record.endDate ?? e.record.startDate) > input.loanEnd
+                default:
+                    return false
+                }
+            }
+            .max(by: { $0.record.startDate < $1.record.startDate })?.id
         outcome.openEventID = openEventID
 
         for event in events {

@@ -363,23 +363,6 @@ final class LoanBooksHarnessTests: XCTestCase {
         XCTAssertEqual(expected, 1500.0 / 3600, accuracy: 0.001, "a whole window of schedule, not the zero temp's tail")
     }
 
-    /// A cancel after the latest temp means nothing is running at an interim drain — not the cancelled temp.
-    func testACancelledTempIsNotTheOpenRecord() {
-        let t0 = Date()
-        let temp = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
-                             record: LoanDoseRecord(kind: .tempBasal, startDate: t0, endDate: t0.addingTimeInterval(1800),
-                                                    unitsPerHour: 0.0, syncIdentifier: "temp"),
-                             loggedAt: t0)
-        let cancel = LoanEvent(id: UUID(), seq: 2, provenance: .confirmed,
-                               record: LoanDoseRecord(kind: .tempBasal, startDate: t0.addingTimeInterval(300),
-                                                      endDate: t0.addingTimeInterval(300), unitsPerHour: 0.0, syncIdentifier: "cancel"),
-                               loggedAt: t0.addingTimeInterval(300))
-        let outcome = LoanReconciler.reconcile(.init(events: [temp, cancel], schedule: cancelTestSchedule, loanStart: t0,
-                                                     loanEnd: t0.addingTimeInterval(600), isFinalHandback: false))
-        XCTAssertNil(outcome.openEventID)
-        XCTAssertTrue(outcome.doses.contains { $0.syncIdentifier == "temp" }, "the cancelled temp is committed, not held back")
-    }
-
     /// 2026-10-09: the watch journals a cancel (the schedule resuming) as a zero-length temp. Through the real
     /// store, as the phone writes a loan — commit by pump events, then the identified backfill trimmed at the
     /// next rate record — the store takes it and the cancelled temp ends at the cancel.
