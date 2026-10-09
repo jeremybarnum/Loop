@@ -77,17 +77,14 @@ enum LoanReconciler {
         var outcome = Outcome()
         var events = input.events
 
-        // The open rate record: the latest temp or suspend running past the stamp.
-        let openEventID: UUID? = input.isFinalHandback ? nil : events
-            .filter { e in
-                switch e.record.kind {
-                case .tempBasal, .suspend:
-                    return (e.record.endDate ?? e.record.startDate) > input.loanEnd
-                default:
-                    return false
-                }
-            }
-            .max(by: { $0.record.startDate < $1.record.startDate })?.id
+        // The open rate record: the latest temp or suspend, if it runs past the stamp. Latest first: a
+        // cancel (zero-length) after a temp means nothing is running, not that the cancelled temp is.
+        let latestRate = events
+            .filter { $0.record.kind == .tempBasal || $0.record.kind == .suspend }
+            .max(by: { $0.record.startDate < $1.record.startDate })
+        let openEventID: UUID? = input.isFinalHandback ? nil : latestRate.flatMap {
+            ($0.record.endDate ?? $0.record.startDate) > input.loanEnd ? $0.id : nil
+        }
         outcome.openEventID = openEventID
 
         for event in events {
@@ -184,27 +181,30 @@ enum LoanReconciler {
             switch event.record.kind {
             case .tempBasal, .suspend:
                 guard let rate = event.record.unitsPerHour,
-                      let segEnd = event.record.endDate else { continue }
-                let s = max(event.record.startDate, start)
-                let e = min(segEnd, end)
-
-                // `>=`: a zero-length record is a cancel and must truncate its temp.
-                if e >= s { segments.append(Segment(start: s, end: e, rate: rate)) }
+                      let segEnd = event.record.endDate, segEnd >= event.record.startDate else { continue }
+                // On the record's own span: a zero-length record is a cancel and must truncate its temp
+                // even when it falls just before the window (a checkpoint's odometer is read a second
+                // after the cancel; clipping first dropped it — false OPEN LOOP 2026-09-05, 9b19f160).
+                segments.append(Segment(start: event.record.startDate, end: segEnd, rate: rate))
             default:
                 break
             }
         }
 
-        // Each rate record supersedes what was running.
+        // Each rate record supersedes what was running; resolved unclipped, then clipped to the window.
         segments.sort { $0.start < $1.start }
-        var resolved: [Segment] = []
+        var unclipped: [Segment] = []
         for seg in segments {
-            while let last = resolved.last, last.end > seg.start {
+            while let last = unclipped.last, last.end > seg.start {
                 let trimmed = Segment(start: last.start, end: seg.start, rate: last.rate)
-                resolved.removeLast()
-                if trimmed.end > trimmed.start { resolved.append(trimmed) }
+                unclipped.removeLast()
+                if trimmed.end > trimmed.start { unclipped.append(trimmed) }
             }
-            resolved.append(seg)
+            unclipped.append(seg)
+        }
+        let resolved: [Segment] = unclipped.compactMap { seg in
+            let s = max(seg.start, start), e = min(seg.end, end)
+            return e > s ? Segment(start: s, end: e, rate: seg.rate) : nil
         }
 
         for seg in resolved {
