@@ -221,40 +221,57 @@ final class GlanceComplicationTests: XCTestCase {
 
     private func offset(_ d: Date?, from base: Date) -> TimeInterval { d.map { $0.timeIntervalSince(base) } ?? -1 }
 
-    /// A reading goes just after its link settles when the last build is 300.1 s back.
+    /// A reading goes just after its link settles when the last confirmed request is 300.1 s back.
     func testAReadingGoesWhenItsLinkSettles() {
         var policy = GlanceReloadPolicy()
         _ = policy.save(reading(100), at: now.addingTimeInterval(0.4))
         let plan = policy.plan(now: now.addingTimeInterval(0.4), inFront: false, opened: false, sensorLinkUp: now,
-                               lastRenderAt: now.addingTimeInterval(-400))
+                               inLoan: false, lastRenderAt: now.addingTimeInterval(-400))
         XCTAssertEqual(offset(plan?.at, from: now), 1.2, accuracy: 0.001)
     }
 
-    /// An early reading waits to be 300.1 s after the last build: inside its link if that is enough, else at the
-    /// re-lodge, whose pending connect still counts as connected.
-    func testAnEarlyReadingWaitsForTheSpacing() {
+    /// An early reading waits inside its link to be 300.1 s after the last confirmed request.
+    func testAnEarlyReadingWaitsInsideItsLink() {
         var policy = GlanceReloadPolicy()
-        let built = now.addingTimeInterval(1.5)                       // the last reading's build
+        policy.confirmed(at: now.addingTimeInterval(1.2), attached: true)
         let early = now.addingTimeInterval(298.5)
         _ = policy.save(reading(103, at: early), at: early.addingTimeInterval(0.3))
-        let inLink = policy.plan(now: early.addingTimeInterval(0.3), inFront: false, opened: false, sensorLinkUp: early,
-                                 lastRenderAt: built)
-        XCTAssertEqual(offset(inLink?.at, from: early), 3.1, accuracy: 0.001, "300.1 s after the build, still inside the link")
-        let earlier = now.addingTimeInterval(296.0)
-        let atLodge = policy.plan(now: earlier.addingTimeInterval(0.3), inFront: false, opened: false, sensorLinkUp: earlier,
-                                  lastRenderAt: built)
-        XCTAssertEqual(offset(atLodge?.at, from: earlier), 35.5, accuracy: 0.001, "too early for its link: at the re-lodge")
+        let plan = policy.plan(now: early.addingTimeInterval(0.3), inFront: false, opened: false, sensorLinkUp: early,
+                               inLoan: false, lastRenderAt: now.addingTimeInterval(1.5))
+        XCTAssertEqual(offset(plan?.at, from: early), 2.8, accuracy: 0.001, "1.2 + 300.1 - 298.5")
     }
 
-    /// A refused request builds nothing, so the face stays behind and the next window tries again.
-    func testARefusedRequestIsTriedAgainAtTheReLodge() {
+    /// Off a loan the link is the only connected window: a reading too early for it waits for the next one.
+    func testOffALoanAReadingTooEarlyForItsLinkWaits() {
         var policy = GlanceReloadPolicy()
-        _ = policy.save(reading(100), at: now.addingTimeInterval(1))
-        let lastBuild = now.addingTimeInterval(-500)
-        XCTAssertTrue(policy.behind(lastRenderAt: lastBuild))
-        let retry = policy.plan(now: now.addingTimeInterval(3.7), inFront: false, opened: false, sensorLinkUp: now,
-                                lastRenderAt: lastBuild)
-        XCTAssertEqual(offset(retry?.at, from: now), 35.5, accuracy: 0.001)
+        policy.confirmed(at: now.addingTimeInterval(1.2), attached: true)
+        let early = now.addingTimeInterval(296.0)
+        _ = policy.save(reading(99, at: early), at: early.addingTimeInterval(0.3))
+        XCTAssertNil(policy.plan(now: early.addingTimeInterval(0.3), inFront: false, opened: false, sensorLinkUp: early,
+                                 inLoan: false, lastRenderAt: now.addingTimeInterval(1.5)))
+    }
+
+    /// In a loan the pod exchange after the reading is a second connected window.
+    func testInALoanThePodExchangeIsASecondWindow() {
+        var policy = GlanceReloadPolicy()
+        policy.confirmed(at: now.addingTimeInterval(1.2), attached: true)
+        let early = now.addingTimeInterval(296.0)
+        _ = policy.save(reading(99, at: early), at: early.addingTimeInterval(9))
+        let plan = policy.plan(now: early.addingTimeInterval(9), inFront: false, opened: false, sensorLinkUp: early,
+                               inLoan: true, lastRenderAt: now.addingTimeInterval(1.5))
+        XCTAssertEqual(offset(plan?.at, from: early), 9.0, accuracy: 0.001)
+    }
+
+    /// Only a connected, built request starts the period: a draw from opening the app while disconnected doesn't.
+    func testOnlyAConfirmedConnectedRequestStartsThePeriod() {
+        var policy = GlanceReloadPolicy()
+        policy.confirmed(at: now.addingTimeInterval(1.2), attached: true)
+        policy.confirmed(at: now.addingTimeInterval(120), attached: false)       // foreground draw
+        let next = now.addingTimeInterval(300.5)
+        _ = policy.save(reading(110, at: next), at: next.addingTimeInterval(0.3))
+        let plan = policy.plan(now: next.addingTimeInterval(0.3), inFront: false, opened: false, sensorLinkUp: next,
+                               inLoan: false, lastRenderAt: now.addingTimeInterval(120.5))
+        XCTAssertEqual(offset(plan?.at, from: next), 1.2, accuracy: 0.001)
     }
 
     /// A change outside this cycle's windows waits for the next reading instead of spending its slot.
@@ -262,7 +279,7 @@ final class GlanceComplicationTests: XCTestCase {
         var policy = GlanceReloadPolicy()
         _ = policy.save(reading(100, iob: "2.0"), at: now.addingTimeInterval(120))
         XCTAssertNil(policy.plan(now: now.addingTimeInterval(120), inFront: false, opened: false, sensorLinkUp: now,
-                                 lastRenderAt: now.addingTimeInterval(2)))
+                                 inLoan: true, lastRenderAt: now.addingTimeInterval(2)))
         XCTAssertTrue(policy.behind(lastRenderAt: now.addingTimeInterval(2)))
     }
 
@@ -273,17 +290,17 @@ final class GlanceComplicationTests: XCTestCase {
         _ = policy.save(reading(100), at: now)
         _ = policy.save(reading(100, iob: "2.0"), at: now.addingTimeInterval(30))
         XCTAssertNil(policy.plan(now: now.addingTimeInterval(60), inFront: true, opened: true, sensorLinkUp: now,
-                                 lastRenderAt: now.addingTimeInterval(2)), "built after the reading; IOB alone doesn't spend the slot")
+                                 inLoan: false, lastRenderAt: now.addingTimeInterval(2)))
         _ = policy.save(reading(108, at: now.addingTimeInterval(300)), at: now.addingTimeInterval(301))
         XCTAssertEqual(policy.plan(now: now.addingTimeInterval(320), inFront: true, opened: true, sensorLinkUp: now,
-                                   lastRenderAt: now.addingTimeInterval(2))?.reason, "opened")
+                                   inLoan: false, lastRenderAt: now.addingTimeInterval(2))?.reason, "opened")
     }
 
-    /// Connected by timing: the link's first seconds, and the pending connect from the re-lodge on.
-    func testAttachedFollowsTheLinkAndTheReLodge() {
-        XCTAssertTrue(GlanceReloadPolicy.attached(at: now.addingTimeInterval(2), sensorLinkUp: now))
-        XCTAssertFalse(GlanceReloadPolicy.attached(at: now.addingTimeInterval(20), sensorLinkUp: now))
-        XCTAssertTrue(GlanceReloadPolicy.attached(at: now.addingTimeInterval(36), sensorLinkUp: now))
-        XCTAssertFalse(GlanceReloadPolicy.attached(at: now, sensorLinkUp: nil))
+    /// Connected by timing: the link's first seconds and, in a loan, the pod exchange; not the gap after.
+    func testAttachedFollowsTheLinkAndThePodExchange() {
+        XCTAssertTrue(GlanceReloadPolicy.attached(at: now.addingTimeInterval(2), sensorLinkUp: now, inLoan: false))
+        XCTAssertFalse(GlanceReloadPolicy.attached(at: now.addingTimeInterval(9), sensorLinkUp: now, inLoan: false))
+        XCTAssertTrue(GlanceReloadPolicy.attached(at: now.addingTimeInterval(9), sensorLinkUp: now, inLoan: true))
+        XCTAssertFalse(GlanceReloadPolicy.attached(at: now.addingTimeInterval(36), sensorLinkUp: now, inLoan: true))
     }
 }

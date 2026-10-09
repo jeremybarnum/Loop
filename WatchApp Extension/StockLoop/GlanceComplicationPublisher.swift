@@ -123,12 +123,13 @@ enum GlanceComplicationPublisher {
                                          sensorLinkUp: Date? = nil) {
         let now = Date()
         let inFront = WKApplication.shared().applicationState == .active
+        let inLoan = source == "watch loop"
         let changed = policy.save(snapshot, at: now)
         if changed { snapshot.save() }
         let lastRender = GlanceComplicationSnapshot.lastServed()
         let plan = policy.plan(now: now, inFront: inFront, opened: onOpen && inFront, sensorLinkUp: sensorLinkUp,
-                               lastRenderAt: lastRender)
-        if let plan { schedule(plan.at, sensorLinkUp: sensorLinkUp) }
+                               inLoan: inLoan, lastRenderAt: lastRender)
+        if let plan { schedule(plan.at, sensorLinkUp: sensorLinkUp, inLoan: inLoan, retry: false) }
 
         // Requested vs served redraws, and how old the shown values are. Only when something happened:
         // the glance republishes on every 2 s repaint while it is on screen.
@@ -146,40 +147,49 @@ enum GlanceComplicationPublisher {
     /// The deferred request, if one is waiting.
     private static var pendingAt: Date?
 
-    /// Asks WidgetKit at `at`, keeping the process up until then (the sensor's hold covers 35 s from link-up;
-    /// a request at the re-lodge needs a few seconds more).
-    @MainActor private static func schedule(_ at: Date, sensorLinkUp: Date?) {
+    /// Asks WidgetKit at `at`, keeping the process up until then (a few seconds at most: the windows are the
+    /// sensor link and, in a loan, the pod exchange right after it).
+    @MainActor private static func schedule(_ at: Date, sensorLinkUp: Date?, inLoan: Bool, retry: Bool) {
         let wait = at.timeIntervalSinceNow
-        guard wait > 0.05 else { fire(sensorLinkUp: sensorLinkUp); return }
+        guard wait > 0.05 else { fire(sensorLinkUp: sensorLinkUp, inLoan: inLoan, retry: retry); return }
         if let pending = pendingAt, pending <= at { return }
         pendingAt = at
         let release = holdProcess(reason: "glance complication request", upTo: wait + 1)
         DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
             pendingAt = nil
-            fire(sensorLinkUp: sensorLinkUp)
+            fire(sensorLinkUp: sensorLinkUp, inLoan: inLoan, retry: retry)
             release()
         }
     }
 
-    /// Plans again at the moment (the widget may have rendered meanwhile); after asking, looks again a few seconds
-    /// later: a refused request renders nothing, and the cycle's next window can try again.
-    @MainActor private static func fire(sensorLinkUp: Date?) {
+    /// Plans again at the moment (the widget may have built meanwhile), asks, and looks again a moment later:
+    /// a build confirms the request and starts the daemon's 300-s period from it; no build means refused, and the
+    /// cycle's next window gets one more try.
+    @MainActor private static func fire(sensorLinkUp: Date?, inLoan: Bool, retry: Bool) {
         let now = Date()
         let inFront = WKApplication.shared().applicationState == .active
         guard let plan = policy.plan(now: now, inFront: inFront, opened: false, sensorLinkUp: sensorLinkUp,
-                                     lastRenderAt: GlanceComplicationSnapshot.lastServed()),
+                                     inLoan: inLoan, lastRenderAt: GlanceComplicationSnapshot.lastServed()),
               plan.at.timeIntervalSince(now) <= 0.05 else { return }
         WidgetCenter.shared.reloadTimelines(ofKind: GlanceComplicationKind.kind)
-        guard !inFront else { return }
+        let attached = GlanceReloadPolicy.attached(at: now, sensorLinkUp: sensorLinkUp, inLoan: inLoan)
         let release = holdProcess(reason: "glance complication check", upTo: GlanceReloadPolicy.renderCheck + 1)
         DispatchQueue.main.asyncAfter(deadline: .now() + GlanceReloadPolicy.renderCheck) {
-            let later = Date()
-            if let retry = policy.plan(now: later, inFront: false, opened: false, sensorLinkUp: sensorLinkUp,
-                                       lastRenderAt: GlanceComplicationSnapshot.lastServed()) {
-                SportLog.event("complication", String(format: "glance request not rendered — trying again in %.1f s", retry.at.timeIntervalSince(later)))
-                schedule(retry.at, sensorLinkUp: sensorLinkUp)
+            defer { release() }
+            let lastRender = GlanceComplicationSnapshot.lastServed()
+            if let lastRender, lastRender >= now {
+                policy.confirmed(at: now, attached: attached)
+                return
             }
-            release()
+            let later = Date()
+            guard !inFront, !retry,
+                  let again = policy.plan(now: later, inFront: false, opened: false, sensorLinkUp: sensorLinkUp,
+                                          inLoan: inLoan, lastRenderAt: lastRender) else {
+                SportLog.event("complication", "glance request not built — waits for the next reading")
+                return
+            }
+            SportLog.event("complication", String(format: "glance request not built — one more try in %.1f s", again.at.timeIntervalSince(later)))
+            schedule(again.at, sensorLinkUp: sensorLinkUp, inLoan: inLoan, retry: true)
         }
     }
 
@@ -199,21 +209,20 @@ enum GlanceComplicationPublisher {
 
 /// When to ask WidgetKit to redraw the glance complication.
 ///
-/// The rule it works under (watchOS 26, measured 2026-10-05 to 10-08, real pod and emulator): the widget daemon
-/// grants a background reload free only while the app is connected to a Bluetooth peripheral — the G7 link, or a
-/// pending connect — and only one per 300 s; anything else is charged to a reload budget this complication does
-/// not have. The G7 reads every 300 s too, with ±2 s of jitter, so a request tied to each reading is refused about
-/// half the time. An app open while connected spends the 300-s slot as well.
+/// The rule it works under (watchOS 26, measured 2026-10-05 to 10-09, real pod and emulator): the widget daemon
+/// grants a background reload free only while Bluetooth reports the app connected to a peripheral, and only one
+/// per 300 s; anything else is charged to a reload budget this complication does not have. Connected, as observed:
+/// the G7 link (about 4 s from link-up) and, in a loan, the pod exchange right after it. Not connected: the 31-s
+/// gap after the sensor closes, and the re-lodged connect's first seconds (10-08 22:36, 22:41, 23:26 — refused).
+/// The G7 reads every 300 s with ±2 s of jitter, so a request tied to each reading meets the 300-s period head on.
 ///
 /// What the face shows comes from the widget's own record: each granted reload builds a timeline from the saved
-/// snapshot and notes the time (`GlanceComplicationSnapshot.noteServed`). So the face is behind when nothing was
-/// built since the snapshot changed, and the daemon's 300-s period runs from that build. A request is not a draw.
+/// snapshot and notes the time (`GlanceComplicationSnapshot.noteServed`). The face is behind when nothing was built
+/// since the snapshot changed; a request that built nothing was refused. A request is not a draw.
 ///
-/// In the background, a change goes at the first moment that is connected and 300.1 s after the last build — just
-/// after the link settles, else at the re-lodge 35 s after link-up (its pending connect counts); a request that
-/// built nothing is tried again in the next window. Outside those windows a change waits for the next reading.
-/// In front, a request goes only when the face is behind on the reading, so opening the app does not spend the
-/// slot the next reading needs (modelled: readings never drawn 43 % → ~1–2 %, typical delay ~40 s).
+/// In the background, a change goes at the first connected moment 300.1 s after our last confirmed request; a
+/// refused one gets one more try in the cycle's next window, then waits for the next reading. In front, a request
+/// goes only when the face is behind on the reading, so opening the app does not spend the next reading's slot.
 struct GlanceReloadPolicy {
     /// The daemon's 300-s period, plus a margin.
     static let minimumSpacing: TimeInterval = 300.1
@@ -222,10 +231,9 @@ struct GlanceReloadPolicy {
     static let linkSettle: TimeInterval = 1.2
     /// The G7 link lasts 3.6 s or more after link-up.
     static let linkEnd: TimeInterval = 3.3
-    /// The re-lodge — a pending connect — comes 35 s after link-up (G7WatchAcquisition.tailClearanceSeconds).
-    static let lodgeStart: TimeInterval = 35.5
-    /// How long after link-up a deferred request may still wait for, holding the process.
-    static let lodgeEnd: TimeInterval = 45
+    /// In a loan the loop doses right after the reading; the pod link runs about 5–15 s after link-up.
+    static let podStart: TimeInterval = 5.0
+    static let podEnd: TimeInterval = 15.0
     /// A granted reload builds within about a second; after this, no build means refused.
     static let renderCheck: TimeInterval = 2.5
 
@@ -233,6 +241,8 @@ struct GlanceReloadPolicy {
     /// When the saved snapshot last changed, and when its reading did.
     private(set) var changedAt: Date?
     private(set) var readingChangedAt: Date?
+    /// Our last request the widget built while connected: the daemon's 300-s period runs from it.
+    private(set) var lastConfirmedAt: Date?
 
     /// Keeps the snapshot; true when it changed.
     mutating func save(_ snapshot: GlanceComplicationSnapshot, at now: Date) -> Bool {
@@ -241,6 +251,11 @@ struct GlanceReloadPolicy {
         lastSaved = snapshot
         changedAt = now
         return true
+    }
+
+    /// The widget built after our request at `t`; while connected, that started the daemon's period.
+    mutating func confirmed(at t: Date, attached: Bool) {
+        if attached { lastConfirmedAt = t }
     }
 
     /// Nothing built since the snapshot changed.
@@ -255,23 +270,28 @@ struct GlanceReloadPolicy {
         return (lastRenderAt ?? .distantPast) < readingChangedAt
     }
 
-    /// Connected at `t`, as far as timing tells: the G7 link, or the pending connect from the re-lodge on.
-    static func attached(at t: Date, sensorLinkUp: Date?) -> Bool {
+    /// The windows after link-up in which the app was seen connected.
+    static func windows(inLoan: Bool) -> [(TimeInterval, TimeInterval)] {
+        [(linkSettle, linkEnd)] + (inLoan ? [(podStart, podEnd)] : [])
+    }
+
+    /// Connected at `t`, as far as timing tells.
+    static func attached(at t: Date, sensorLinkUp: Date?, inLoan: Bool) -> Bool {
         guard let linkUp = sensorLinkUp else { return false }
         let s = t.timeIntervalSince(linkUp)
-        return (s >= 0 && s <= linkEnd + 0.3) || s >= lodgeStart - 0.5
+        return (s >= 0 && s <= linkEnd + 0.3) || (inLoan && s >= podStart && s <= podEnd)
     }
 
     /// When to ask, and why; nil = not now and not in this cycle's windows.
-    func plan(now: Date, inFront: Bool, opened: Bool, sensorLinkUp: Date?, lastRenderAt: Date?) -> (at: Date, reason: String)? {
+    func plan(now: Date, inFront: Bool, opened: Bool, sensorLinkUp: Date?, inLoan: Bool, lastRenderAt: Date?) -> (at: Date, reason: String)? {
         if inFront {
             guard readingBehind(lastRenderAt: lastRenderAt) else { return nil }
             return (now, opened ? "opened" : "free")
         }
         guard behind(lastRenderAt: lastRenderAt), let linkUp = sensorLinkUp else { return nil }
         let reason = lastRenderAt == nil ? "first" : "changed"
-        let earliest = max(now, lastRenderAt.map { $0.addingTimeInterval(Self.minimumSpacing) } ?? now)
-        for (a, b) in [(Self.linkSettle, Self.linkEnd), (Self.lodgeStart, Self.lodgeEnd)] {
+        let earliest = max(now, lastConfirmedAt.map { $0.addingTimeInterval(Self.minimumSpacing) } ?? now)
+        for (a, b) in Self.windows(inLoan: inLoan) {
             let t = max(earliest, linkUp.addingTimeInterval(a))
             if t <= linkUp.addingTimeInterval(b) { return (t, reason) }
         }
