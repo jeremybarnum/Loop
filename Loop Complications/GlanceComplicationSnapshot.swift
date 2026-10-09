@@ -152,7 +152,7 @@ enum GlanceValue {
 /// the order BG; IOB, COB and age; override; temp and who holds the pod; eventual.
 enum GlanceOption: String, CaseIterable {
     case cornerAge, cornerIOB, cornerCOB, cornerIOBAge, cornerCOBAge, cornerIOBCOB
-    case inlineAge, inlineAgeIOB, inlineAgeCOB, inlineIOBCOB, inlineAll, inlineEverything
+    case inlineAge, inlineAgeIOB, inlineAgeCOB, inlineIOBCOB, inlineAll, inlineAllOverride
     case circleAge, circleIOB, circleCOB
     case bigBG, balanced, glance
 
@@ -161,7 +161,7 @@ enum GlanceOption: String, CaseIterable {
     var shape: Shape {
         switch self {
         case .cornerAge, .cornerIOB, .cornerCOB, .cornerIOBAge, .cornerCOBAge, .cornerIOBCOB: return .corner
-        case .inlineAge, .inlineAgeIOB, .inlineAgeCOB, .inlineIOBCOB, .inlineAll, .inlineEverything: return .inline
+        case .inlineAge, .inlineAgeIOB, .inlineAgeCOB, .inlineIOBCOB, .inlineAll, .inlineAllOverride: return .inline
         case .circleAge, .circleIOB, .circleCOB: return .circular
         case .bigBG, .balanced, .glance: return .rectangular
         }
@@ -179,7 +179,8 @@ enum GlanceOption: String, CaseIterable {
         case .inlineAgeIOB: return [.bg, .age, .iob]
         case .inlineAgeCOB: return [.bg, .age, .cob]
         case .inlineAll, .balanced: return [.bg, .age, .iob, .cob]
-        case .inlineEverything, .glance: return [.bg, .eventual, .age, .iob, .cob, .temp, .override]
+        case .inlineAllOverride: return [.bg, .age, .iob, .cob, .override]
+        case .glance: return [.bg, .eventual, .age, .iob, .cob, .temp, .override]
         }
     }
 
@@ -194,7 +195,6 @@ enum GlanceOption: String, CaseIterable {
         switch self {
         case .bigBG: return NSLocalizedString("Big BG", comment: "Glance complication: the reading as large as the slot allows")
         case .glance: return NSLocalizedString("Glance", comment: "Glance complication: every value of the glance")
-        case .inlineEverything: return NSLocalizedString("Everything", comment: "Glance complication: every value of the glance on one line")
         default: return values.map(\.name).joined(separator: " · ")
         }
     }
