@@ -75,6 +75,9 @@ final class GlanceComplicationTests: XCTestCase {
         XCTAssertEqual(s.text(.bg, at: now), "173→")
         XCTAssertEqual(s.text([.iob, .cob], at: now), "0.0U · 23g")
         XCTAssertEqual(s.text(.temp, at: now), "-0.40U/h")
+        var nearZero = s
+        nearZero.iobText = "-0.0"
+        XCTAssertEqual(nearZero.text(.iob, at: now), "0.0U", "a tiny negative IOB is not shown as -0.0")
         XCTAssertEqual(s.overrideLabel, "⏱ 70%")
         XCTAssertEqual(s.bgRange, .inRange, "coloured as during a loan; the icon says who holds the pod")
         XCTAssertFalse(s.watchHasPod)

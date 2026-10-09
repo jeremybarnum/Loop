@@ -217,7 +217,7 @@ extension GlanceComplicationSnapshot {
         switch value {
         case .bg: return bgWithTrend(at: date)
         case .age: return bgAge(at: date).isEmpty ? nil : bgAge(at: date)
-        case .iob: return (iob(at: date) ?? Self.dash) + "U"
+        case .iob: return (iob(at: date).map { $0 == "-0.0" ? "0.0" : $0 } ?? Self.dash) + "U"
         case .cob: return (cob(at: date) ?? Self.dash) + (capitalised ? " g" : "g")
         case .temp: return (temp(at: date) ?? Self.dash) + "U/h"
         case .eventual: return "→" + (eventual(at: date) ?? Self.dash)

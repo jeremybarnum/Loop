@@ -111,7 +111,7 @@ struct GlanceComplicationView: View {
         case .accessoryCorner:
             holderIcon(size: 15).widgetLabel { cornerLabel }
         case .accessoryCircular:
-            circular.widgetLabel { Text(snapshot.text(option.bezelValues, at: date)) }
+            circular.widgetLabel { Text(snapshot.text(option.bezelValues, at: date, capitalised: true)) }
         case .accessoryRectangular:
             switch option {
             case .glance: glance
