@@ -152,7 +152,7 @@ enum GlanceValue {
 /// the order BG; IOB, COB and age; override; temp and who holds the pod; eventual.
 enum GlanceOption: String, CaseIterable {
     case cornerAge, cornerIOB, cornerCOB, cornerIOBAge, cornerCOBAge, cornerIOBCOB
-    case inlineAge, inlineAgeIOB, inlineAgeCOB, inlineIOBCOB, inlineAll, inlineAllOverride
+    case inlineAge, inlineAgeIOB, inlineAgeCOB, inlineIOBCOB, inlineAll, inlineEverything
     case circleAge, circleIOB, circleCOB
     case bigBG, balanced, glance
 
@@ -161,7 +161,7 @@ enum GlanceOption: String, CaseIterable {
     var shape: Shape {
         switch self {
         case .cornerAge, .cornerIOB, .cornerCOB, .cornerIOBAge, .cornerCOBAge, .cornerIOBCOB: return .corner
-        case .inlineAge, .inlineAgeIOB, .inlineAgeCOB, .inlineIOBCOB, .inlineAll, .inlineAllOverride: return .inline
+        case .inlineAge, .inlineAgeIOB, .inlineAgeCOB, .inlineIOBCOB, .inlineAll, .inlineEverything: return .inline
         case .circleAge, .circleIOB, .circleCOB: return .circular
         case .bigBG, .balanced, .glance: return .rectangular
         }
@@ -179,8 +179,7 @@ enum GlanceOption: String, CaseIterable {
         case .inlineAgeIOB: return [.bg, .age, .iob]
         case .inlineAgeCOB: return [.bg, .age, .cob]
         case .inlineAll, .balanced: return [.bg, .age, .iob, .cob]
-        case .inlineAllOverride: return [.bg, .age, .iob, .cob, .override]
-        case .glance: return [.bg, .eventual, .age, .iob, .cob, .temp, .override]
+        case .inlineEverything, .glance: return [.bg, .eventual, .age, .iob, .cob, .temp, .override]
         }
     }
 
@@ -195,6 +194,7 @@ enum GlanceOption: String, CaseIterable {
         switch self {
         case .bigBG: return NSLocalizedString("Big BG", comment: "Glance complication: the reading as large as the slot allows")
         case .glance: return NSLocalizedString("Glance", comment: "Glance complication: every value of the glance")
+        case .inlineEverything: return NSLocalizedString("Everything", comment: "Glance complication: every value of the glance on one line")
         default: return values.map(\.name).joined(separator: " · ")
         }
     }
@@ -212,12 +212,13 @@ enum GlanceOption: String, CaseIterable {
 extension GlanceComplicationSnapshot {
     func bgWithTrend(at date: Date) -> String { (bg(at: date) ?? Self.dash) + trend(at: date) }
     /// A value as shown, its unit as its label; nil when there is nothing to show (no override, no age).
-    func text(_ value: GlanceValue, at date: Date) -> String? {
+    /// `capitalised`: the slot draws in capitals (inline, corner), where "4g" would read as "4G".
+    func text(_ value: GlanceValue, at date: Date, capitalised: Bool = false) -> String? {
         switch value {
         case .bg: return bgWithTrend(at: date)
         case .age: return bgAge(at: date).isEmpty ? nil : bgAge(at: date)
         case .iob: return (iob(at: date) ?? Self.dash) + "U"
-        case .cob: return (cob(at: date) ?? Self.dash) + "g"
+        case .cob: return (cob(at: date) ?? Self.dash) + (capitalised ? " g" : "g")
         case .temp: return (temp(at: date) ?? Self.dash) + "U/h"
         case .eventual: return "→" + (eventual(at: date) ?? Self.dash)
         case .override: return overrideLabel
@@ -226,10 +227,10 @@ extension GlanceComplicationSnapshot {
 
     /// Several values on one line. The age and the eventual belong to the reading, so they sit beside it;
     /// the rest are set apart with a dot, or only a space where room is tight (a corner).
-    func text(_ values: [GlanceValue], at date: Date, tight: Bool = false) -> String {
+    func text(_ values: [GlanceValue], at date: Date, tight: Bool = false, capitalised: Bool = false) -> String {
         var line = ""
         for value in values {
-            guard let part = text(value, at: date) else { continue }
+            guard let part = text(value, at: date, capitalised: capitalised) else { continue }
             if !line.isEmpty { line += tight || value == .age || value == .eventual ? " " : " · " }
             line += part
         }

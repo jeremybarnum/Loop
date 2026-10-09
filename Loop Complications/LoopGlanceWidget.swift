@@ -107,7 +107,7 @@ struct GlanceComplicationView: View {
     @ViewBuilder private var content: some View {
         switch family {
         case .accessoryInline:
-            Text(snapshot.text(option.values, at: date))
+            Text(snapshot.text(option.values, at: date, capitalised: true))
         case .accessoryCorner:
             holderIcon(size: 15).widgetLabel { cornerLabel }
         case .accessoryCircular:
@@ -126,7 +126,7 @@ struct GlanceComplicationView: View {
     /// The reading bold, the other values beside it, the age smallest.
     private var cornerLabel: Text {
         option.values.reduce(Text("")) { label, value in
-            guard let part = snapshot.text(value, at: date) else { return label }
+            guard let part = snapshot.text(value, at: date, capitalised: true) else { return label }
             let piece: Text
             switch value {
             case .bg: piece = Text(part).font(.system(size: 22, weight: .bold, design: .rounded))

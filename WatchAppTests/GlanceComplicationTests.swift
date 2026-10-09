@@ -185,6 +185,8 @@ final class GlanceComplicationTests: XCTestCase {
         XCTAssertEqual(s.text(GlanceOption.inlineAll.values, at: now), "106\(up) 2m · 2.3U · 15g")
         XCTAssertEqual(s.text(GlanceOption.cornerIOBAge.values, at: now, tight: true), "106\(up) 2.3U 2m")
         XCTAssertEqual(s.text([.bg, .eventual], at: now), "106\(up) →112")
+        XCTAssertEqual(s.text(GlanceOption.inlineEverything.values, at: now, capitalised: true),
+                       "106\(up) →112 2m · 2.3U · 15 g · +0.75U/h", "a slot in capitals spaces the grams, so 15g never reads as 15G")
         XCTAssertEqual(s.text(GlanceOption.circleIOB.bezelValues, at: now), "15g 2m", "no override: the bezel carries what the circle leaves out")
     }
 
@@ -194,7 +196,7 @@ final class GlanceComplicationTests: XCTestCase {
         XCTAssertNil(off.text(.override, at: now))
         let on = GlanceComplicationPublisher.snapshot(loan: glanceData(glucoseAge: 130, overrideLabel: "🏃 70% 140"), cob: 15,
                                                       unit: .milligramsPerDeciliter, now: now)
-        XCTAssertTrue(on.text(GlanceOption.inlineAllOverride.values, at: now).hasSuffix(" · 🏃 70% 140"))
+        XCTAssertTrue(on.text(GlanceOption.inlineEverything.values, at: now).hasSuffix(" · 🏃 70% 140"))
     }
 
     /// A reload is served within a second of the publish that asked for it: still counted.
