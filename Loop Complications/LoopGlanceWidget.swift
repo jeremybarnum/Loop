@@ -221,7 +221,7 @@ struct GlanceComplicationView: View {
         VStack(spacing: 0) {
             HStack(spacing: 4) {
                 (overrideText ?? Text(""))
-                    .font(.system(size: 12, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
                 Spacer(minLength: 4)
                 Text("eBG " + (snapshot.eventual(at: date) ?? GlanceComplicationSnapshot.dash))
                     .font(.system(size: 13, weight: .medium, design: .rounded))
@@ -234,7 +234,7 @@ struct GlanceComplicationView: View {
                     .foregroundStyle(bgColor).widgetAccentable()
                 Spacer(minLength: 0)
                 Text(snapshot.text(.age, at: date) ?? "")
-                    .font(.system(size: 14, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
                     .frame(minWidth: 28)
             }
             Text(snapshot.text([.iob, .cob, .temp], at: date))
