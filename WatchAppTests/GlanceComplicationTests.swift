@@ -299,16 +299,15 @@ final class GlanceComplicationTests: XCTestCase {
     }
 
     /// In front, only a reading the face hasn't built is requested: opening the app with a current face
-    /// leaves the slot alone, and a face stuck on an old reading is caught up whatever we asked before.
-    func testInFrontOnlyAnUnbuiltReadingIsRequested() {
+    /// In front, any change the face hasn't drawn is requested — an override or an IOB change as well as a reading.
+    func testInFrontAnyUnbuiltChangeIsRequested() {
         var policy = GlanceReloadPolicy()
         _ = policy.save(reading(100), at: now)
+        XCTAssertNil(policy.plan(now: now.addingTimeInterval(10), inFront: true, opened: true, sensorLinkUp: now,
+                                 inLoan: false, lastRenderAt: now.addingTimeInterval(2)), "already drawn")
         _ = policy.save(reading(100, iob: "2.0"), at: now.addingTimeInterval(30))
-        XCTAssertNil(policy.plan(now: now.addingTimeInterval(60), inFront: true, opened: true, sensorLinkUp: now,
-                                 inLoan: false, lastRenderAt: now.addingTimeInterval(2)))
-        _ = policy.save(reading(108, at: now.addingTimeInterval(300)), at: now.addingTimeInterval(301))
-        XCTAssertEqual(policy.plan(now: now.addingTimeInterval(320), inFront: true, opened: true, sensorLinkUp: now,
-                                   inLoan: false, lastRenderAt: now.addingTimeInterval(2))?.reason, "opened")
+        XCTAssertEqual(policy.plan(now: now.addingTimeInterval(60), inFront: true, opened: false, sensorLinkUp: now,
+                                   inLoan: false, lastRenderAt: now.addingTimeInterval(2))?.reason, "free")
     }
 
     /// Connected by timing: the link's first seconds and, in a loan, the pod exchange; not the gap after.

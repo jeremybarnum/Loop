@@ -202,7 +202,10 @@ struct GlanceComplicationView: View {
     private var glance: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 4) {
-                Text(snapshot.text([.bg, .eventual], at: date)).font(.headline).foregroundStyle(bgColor).widgetAccentable()
+                (Text(snapshot.bgWithTrend(at: date)).font(.headline).foregroundStyle(bgColor)
+                    + Text(" eventually " + (snapshot.eventual(at: date) ?? GlanceComplicationSnapshot.dash))
+                        .font(.system(size: 14, weight: .medium, design: .rounded)))
+                    .widgetAccentable()
                 Spacer(minLength: 4)
                 ageAndHolder
             }
