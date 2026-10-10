@@ -198,21 +198,26 @@ struct GlanceComplicationView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// More: every value of the glance in three lines.
+    /// More: every value of the glance in three lines — the reading with its age and the eventual ("eBG"),
+    /// then IOB, COB and temp, then an active override with who holds the pod.
     private var glance: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 4) {
-                (Text(snapshot.bgWithTrend(at: date)).font(.headline).foregroundStyle(bgColor)
-                    + Text(" eventually " + (snapshot.eventual(at: date) ?? GlanceComplicationSnapshot.dash))
-                        .font(.system(size: 14, weight: .medium, design: .rounded)))
-                    .widgetAccentable()
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(snapshot.bgWithTrend(at: date)).font(.headline).foregroundStyle(bgColor).widgetAccentable()
+                Text(snapshot.text(.age, at: date) ?? "")
+                    .font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
                 Spacer(minLength: 4)
-                ageAndHolder
+                Text("eBG " + (snapshot.eventual(at: date) ?? GlanceComplicationSnapshot.dash))
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
             }
             Text(snapshot.text([.iob, .cob, .temp], at: date))
                 .font(.system(size: 15, weight: .medium, design: .rounded))
-            Text(snapshot.text(.override, at: date) ?? "")
-                .font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                Text(snapshot.text(.override, at: date) ?? "")
+                    .font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                holderIcon(size: 12)
+            }
         }
         .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: .leading)
