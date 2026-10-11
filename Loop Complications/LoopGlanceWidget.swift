@@ -215,6 +215,7 @@ struct GlanceComplicationView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Dosing values bright, status (who holds the pod, the reading's age) dimmed at the sides.
     /// More: the reading large in the middle and everything else around it — an active override and eBG
     /// above, who holds the pod and the reading's age at its sides, IOB, COB and temp below.
     private var glance: some View {
@@ -234,7 +235,7 @@ struct GlanceComplicationView: View {
                     .foregroundStyle(bgColor).widgetAccentable()
                 Spacer(minLength: 0)
                 Text(snapshot.text(.age, at: date) ?? "")
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .font(.system(size: 14, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
                     .frame(minWidth: 28)
             }
             Text(snapshot.text([.iob, .cob, .temp], at: date))
