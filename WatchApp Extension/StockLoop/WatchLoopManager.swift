@@ -1747,7 +1747,7 @@ final class WatchLoopManager {
             // The dead-man refreshes ONLY on a cycle that both computed AND (if it owed the pod
             // a command) landed it — stock parity, see the note where this used to live.
             let watchdogRefreshed = (error == nil && self.pumpManager != nil)
-            if watchdogRefreshed { LoopStallWatchdog.refresh(); self.onCycleLanded?() }
+            if watchdogRefreshed { LoopStallWatchdog.refresh(); LoopStallWatchdog.removePhoneRungs(); self.onCycleLanded?() }
             let sinceCompleted = self.lastLoopCompleted.map { Int(self.now().timeIntervalSince($0)) }
             // OBS-8: an ENACT-stage failure must not read as a COMPUTE failure. pumpManagerUnconnected
             // is raised by enactRecommendedAutomaticDose but is not wrapped as .enactFailed, so it
