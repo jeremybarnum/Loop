@@ -177,7 +177,7 @@ extension WatchLoopManager {
             else { enactVerdict = "ok" }
 
             let watchdogRefreshed = (error == nil && self.pumpManager != nil)
-            if watchdogRefreshed { LoopStallWatchdog.refresh(); LoopStallWatchdog.removePhoneRungs(); self.onCycleLanded?() }
+            if watchdogRefreshed { LoopStallWatchdog.refresh(); self.onCycleLanded?() }
             let sinceCompleted = self.lastLoopCompleted.map { Int(self.now().timeIntervalSince($0)) }
 
             // Compute and enact judged by the stage that failed.

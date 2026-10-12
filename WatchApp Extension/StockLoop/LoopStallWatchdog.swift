@@ -39,26 +39,6 @@ enum LoopStallWatchdog {
     static func disarm() {
         WristAlerts.disarm(rungIdentifiers)
     }
-
-    /// The phone's own rungs, as `AlertManager` names them (category + interval). iOS copies them to
-    /// the watch when it schedules them, and a loan the phone granted cancels them; one started with
-    /// the phone out of reach leaves them to fire over a watch that is looping.
-    static var phoneRungIdentifiers: [String] { rungs.map { "loopNotRunning\($0)" } }
-
-    /// Takes the phone's rungs off the watch, at loan start and at every landed cycle.
-    static func removePhoneRungs() {
-        WristAlerts.disarm(phoneRungIdentifiers)
-    }
-
-    /// As `removePhoneRungs`, first reporting how many of them this app could see.
-    static func removePhoneRungsReporting(_ report: @escaping (String) -> Void) {
-        UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
-            let ids = requests.map(\.identifier)
-            let phones = ids.filter { phoneRungIdentifiers.contains($0) }
-            removePhoneRungs()
-            report("phone's Loop-Failure rungs visible on the wrist: \(phones.count) of \(phoneRungIdentifiers.count) — removal requested for all \(phoneRungIdentifiers.count) · pending here: \(ids.count) [\(ids.sorted().joined(separator: ", "))]")
-        }
-    }
 }
 
 /// Fires when the watch is still looking for a sensor it has never connected to and the app has
