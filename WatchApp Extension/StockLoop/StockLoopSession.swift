@@ -157,6 +157,7 @@ final class StockLoopSession {
 
                 LoopStallWatchdog.refresh()
                 SportLog.event("deadman", "ladder ARMED — 20/40m + 1/2h rungs, time-sensitive [deadman]")
+                LoopStallWatchdog.removePhoneRungsReporting { SportLog.event("deadman", "\($0) [deadman]") }
 
                 NotificationCenter.default.post(name: .podLoanPhaseDidChange, object: nil)
 
