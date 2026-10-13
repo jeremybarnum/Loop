@@ -553,7 +553,6 @@ extension PodLoanPhoneController {
         reclaimPodConnection()
         pendingRevoke = false
         state = .owner
-        deps.setAutomaticDosingPaused(false)
         staged = [:]
         stagedTombstones = []
         persistStaged()
