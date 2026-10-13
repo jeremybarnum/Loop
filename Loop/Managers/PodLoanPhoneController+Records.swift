@@ -74,8 +74,8 @@ extension PodLoanPhoneController {
         if let token = offer.seizeToken, state == .owner || state == .reclaimPending, offer.epoch > epoch,
            token == persisted.seizeToken {
             if state == .reclaimPending {
-                cancelReclaimLadder()
-                handbackDiag(offer.epoch, "[seize] retro-ack arrived MID-RECLAIM — ladder stood down; the aimed revoke got its drain")
+                cancelTakeBackAttempt()
+                handbackDiag(offer.epoch, "[seize] retro-ack arrived MID-RECLAIM — take-back attempt stood down; the watch is handing back")
             }
             handbackDiag(offer.epoch, "[seize] RETRO-ACK — offer for a SEIZED loan (token …\(String(token.uuidString.suffix(8)))); adopting epoch \(epoch)→\(offer.epoch) as .loaned, reconciling on the normal path")
 
@@ -537,7 +537,7 @@ extension PodLoanPhoneController {
 
     /// The final records are in: take the link back, resume dosing, clear staging.
     private func finishLoanAfterCommit() {
-        cancelReclaimLadder()
+        cancelTakeBackAttempt()
         cancelNotification(id: NotificationID.paused)
 
         // A force deferred behind this commit is satisfied by the close.
@@ -546,7 +546,6 @@ extension PodLoanPhoneController {
         // A newer loan is live: commit the books but do not take the pod.
         if supersededByLiveLoan(epoch) {
             let liveEpoch = newestForeignLoanEvidence?.epoch ?? epoch + 1
-            pendingRevoke = false
             state = .owner
             staged = [:]
             stagedTombstones = []
@@ -559,7 +558,6 @@ extension PodLoanPhoneController {
         }
         // The state observer opens the settle window.
         reclaimPodConnection()
-        pendingRevoke = false
         state = .owner
         staged = [:]
         stagedTombstones = []
