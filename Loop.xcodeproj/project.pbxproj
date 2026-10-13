@@ -309,6 +309,7 @@
 		7B29B5CF4AAA4DA0B6E2F1A9 /* LoanTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0861EE8E371426287E4542F /* LoanTransport.swift */; };
 		7BE5EC4CA7BFBB16E8018091 /* WatchLoopManager+Display.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5744C796822627F1C74D802F /* WatchLoopManager+Display.swift */; };
 		7CC4501AABA3438A9291A003 /* LoanTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0861EE8E371426287E4542F /* LoanTransport.swift */; };
+		5021CA8C264146C9DFF33E9D /* PluginPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE102E23D8C1C1291EF66387 /* PluginPickerView.swift */; };
 		7D23667D21250C7E0028B67D /* LocalizedString.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D23667C21250C7E0028B67D /* LocalizedString.swift */; };
 		7DCBC50A4ED76D855495DAD5 /* RemoteDataServicesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 432E73CA1D24B3D6009AD15D /* RemoteDataServicesManager.swift */; };
 		7E69CFFC2A16A77E00203CBD /* ResetLoopManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E69CFFB2A16A77E00203CBD /* ResetLoopManager.swift */; };
@@ -1710,6 +1711,7 @@
 		DAB251CFA9B5DB848AAEB830 /* LoopComplications.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LoopComplications.swift; sourceTree = "<group>"; };
 		DAB6D8790872D927B336A1E3 /* ContentView+PodLoan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "ContentView+PodLoan.swift"; path = "WatchApp Extension/StockLoop/ContentView+PodLoan.swift"; sourceTree = SOURCE_ROOT; };
 		DC6E574D826158B33EE53EF6 /* WatchLoopManager+GlucoseAlerts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchLoopManager+GlucoseAlerts.swift"; path = "WatchApp Extension/StockLoop/WatchLoopManager+GlucoseAlerts.swift"; sourceTree = SOURCE_ROOT; };
+		CE102E23D8C1C1291EF66387 /* PluginPickerView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PluginPickerView.swift; sourceTree = "<group>"; };
 		DD3DBD282A33AFE9000F8B5B /* IntegralRetrospectiveCorrectionSelectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegralRetrospectiveCorrectionSelectionView.swift; sourceTree = "<group>"; };
 		DDC389F52A2B61750066E2E8 /* ApplicationFactorStrategy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationFactorStrategy.swift; sourceTree = "<group>"; };
 		DDC389F72A2B620B0066E2E8 /* GlucoseBasedApplicationFactorStrategy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlucoseBasedApplicationFactorStrategy.swift; sourceTree = "<group>"; };
@@ -2416,6 +2418,7 @@
 				84DEB10C2C18FABA00170734 /* IOSFocusModesView.swift */,
 				84D1F1A62D09053A00CB271F /* StatusTableView.swift */,
 				B429CAB22E97C7F300FA988E /* LoopStatusModalView.swift */,
+				CE102E23D8C1C1291EF66387 /* PluginPickerView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -4279,6 +4282,7 @@
 				B40D07C7251A89D500C1C6D7 /* GlucoseDisplay.swift in Sources */,
 				43C2FAE11EB656A500364AFF /* GlucoseEffectVelocity.swift in Sources */,
 				14C970862C5C358C00E8A01B /* FavoriteFoodInsightsChartsView.swift in Sources */,
+				5021CA8C264146C9DFF33E9D /* PluginPickerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
