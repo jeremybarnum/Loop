@@ -60,6 +60,9 @@ final class PodLoanPhoneController {
         /// The loan's dosing pause; distinct from the user's closed-loop setting.
         var setAutomaticDosingPaused: (Bool) -> Void
 
+        /// Called right after this phone releases the pump (true) or takes it back (false).
+        var pumpControlChanged: (_ released: Bool) -> Void
+
         var send: ([String: Any]) -> Void
 
         /// The active remote services' shared configurations for the Start grant; none leaves the
