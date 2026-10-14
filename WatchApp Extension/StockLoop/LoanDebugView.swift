@@ -50,6 +50,7 @@ struct LoanDebugView: View {
     @State private var snapshot: PodLoanWatchController.DebugSnapshot?
     @State private var cgm: CGMHealth?
     @State private var lastAction: String = "—"
+    @AppStorage(StockLoopSession.workoutAtLoanEndsKey) private var workoutAtLoanEnds = false
 
     @State private var iobText: String = "—"
 
@@ -101,10 +102,8 @@ struct LoanDebugView: View {
 
                 Text("POD LOAN").font(.footnote).foregroundColor(.secondary)
 
-                // TEST ONLY: does a running workout let background uploads use cellular?
-                Toggle("Hold workout (test)", isOn: Binding(
-                    get: { session?.testWorkoutHold ?? false },
-                    set: { session?.setTestWorkoutHold($0); lastAction = $0 ? "test workout ON" : "test workout OFF" }))
+                // TEST ONLY: does takeover or hand-back need a workout? Off by default.
+                Toggle("Workout at start/end (test)", isOn: $workoutAtLoanEnds)
 
                 Button("Read Pod Status") {
                     lastAction = "reading…"
