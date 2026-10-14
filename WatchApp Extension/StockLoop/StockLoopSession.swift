@@ -14,35 +14,6 @@ import os.log
 final class StockLoopSession {
     let stack: StockLoopStack.Stack
 
-    /// Held only across takeover and hand-back; timers during a loan fire late.
-    private let keepalive = WorkoutKeepalive()
-
-    /// Holds are refcounted by `reason`, which must be stable per caller.
-    private func setKeepalive(_ holding: Bool, reason: String) {
-        holding ? keepalive.acquire(reason) : keepalive.release(reason)
-    }
-
-    /// Restart a session the system ended while holders remain.
-    func ensureKeepalive() { keepalive.ensureRunning() }
-
-    var workoutRunning: Bool { keepalive.isRunning }
-
-    /// TEST ONLY (diagnostics toggle, default off): a workout through takeover and hand-back.
-    /// Off tests whether either needs one: a known pod connects by handle with the screen off,
-    /// and the phone's ack may wake the app by itself.
-    static let workoutAtLoanEndsKey = "SportMode.test.workoutAtLoanEnds"
-
-    /// Release always, so turning the toggle off mid-takeover cannot strand a hold.
-    private func setEndHold(_ holding: Bool, reason: String) {
-        let workout = UserDefaults.standard.bool(forKey: Self.workoutAtLoanEndsKey)
-        if !holding || workout { setKeepalive(holding, reason: reason) }
-        guard holding else {
-            SportLog.event("keepalive", "\(reason) over · \(RuntimeStateLog.snapshot())")
-            return
-        }
-        SportLog.event("keepalive", "\(reason) begins \(workout ? "WITH" : "WITHOUT") a workout (test toggle) · \(RuntimeStateLog.snapshot())")
-    }
-
     let loanController: PodLoanWatchController
 
     private let log = OSLog(subsystem: "com.loopkit.Loop", category: "StockLoopSession")
@@ -141,15 +112,9 @@ final class StockLoopSession {
             return true
         }
 
-        // Runtime for the whole takeover, bracketed by log snapshots.
+        // The takeover, bracketed by log snapshots.
         loanController.onTakeoverRadioHold = { [weak self] holding in
-            guard let self else { return }
-            self.setEndHold(holding, reason: "takeover")
-            self.sendLogSnapshot(holding ? "takeover start" : "takeover verdict")
-        }
-
-        loanController.onHandbackRuntimeHold = { [weak self] holding in
-            self?.setEndHold(holding, reason: "handback")
+            self?.sendLogSnapshot(holding ? "takeover start" : "takeover verdict")
         }
 
         // Everything that holds only for the length of a loan, armed and disarmed together.
@@ -231,15 +196,13 @@ final class StockLoopSession {
 
     private var logPulse: DispatchSourceTimer?
 
-    /// Every five minutes during a loan; also re-drives the keepalive. Its lateness is data.
+    /// Every five minutes during a loan. Its lateness is data.
     private func startLogPulse() {
         stopLogPulse()
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 300, repeating: 300, leeway: .seconds(20))
         timer.setEventHandler { [weak self] in
             self?.sendLogSnapshot("loan pulse")
-
-            self?.keepalive.ensureRunning()
         }
         timer.resume()
         logPulse = timer

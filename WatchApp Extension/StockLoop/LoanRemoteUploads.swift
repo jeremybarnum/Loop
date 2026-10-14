@@ -281,10 +281,11 @@ final class LoanRemoteUploads {
 
     /// Whether a request made now can go out. watchOS refuses cellular to a backgrounded app's
     /// requests ("Interface type 'cellular' is prohibited by parameters") and leaves them waiting until a
-    /// timeout or a route change; the phone link and Wi-Fi are allowed in the background, and a running
-    /// workout lifts the refusal (all measured on the wrist, 2026-10-05/06). An unknown route never holds.
-    static func mayUpload(inFront: Bool, workoutRunning: Bool, route: Route) -> Bool {
-        inFront || workoutRunning || route != .cellularOnly
+    /// timeout or a route change; the phone link and Wi-Fi are allowed in the background (measured on the
+    /// wrist, 2026-10-05/06; a running workout also lifted the refusal, and Sport Mode runs none). An
+    /// unknown route never holds.
+    static func mayUpload(inFront: Bool, route: Route) -> Bool {
+        inFront || route != .cellularOnly
     }
 
     /// Every type goes up now, held or not: what a relaunch forgot, and what stock's own catch-up
@@ -309,9 +310,8 @@ final class LoanRemoteUploads {
         guard let manager = lock.withLock({ self.manager }) else { return }
         Task { @MainActor in
             let inFront = WKApplication.shared().applicationState != .background
-            let workout = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.workoutRunning ?? false
             let route = lock.withLock { self.route }
-            guard Self.mayUpload(inFront: inFront, workoutRunning: workout, route: route) else {
+            guard Self.mayUpload(inFront: inFront, route: route) else {
                 let first = lock.withLock { () -> Bool in held.insert(type).inserted }
                 if first {
                     SportLog.event("uploads", "\(type.rawValue) upload HELD — in the background on cellular only, where it could only wait; it goes when the app opens or the route changes")

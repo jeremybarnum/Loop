@@ -50,7 +50,6 @@ struct LoanDebugView: View {
     @State private var snapshot: PodLoanWatchController.DebugSnapshot?
     @State private var cgm: CGMHealth?
     @State private var lastAction: String = "—"
-    @AppStorage(StockLoopSession.workoutAtLoanEndsKey) private var workoutAtLoanEnds = false
 
     @State private var iobText: String = "—"
 
@@ -101,9 +100,6 @@ struct LoanDebugView: View {
                 Divider().padding(.vertical, 2)
 
                 Text("POD LOAN").font(.footnote).foregroundColor(.secondary)
-
-                // TEST ONLY: does takeover or hand-back need a workout? Off by default.
-                Toggle("Workout at start/end (test)", isOn: $workoutAtLoanEnds)
 
                 Button("Read Pod Status") {
                     lastAction = "reading…"
