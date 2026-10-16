@@ -3348,5 +3348,46 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(base?.units ?? 0, 38.5, accuracy: 0.001)
         XCTAssertEqual(base?.at, lastRead)
     }
+
+    /// The 10-16 00:27 case: the watch's takeover reading is older than the phone's last reading (the
+    /// phone held the pod and dosed after the watch took over). The later reading keeps the window.
+    func testAnOlderTakeoverReadingDoesNotMoveTheWindowBack() throws {
+        let token = seizeCredentialOutstanding()
+        let controller = makeController()
+        let lastRead = Date().addingTimeInterval(-.minutes(2))
+        readPod(controller, units: 38.5, at: lastRead)   // after the phone's own bolus
+
+        let takeover = LoanOdometerSnapshot(deliveredAtStart: 36.0, deliveredLatest: 38.6, freshenSucceeded: true,
+                                            asOf: Date(), deliveredAtStartAt: Date().addingTimeInterval(-.minutes(40)))
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: 5, handedBackAt: Date(), finalStatus: nil, odometer: takeover,
+                          events: [], tombstones: [], recovered: false, released: false,
+                          seizeToken: token)).transportDictionary())
+        waitUntil(timeout: 5, "adopted") { controller.state == .loaned }
+        controller.queue.sync {}
+
+        XCTAssertEqual(controller.ledgerLast?.units ?? 0, 38.5, accuracy: 0.001, "the phone's later reading keeps the window")
+        XCTAssertEqual(controller.ledgerLast?.at, lastRead)
+    }
+
+    /// An ordinary offline start: the watch took over after the phone's last reading, so its window starts there.
+    func testANewerTakeoverReadingStartsTheWatchsWindow() throws {
+        let token = seizeCredentialOutstanding()
+        let controller = makeController()
+        readPod(controller, units: 30.0, at: Date().addingTimeInterval(-.minutes(40)))
+
+        let takeoverAt = Date().addingTimeInterval(-.minutes(30))
+        let takeover = LoanOdometerSnapshot(deliveredAtStart: 30.2, deliveredLatest: 31.0, freshenSucceeded: true,
+                                            asOf: Date(), deliveredAtStartAt: takeoverAt)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: 5, handedBackAt: Date(), finalStatus: nil, odometer: takeover,
+                          events: [], tombstones: [], recovered: false, released: false,
+                          seizeToken: token)).transportDictionary())
+        waitUntil(timeout: 5, "adopted") { controller.state == .loaned }
+        controller.queue.sync {}
+
+        XCTAssertEqual(controller.ledgerLast?.units ?? 0, 30.2, accuracy: 0.001)
+        XCTAssertEqual(controller.ledgerLast?.at.timeIntervalSince(takeoverAt) ?? 1, 0, accuracy: 0.001)
+    }
 }
 

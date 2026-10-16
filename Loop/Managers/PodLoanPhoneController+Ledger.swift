@@ -154,11 +154,18 @@ extension PodLoanPhoneController {
     }
 
     /// The watch's first reading of the pod: the window until then was this phone's, whose last
-    /// program the pod ran on. Logged, never acted on (grid 9.5). The watch's window starts here.
+    /// program the pod ran on. Logged, never acted on (grid 9.5). The watch's window starts here,
+    /// unless this phone read the pod after it: the latest reading starts the window, so the phone's
+    /// own doses after the watch's takeover stay the phone's.
     func noteTakeoverReading(units: Double, at: Date) {
         let last = ledgerLast
+        if let last, at <= last.at {
+            PhoneLog.event("loan", String(format: "window start kept — this phone read the pod after the watch took over: %.2f U at %@",
+                                          last.units, ISO8601DateFormatter().string(from: last.at)))
+            return
+        }
         noteReading(units: units, at: at)
-        guard let last, at > last.at, units >= last.units, let pulseUnits = pumpPulseUnits else { return }
+        guard let last, units >= last.units, let pulseUnits = pumpPulseUnits else { return }
         let schedule = deps.settings().basalRateSchedule
         ownRecords(from: last.at) { records in
             let residual = LoanReconciler.insulinNotInRecords(totalThen: last.units, then: last.at, totalNow: units, now: at,
