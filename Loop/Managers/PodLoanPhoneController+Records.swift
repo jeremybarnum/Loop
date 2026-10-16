@@ -75,6 +75,13 @@ extension PodLoanPhoneController {
             }
             handbackDiag(offer.epoch, "[seize] RETRO-ACK — offer for a SEIZED loan (token …\(String(token.uuidString.suffix(8)))); adopting epoch \(epoch)→\(offer.epoch) as .loaned, reconciling on the normal path")
 
+            // The audit's base is this phone's last reading of the pod while it held it: taken when it stood
+            // aside, else its last own reading. Insulin before it, the phone's own doses included, is already
+            // in its books; without a base the audit would count those doses as the watch's.
+            let wasYielding = yieldingToInferredLoan
+            let saved = persisted
+            let ownReading = saved.ownPumpTotal.flatMap { units in saved.ownPumpTotalAt.map { AuditBase(units: units, asOf: $0) } }
+            let keptBase = (wasYielding ? saved.audit.base : nil) ?? ownReading
             clearInferredLoanYield(reason: "retro-ack — the inferred loan is now the adopted loan e\(offer.epoch)")
             // Anchor the adopted loan at its earliest record, at most six hours back.
             let anchor = max(offer.events.map(\.record.startDate).min() ?? offer.handedBackAt,
@@ -86,9 +93,14 @@ extension PodLoanPhoneController {
                 $0.holdRenewedAt = offer.handedBackAt
                 $0.holdLapseNoticedAt = nil
                 $0.watchSilenceWarningsIssued = 0
-                $0.audit.base = nil
+                $0.audit.base = keptBase
+                $0.audit.baseEpoch = keptBase == nil ? nil : offer.epoch
                 $0.audit.deliveredAtTakeover = nil
                 $0.audit.loanStartedAt = anchor
+            }
+            if let keptBase {
+                handbackDiag(offer.epoch, String(format: "audit base kept — the phone's last reading while it held the pod, %.2f U at %@",
+                                                 keptBase.units, ISO8601DateFormatter().string(from: keptBase.asOf)))
             }
             stateDidChange(from: previous)
 
