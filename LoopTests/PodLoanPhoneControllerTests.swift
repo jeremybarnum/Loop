@@ -74,6 +74,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// How many times the phone enacted the post-return temp cancel, and its result.
     var cancelCalls = 0
     var cancelError: Error?
+    /// What the phone's dose store returns.
+    var phoneDoseHistory: [DoseEntry] = []
     /// How many times the phone stopped automatic dosing over a reconciliation difference.
     var glucoseUploadSkips: [Set<String>] = []
     var decisionsUploadedBy: [Set<String>] = []
@@ -166,6 +168,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         diags = []
         cancelCalls = 0
         cancelError = nil
+        phoneDoseHistory = []
         clock = Date()
         holdPumpEventWrites = false
         heldPumpEventWrite = nil
@@ -253,7 +256,11 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             skipLoanGlucoseUploads: { [weak self] services in
                 self?.lock.lock(); self?.glucoseUploadSkips.append(services); self?.lock.unlock()
             },
-            doseHistory: { _, completion in completion([]) },
+            doseHistory: { [weak self] _, completion in
+                guard let self = self else { return completion([]) }
+                self.lock.lock(); let history = self.phoneDoseHistory; self.lock.unlock()
+                completion(history)
+            },
             overrideHistory: { [weak self] start, completion in
                 guard let self = self else { return completion([]) }
                 self.lock.lock(); self.overrideHistoryAskedFrom = start; let history = self.phoneOverrideHistory; self.lock.unlock()
@@ -1019,11 +1026,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         saved.holdRenewedAt = renewed
         saved.watchSupportsSeize = true
         saved.seizeToken = token
-        saved.audit.loanStartedAt = started
-        saved.audit.deliveredAtGrant = 12.0
-        saved.audit.base = .init(units: 13.0, asOf: started)
-        saved.audit.baseEpoch = 5
-        saved.pendingForceAudit = .init(epoch: 5, deliveredAtStart: 12.5, expected: 0.8, loanMinutes: 60)
+        saved.loanStartedAt = started
+        saved.ledger.last = .init(units: 13.0, at: started)
+        saved.pendingForceAudit = .init(epoch: 5, deliveredAtStart: 12.5, from: started, expected: 0.8, loanMinutes: 60)
         saveState { $0 = saved }
 
         let controller = makeController()
@@ -1035,7 +1040,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(p.holdRenewedAt, renewed)
         XCTAssertTrue(p.watchSupportsSeize)
         XCTAssertEqual(p.seizeToken, token)
-        XCTAssertEqual(p.audit.base?.units, 13.0, "a base from this epoch is kept")
+        XCTAssertEqual(p.ledger.last?.units, 13.0, "the ledger's last reading is kept")
         XCTAssertEqual(controller.queue.sync { controller.pendingHandbackAudit?.flavor }, .forceReclaim, "the owed verdict re-arms")
         XCTAssertTrue(controller.holdsAutomaticDosing, "dosing is held from launch")
         XCTAssertTrue(controlCalls.isEmpty, "a relaunch mid-loan changes nothing: the pump manager keeps the release itself")
@@ -1193,15 +1198,14 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         return grant
     }
 
-    /// The grant's audit base belongs to the grant's own epoch, so a relaunch before the watch
-    /// confirms keeps it (it was saved under the previous epoch and dropped at launch).
+    /// The grant's reading survives a relaunch before the watch confirms.
     func testRelaunchBetweenGrantAndTakeoverKeepsTheAuditBase() {
         MockPumpManager.testOdometer = 10.0
         let grant = offerGrant(makeController())
         let relaunched = makeController()
         relaunched.queue.sync { }
         XCTAssertEqual(relaunched.epoch, grant.epoch)
-        XCTAssertEqual(relaunched.auditBase?.units, 10.0, "the grant's base survives the relaunch")
+        XCTAssertEqual(relaunched.ledgerLast?.units, 10.0, "the grant's reading survives the relaunch")
     }
 
     /// The fix: an explicit "I never got it" reclaims immediately instead of after 5 min 15 s.
@@ -1342,17 +1346,6 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
         XCTAssertNil(diagMatching("WARN — residual"))
         XCTAssertTrue(notices.isEmpty, "a normal loan must produce no notice at all, got \(notices)")
-    }
-
-    /// A base saved under another epoch is dropped at launch.
-    func testASavedBaseFromAnotherEpochIsDropped() {
-        var saved = PodLoanPhoneState()
-        saved.epoch = 5
-        saved.audit.base = .init(units: 13.0, asOf: Date())
-        saved.audit.baseEpoch = 4
-        saveState { $0 = saved }
-        let controller = makeController()
-        XCTAssertNil(controller.auditBase)
     }
 
     /// +0.25 U is over the ±0.20 bound and under the old ±0.5, so a revert fails this.
@@ -1974,8 +1967,8 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 5, "dosing resumed") { !controller.holdsAutomaticDosing }
         XCTAssertEqual(booked.count, 1, "the gap books as a placeholder bolus")
         XCTAssertEqual(booked.first?.deliveredUnits ?? 0, 2.5, accuracy: 0.1, "booked amount = the odometer gap")
-        XCTAssertEqual(booked.first?.syncIdentifier, "LOAN-AUDIT-GAP-e\(grant.epoch)",
-                       "deterministic identity, so the watch's return can retire it")
+        XCTAssertTrue(booked.first?.syncIdentifier?.hasPrefix("LOAN-AUDIT-GAP-e\(grant.epoch)-") ?? false,
+                      "named by its window, so the watch's return can retire it")
         XCTAssertEqual(booked.first?.manuallyEntered, true,
                        "manual-entry namespace — pump events overwrite syncIdentifier with hex(raw); manual doses keep it")
     }
@@ -2054,9 +2047,9 @@ extension PodLoanPhoneControllerTests {
         let deleted = deletedGapSyncs
         lock.unlock()
 
-        XCTAssertEqual(deleted, ["LOAN-AUDIT-GAP-e\(grant.epoch)"], "the placeholder retires by its deterministic identity")
+        XCTAssertTrue(deleted.first?.hasPrefix("LOAN-AUDIT-GAP-e\(grant.epoch)-") ?? false, "the estimate retires by its window's name")
         waitUntil(timeout: 5, "state cleared") {
-            controller.persisted.gapBooking == nil
+            controller.persisted.ledger.bookings.isEmpty
         }
     }
 
@@ -2085,13 +2078,13 @@ extension PodLoanPhoneControllerTests {
 
         lock.lock(); let deleted = deletedGapSyncs; lock.unlock()
         XCTAssertTrue(deleted.isEmpty, "an offer that commits no NEW doses explains nothing — the placeholder must stand")
-        XCTAssertNotNil(controller.persisted.gapBooking)
+        XCTAssertFalse(controller.persisted.ledger.bookings.isEmpty)
     }
 
     /// A launch retries the placeholder delete only when it failed after the watch's records
     /// committed (`deleteFailedAfterRecords`).
     func testPersistedGapDeleteRetriesOnFreshLaunch() throws {
-        saveState { $0.gapBooking = .init(epoch: 7, units: 1.75, bookedAt: Date(), deleteFailedAfterRecords: true) }
+        saveState { $0.ledger.bookings = [self.estimate(sync: "LOAN-AUDIT-GAP-e7-1", units: 1.75, deleteFailed: true)] }
 
         // Held for the test's duration — init's retry runs on a `[weak self]` queue.async, so an
         // unretained controller can deallocate before its own retry fires.
@@ -2099,17 +2092,17 @@ extension PodLoanPhoneControllerTests {
         _ = controller
 
         waitUntil(timeout: 5, "launch retry succeeds") {
-            controller.persisted.gapBooking == nil
+            controller.persisted.ledger.bookings.isEmpty
         }
         lock.lock()
         let deleted = deletedGapSyncs
         lock.unlock()
-        XCTAssertEqual(deleted, ["LOAN-AUDIT-GAP-e7"], "retried against the PERSISTED epoch, no offer involved")
+        XCTAssertEqual(deleted, ["LOAN-AUDIT-GAP-e7-1"], "retried from the PERSISTED ledger, no offer involved")
     }
 
     /// Launch-time store work waits for protected data (reboot before first unlock).
     func testLaunchStoreWorkWaitsForProtectedData() throws {
-        saveState { $0.gapBooking = .init(epoch: 9, units: 1.0, bookedAt: Date(), deleteFailedAfterRecords: true) }
+        saveState { $0.ledger.bookings = [self.estimate(sync: "LOAN-AUDIT-GAP-e9-1", units: 1.0, deleteFailed: true)] }
         var unlock: (() -> Void)?
         let controller = makeController(whenProtectedDataAvailable: { work in unlock = work })
         _ = controller
@@ -2118,32 +2111,32 @@ extension PodLoanPhoneControllerTests {
         Thread.sleep(forTimeInterval: 0.3)
         lock.lock(); let attemptsWhileLocked = deletedGapSyncs.count; lock.unlock()
         XCTAssertEqual(attemptsWhileLocked, 0, "store work ran during the pre-first-unlock window")
-        XCTAssertNotNil(controller.persisted.gapBooking)
+        XCTAssertFalse(controller.persisted.ledger.bookings.isEmpty)
 
         // First unlock: the deferred work runs and the retry completes.
         unlock?()
         waitUntil(timeout: 5, "deferred retry runs at unlock") {
-            self.lock.lock(); defer { self.lock.unlock() }; return self.deletedGapSyncs == ["LOAN-AUDIT-GAP-e9"]
+            self.lock.lock(); defer { self.lock.unlock() }; return self.deletedGapSyncs == ["LOAN-AUDIT-GAP-e9-1"]
         }
     }
 
     /// The failure side of the same path: launch retry fails again, state must survive for yet
     /// another attempt rather than being dropped or silently swallowed.
     func testPersistedGapDeleteThatFailsAgainAtLaunchKeepsState() throws {
-        saveState { $0.gapBooking = .init(epoch: 3, units: 0.9, bookedAt: Date(), deleteFailedAfterRecords: true) }
+        saveState { $0.ledger.bookings = [self.estimate(sync: "LOAN-AUDIT-GAP-e3-1", units: 0.9, deleteFailed: true)] }
         lock.lock(); gapDeleteSucceeds = false; lock.unlock()
 
         let controller = makeController()
         _ = controller
 
         waitUntil(timeout: 5, "launch retry attempted") { self.lock.lock(); defer { self.lock.unlock() }; return !self.deletedGapSyncs.isEmpty }
-        XCTAssertNotNil(controller.persisted.gapBooking,
+        XCTAssertFalse(controller.persisted.ledger.bookings.isEmpty,
                         "still failing — state must survive for the NEXT launch or offer, not vanish")
     }
 
     /// A placeholder nothing explained survives launch: the insulin is still in the body.
     func testPersistedGapWithoutRecordsSurvivesLaunch() throws {
-        saveState { $0.gapBooking = .init(epoch: 11, units: 0.85, bookedAt: Date()) }
+        saveState { $0.ledger.bookings = [self.estimate(sync: "LOAN-AUDIT-GAP-e11-1", units: 0.85)] }
 
         let controller = makeController()   // the next app launch
         _ = controller
@@ -2156,7 +2149,7 @@ extension PodLoanPhoneControllerTests {
 
         lock.lock(); let deleted = deletedGapSyncs; lock.unlock()
         XCTAssertTrue(deleted.isEmpty, "an unexplained placeholder must NOT be deleted at launch — the insulin is still real")
-        XCTAssertNotNil(controller.persisted.gapBooking,
+        XCTAssertFalse(controller.persisted.ledger.bookings.isEmpty,
                         "the booking must persist so it keeps standing until the watch returns or it decays out")
     }
 
@@ -2179,7 +2172,7 @@ extension PodLoanPhoneControllerTests {
                           events: [realTail], tombstones: [], recovered: true)).transportDictionary())
 
         waitUntil(timeout: 5, "failure logged") { self.diagMatching("gap DELETE FAILED") != nil }
-        XCTAssertNotNil(controller.persisted.gapBooking,
+        XCTAssertFalse(controller.persisted.ledger.bookings.isEmpty,
                         "state survives a failed delete, so the next offer retries it")
     }
 
@@ -2697,7 +2690,7 @@ extension PodLoanPhoneControllerTests {
                           seizeToken: token)).transportDictionary())
         waitUntil(timeout: 5, "adopted") { controller.state == .loaned }
 
-        let anchor = controller.persisted.audit.loanStartedAt
+        let anchor = controller.persisted.loanStartedAt
         XCTAssertNotNil(anchor, "the window anchor is SET, never nil-to-default")
         XCTAssertEqual(anchor.map { abs($0.timeIntervalSince(eventStart)) < 1 }, true,
                        "…at the offer's earliest event")
@@ -2960,7 +2953,7 @@ extension PodLoanPhoneControllerTests {
     func testAnAuditConsumesItsAnchors() throws {
         let controller = makeController()
         _ = establishLoan(controller)
-        XCTAssertNotNil(controller.auditBase, "a live loan has its anchor")
+        XCTAssertNotNil(controller.ledgerLast, "a live loan has its window's start")
 
         MockPumpManager.testOdometer = 10.0
         controller.forceReclaimToOwner(reason: "test: the loan is over")
@@ -2968,7 +2961,7 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 8, "verdict") { self.diagMatching("reconcile[FORCE-RECLAIM]") != nil }
         controller.queue.sync { }
 
-        XCTAssertNil(controller.auditBase, "spent with its loan — nothing later can audit from here")
+        XCTAssertEqual(controller.ledgerLast?.units, 10.0, "the return's reading starts the next window")
         XCTAssertNil(controller.loanStartedAt)
     }
 
@@ -3095,7 +3088,7 @@ extension PodLoanPhoneControllerTests {
             podFault: nil, holdsPod: true)).transportDictionary())
         waitUntil(timeout: 5, "standing aside on the watch's word") { controller.yieldingToInferredLoan }
         controller.queue.sync { }
-        XCTAssertEqual(controller.auditBase?.units, 20.0, "anchored at this phone's own last pod read")
+        XCTAssertEqual(controller.ledgerLast?.units, 20.0, "anchored at this phone's own last pod read")
 
         clock = clock.addingTimeInterval(.minutes(16))
         tick(controller)
@@ -3182,7 +3175,13 @@ extension PodLoanPhoneControllerTests {
         MockPumpManager.testOdometer = units
         MockPumpManager.testOdometerAt = at
         controller.checkOwnPumpTotal()
-        waitUntil(timeout: 5, "reading kept") { controller.persisted.ownPumpTotalAt == at }
+        waitUntil(timeout: 5, "reading kept") { controller.ledgerLast?.at == at }
+    }
+
+    /// An estimate as the ledger keeps it, over the half hour before it was booked.
+    private func estimate(sync: String, units: Double, bookedAt: Date = Date(), deleteFailed: Bool = false) -> PodLoanPhoneState.Ledger.Booking {
+        .init(sync: sync, units: units, bookedAt: bookedAt,
+              window: DateInterval(start: bookedAt.addingTimeInterval(-.minutes(30)), end: bookedAt), deleteFailed: deleteFailed)
     }
 
     func testBackWithThePodAfterAGapBooksWhatTheRecordsCannotExplain() throws {
@@ -3195,36 +3194,76 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 5, "gap booked") { self.lock.lock(); defer { self.lock.unlock() }; return !self.bookedGapDoses.isEmpty }
         lock.lock(); let booked = bookedGapDoses; let titles = urgentNotices; let bodies = urgentNoticeBodies; lock.unlock()
         XCTAssertEqual(booked.first?.deliveredUnits ?? 0, 1.5, accuracy: 0.05)
-        XCTAssertTrue(booked.first?.syncIdentifier?.hasPrefix("LOAN-AUDIT-GAP-after-") ?? false)
+        XCTAssertTrue(booked.first?.syncIdentifier?.hasPrefix("LOAN-AUDIT-GAP-e") ?? false)
         XCTAssertTrue(titles.contains("Insulin Estimated After Sport Mode"))
         XCTAssertTrue(bodies.contains { $0.hasPrefix("Sport Mode probably started away from the phone") })
         XCTAssertFalse(controller.holdsAutomaticDosing, "looping continues")
     }
 
-    func testAnEstimatePastInsulinsActionTimeGivesUpItsPlace() throws {
+    /// Past insulin's action time an estimate leaves the ledger when the next one is booked; its dose stays.
+    func testAnAgedEstimateLeavesTheLedgerWhenTheNextIsBooked() throws {
         _ = seizeCredentialOutstanding()
-        saveState { $0.gapBooking = .init(epoch: 3, units: 0.34, bookedAt: Date().addingTimeInterval(-.hours(9)), anyLaterLoan: true) }
+        saveState { $0.ledger.bookings = [self.estimate(sync: "LOAN-AUDIT-GAP-e3-1", units: 0.34, bookedAt: Date().addingTimeInterval(-.hours(9)))] }
         let controller = makeController()
         let back = Date()
         readPod(controller, units: 10.0, at: back.addingTimeInterval(-.minutes(30)))
         readPod(controller, units: 12.0, at: back)
 
         waitUntil(timeout: 5, "gap booked") { self.lock.lock(); defer { self.lock.unlock() }; return !self.bookedGapDoses.isEmpty }
-        lock.lock(); let booked = bookedGapDoses; lock.unlock()
+        lock.lock(); let booked = bookedGapDoses; let deleted = deletedGapSyncs; lock.unlock()
         XCTAssertEqual(booked.first?.deliveredUnits ?? 0, 1.5, accuracy: 0.05)
+        waitUntil(timeout: 5, "one standing") { controller.persisted.ledger.bookings.count == 1 }
+        XCTAssertNotEqual(controller.persisted.ledger.bookings.first?.sync, "LOAN-AUDIT-GAP-e3-1")
+        XCTAssertTrue(deleted.isEmpty, "the aged dose stays in the books")
     }
 
-    func testARecentEstimateStillHoldsItsPlace() throws {
+    /// Two gaps, two estimates: each is retired by its own window's records.
+    func testASecondEstimateStandsBesideTheFirst() throws {
         _ = seizeCredentialOutstanding()
-        saveState { $0.gapBooking = .init(epoch: 3, units: 0.34, bookedAt: Date().addingTimeInterval(-.hours(1)), anyLaterLoan: true) }
+        saveState { $0.ledger.bookings = [self.estimate(sync: "LOAN-AUDIT-GAP-e3-1", units: 0.34, bookedAt: Date().addingTimeInterval(-.hours(1)))] }
         let controller = makeController()
         let back = Date()
         readPod(controller, units: 10.0, at: back.addingTimeInterval(-.minutes(30)))
         readPod(controller, units: 12.0, at: back)
 
-        waitUntil(timeout: 5, "refused") { self.diagMatching("gap NOT booked") != nil }
+        waitUntil(timeout: 5, "gap booked") { self.lock.lock(); defer { self.lock.unlock() }; return !self.bookedGapDoses.isEmpty }
+        waitUntil(timeout: 5, "two standing") { controller.persisted.ledger.bookings.count == 2 }
+    }
+
+    /// A booked estimate stands for insulin given before it, so the next reading does not count it.
+    func testABookedEstimateIsNotCountedInTheNextReadingsWindow() throws {
+        _ = seizeCredentialOutstanding()
+        let controller = makeController()
+        let back = Date()
+        let estimate = DoseEntry(type: .bolus, startDate: back.addingTimeInterval(-.minutes(11)), endDate: back.addingTimeInterval(-.minutes(11)),
+                                 value: 2.0, unit: .units, decisionId: nil, deliveredUnits: 2.0, syncIdentifier: "LOAN-AUDIT-GAP-e3-7", manuallyEntered: true)
+        lock.lock(); phoneDoseHistory = [estimate]; lock.unlock()
+        readPod(controller, units: 10.0, at: back.addingTimeInterval(-.minutes(12)))
+        readPod(controller, units: 10.2, at: back)   // the schedule explains the 0.2 U
+
+        waitUntil(timeout: 5, "verdict") { self.diagMatching("back with the pod after 12 min: CLEAN") != nil }
+        lock.lock(); let titles = urgentNotices; lock.unlock()
+        XCTAssertFalse(titles.contains("Insulin On Board May Be Overstated"))
+    }
+
+    /// After a take-back the next reading starts from the return's reading, so the loan's insulin,
+    /// already judged and booked by the take-back, is not counted a second time.
+    func testAfterATakeBackTheNextReadingStartsFromTheReturn() throws {
+        _ = seizeCredentialOutstanding()
+        let controller = makeController()
+        let grant = establishLoan(controller)   // the takeover reading is 10
+        MockPumpManager.testOdometer = 12.5     // 2.5 U the records cannot explain
+        controller.forceReclaimToOwner(reason: "test: watch dead")
+        waitForState(controller, .owner)
+        waitUntil(timeout: 5, "gap booked") { self.lock.lock(); defer { self.lock.unlock() }; return !self.bookedGapDoses.isEmpty }
+        waitUntil(timeout: 5, "dosing resumed") { !controller.holdsAutomaticDosing }
+        XCTAssertEqual(controller.ledgerLast?.units, 12.5, "the return's reading")
+
+        // The next own reading, a long gap later: only what the pod delivered since the return.
+        readPod(controller, units: 12.6, at: Date().addingTimeInterval(.minutes(15)))
+        waitUntil(timeout: 5, "verdict") { self.diagMatching("back with the pod after") != nil }
         lock.lock(); let booked = bookedGapDoses; lock.unlock()
-        XCTAssertTrue(booked.isEmpty)
+        XCTAssertEqual(booked.count, 1, "the take-back's estimate, and nothing for the same insulin again (epoch \(grant.epoch))")
     }
 
     func testNoCheckOnAPhoneNotSetUpForSportModeAwayFromIt() throws {
@@ -3267,7 +3306,7 @@ extension PodLoanPhoneControllerTests {
 
         waitUntil(timeout: 5, "gap retired") { self.lock.lock(); defer { self.lock.unlock() }; return !self.deletedGapSyncs.isEmpty }
         lock.lock(); let deleted = deletedGapSyncs; lock.unlock()
-        XCTAssertTrue(deleted.first?.hasPrefix("LOAN-AUDIT-GAP-after-") ?? false)
+        XCTAssertTrue(deleted.first?.hasPrefix("LOAN-AUDIT-GAP-e") ?? false)
     }
 
     func testAGapBookingStandsAgainstRecordsOutsideTheGap() throws {
@@ -3305,10 +3344,9 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 5, "adopted") { controller.state == .loaned }
         controller.queue.sync {}
 
-        let base = controller.persisted.audit.base
+        let base = controller.ledgerLast
         XCTAssertEqual(base?.units ?? 0, 38.5, accuracy: 0.001)
-        XCTAssertEqual(base?.asOf, lastRead)
-        XCTAssertEqual(controller.persisted.audit.baseEpoch, 5)
+        XCTAssertEqual(base?.at, lastRead)
     }
 }
 

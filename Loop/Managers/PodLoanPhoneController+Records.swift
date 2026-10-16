@@ -75,13 +75,6 @@ extension PodLoanPhoneController {
             }
             handbackDiag(offer.epoch, "[seize] RETRO-ACK — offer for a SEIZED loan (token …\(String(token.uuidString.suffix(8)))); adopting epoch \(epoch)→\(offer.epoch) as .loaned, reconciling on the normal path")
 
-            // The audit's base is this phone's last reading of the pod while it held it: taken when it stood
-            // aside, else its last own reading. Insulin before it, the phone's own doses included, is already
-            // in its books; without a base the audit would count those doses as the watch's.
-            let wasYielding = yieldingToInferredLoan
-            let saved = persisted
-            let ownReading = saved.ownPumpTotal.flatMap { units in saved.ownPumpTotalAt.map { AuditBase(units: units, asOf: $0) } }
-            let keptBase = (wasYielding ? saved.audit.base : nil) ?? ownReading
             clearInferredLoanYield(reason: "retro-ack — the inferred loan is now the adopted loan e\(offer.epoch)")
             // Anchor the adopted loan at its earliest record, at most six hours back.
             let anchor = max(offer.events.map(\.record.startDate).min() ?? offer.handedBackAt,
@@ -93,14 +86,15 @@ extension PodLoanPhoneController {
                 $0.holdRenewedAt = offer.handedBackAt
                 $0.holdLapseNoticedAt = nil
                 $0.watchSilenceWarningsIssued = 0
-                $0.audit.base = keptBase
-                $0.audit.baseEpoch = keptBase == nil ? nil : offer.epoch
-                $0.audit.deliveredAtTakeover = nil
-                $0.audit.loanStartedAt = anchor
+                $0.loanStartedAt = anchor
             }
-            if let keptBase {
+            // The watch's window starts at its takeover reading when the offer carries it. With an older
+            // watch it starts at this phone's last reading, so the phone's own doses before it stay its own.
+            if let odometer = offer.odometer, let startAt = odometer.deliveredAtStartAt {
+                noteTakeoverReading(units: odometer.deliveredAtStart, at: startAt)
+            } else if let last = ledgerLast {
                 handbackDiag(offer.epoch, String(format: "audit base kept — the phone's last reading while it held the pod, %.2f U at %@",
-                                                 keptBase.units, ISO8601DateFormatter().string(from: keptBase.asOf)))
+                                                 last.units, ISO8601DateFormatter().string(from: last.at)))
             }
             stateDidChange(from: previous)
 
@@ -219,19 +213,19 @@ extension PodLoanPhoneController {
                 drainCont, drainFloor,
                 loanMin, allStagedEvents.count, offer.odometer?.freshenSucceeded == true ? "Y" : "N"))
 
-            // The verdict waits for the phone's own pod read.
+            // The verdict waits for the phone's own pod read, over the window from the ledger's last reading.
             if isFinal, let start = offer.odometer?.deliveredAtStart {
-                let windowStart = auditBase?.units ?? start
-                let windowExpected = auditBase.map {
+                let base = ledgerLast
+                let windowExpected = base.map {
                     LoanReconciler.expectedInsulin(events: allStagedEvents, schedule: deps.settings().basalRateSchedule,
-                                                   pulseUnits: pulseUnits, from: $0.asOf, to: offer.handedBackAt)
+                                                   pulseUnits: pulseUnits, from: $0.at, to: offer.handedBackAt)
                 } ?? expected
                 pendingHandbackAudit = PendingHandbackAudit(
-                    epoch: offer.epoch, deliveredAtStart: windowStart, expected: windowExpected,
+                    epoch: offer.epoch, deliveredAtStart: base?.units ?? start, windowStart: base?.at ?? loanStart,
+                    expected: windowExpected,
                     loanMinutes: loanMin, cycles: allStagedEvents.count,
                     watchLatest: offer.odometer?.deliveredLatest,
-                    watchFreshened: offer.odometer?.freshenSucceeded == true,
-                    takeoverUnits: start, wholeLoanExpected: expected)
+                    watchFreshened: offer.odometer?.freshenSucceeded == true)
             }
         }
 
@@ -336,10 +330,7 @@ extension PodLoanPhoneController {
                             self.deps.insulinHistoryRewritten(earliest)
                         }
 
-                        self.retireGapBookingIfExplained(
-                            offerEpoch: offer.epoch,
-                            dosesJustCommitted: sane,
-                            carbsJustCommitted: isStale ? 0 : outcome.carbs.count)
+                        self.retireEstimates(coveredBy: sane, carbs: isStale ? 0 : outcome.carbs.count, epoch: offer.epoch)
                         self.drainAfterCommit()
                     }
                 }
@@ -559,7 +550,6 @@ extension PodLoanPhoneController {
             stagedTombstones = []
             persistStaged()
             pendingHandbackAudit = nil
-            clearAuditAnchors()
             PhoneLog.event("mirror", "drain e\(epoch) closed UNDER live e\(liveEpoch) — books committed, audit moot, custody NOT resumed [mirror]")
             engageInferredLoanYield(evidence: "superseding loan e\(liveEpoch) streamed during the e\(epoch) drain")
             return
@@ -570,8 +560,6 @@ extension PodLoanPhoneController {
         staged = [:]
         stagedTombstones = []
         persistStaged()
-
-        updateState { $0.audit.deliveredAtGrant = nil }
     }
 
 }
