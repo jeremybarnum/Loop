@@ -52,9 +52,9 @@ final class LendableMockPumpManager: MockPumpManager, ExclusiveDeviceControl, Pu
         Self.testConnectionReleased = false
         return "test escalation"
     }
-    func refreshDeliveredUnits(completion: @escaping (Bool) -> Void) {
+    func refreshDeliveredUnits() async -> Bool {
         Self.testForcedReadCount += 1
-        completion(true)
+        return true
     }
 }
 
@@ -3268,6 +3268,27 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 5, "the estimate stands") { self.diagMatching("gap estimate STANDS") != nil }
         lock.lock(); let deleted = deletedGapSyncs; lock.unlock()
         XCTAssertTrue(deleted.isEmpty)
+    }
+
+    /// The phone dosed while it held the pod (the watch was off), then adopted the watch's loan: the
+    /// audit starts from the phone's last reading, so its own doses are not taken for the watch's.
+    func testAnAdoptedLoansAuditStartsFromThePhonesLastReading() throws {
+        let token = seizeCredentialOutstanding()
+        let controller = makeController()
+        let lastRead = Date().addingTimeInterval(-.minutes(2))
+        readPod(controller, units: 38.5, at: lastRead)   // after the phone's own bolus
+
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: 5, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [], tombstones: [], recovered: false, released: false,
+                          seizeToken: token)).transportDictionary())
+        waitUntil(timeout: 5, "adopted") { controller.state == .loaned }
+        controller.queue.sync {}
+
+        let base = controller.persisted.audit.base
+        XCTAssertEqual(base?.units ?? 0, 38.5, accuracy: 0.001)
+        XCTAssertEqual(base?.asOf, lastRead)
+        XCTAssertEqual(controller.persisted.audit.baseEpoch, 5)
     }
 }
 

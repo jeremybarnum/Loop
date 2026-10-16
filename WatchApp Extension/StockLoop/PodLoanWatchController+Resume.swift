@@ -125,9 +125,7 @@ extension PodLoanWatchController {
             SportLog.event("loan", "resume check SKIPPED — no earlier pod total to compare against")
             return
         }
-        let read = await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
-            odometer.refreshDeliveredUnits { done.resume(returning: $0) }
-        }
+        let read = await odometer.refreshDeliveredUnits()
         guard read, let now = odometer.deliveredUnits, now.at > last.at, now.units >= last.units else {
             SportLog.event("loan", "resume check SKIPPED — the pod did not answer with a newer total")
             return
