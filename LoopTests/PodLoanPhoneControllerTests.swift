@@ -76,6 +76,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     var cancelError: Error?
     /// What the phone's dose store returns.
     var phoneDoseHistory: [DoseEntry] = []
+    /// Parks the grant's temp cancel so a test can look at the phone while it is in flight.
+    var holdGrantCancel = false
+    var parkedGrantCancel: ((Error?) -> Void)?
     /// How many times the phone stopped automatic dosing over a reconciliation difference.
     var glucoseUploadSkips: [Set<String>] = []
     var decisionsUploadedBy: [Set<String>] = []
@@ -169,6 +172,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         cancelCalls = 0
         cancelError = nil
         phoneDoseHistory = []
+        holdGrantCancel = false
+        parkedGrantCancel = nil
         clock = Date()
         holdPumpEventWrites = false
         heldPumpEventWrite = nil
@@ -281,6 +286,11 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 guard let self = self else { return completion(nil) }
                 self.lock.lock(); self.cancelCalls += 1; let error = self.cancelError; self.lock.unlock()
                 completion(error)
+            },
+            cancelTempBasalForGrant: { [weak self] completion in
+                guard let self = self else { return completion(nil) }
+                self.lock.lock(); let hold = self.holdGrantCancel; if hold { self.parkedGrantCancel = completion }; self.lock.unlock()
+                if !hold { completion(nil) }
             },
             issueUrgentNotice: { [weak self] title, body in
                 guard let self = self else { return }
@@ -1220,6 +1230,25 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         guard case .grant(let grant)? = lastSent() else { return XCTFail("expected a grant") }
         XCTAssertEqual(grant.epoch, 112)
         XCTAssertEqual(controller.epoch, 112)
+    }
+
+    /// From the moment a grant begins, the phone's own loop doses nothing: a temp set between the
+    /// cancel and the release would go unacknowledged, and the driver's recovery would dial the lent pod.
+    func testAGrantInFlightHoldsAutomaticDosing() throws {
+        let controller = makeController()
+        XCTAssertFalse(controller.holdsAutomaticDosing)
+        lock.lock(); holdGrantCancel = true; lock.unlock()
+
+        controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+        waitUntil(timeout: 5, "cancel in flight") { self.lock.lock(); defer { self.lock.unlock() }; return self.parkedGrantCancel != nil }
+        XCTAssertTrue(controller.holdsAutomaticDosing, "held while the cancel is in flight, before the release")
+        XCTAssertEqual(controller.state, .owner)
+
+        lock.lock(); let release = parkedGrantCancel; lock.unlock()
+        let grantSent = expectSend()
+        release?(nil)
+        wait(for: [grantSent], timeout: 5)
+        XCTAssertTrue(controller.holdsAutomaticDosing, "and after it, by the release")
     }
 
     /// The fix: an explicit "I never got it" reclaims immediately instead of after 5 min 15 s.
