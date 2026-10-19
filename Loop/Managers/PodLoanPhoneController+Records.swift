@@ -22,7 +22,11 @@ extension PodLoanPhoneController {
             handbackDiag(batch.epoch, "batch DROPPED — \(batch.events.count) event(s) ev=\(batch.epoch) vs phone ev=\(epoch), state=\(state.rawValue) (recovered via the offer path if the watch still resends)")
 
             // Records are the watch saying it holds the pod: `LoanControl` decides (rows 6, 17, 19).
+            // A loan logs and sends nothing before it starts, so its first record, or the batch's
+            // send time, bounds its start: records that reach the phone before the watch's own report
+            // can still be refused under row 19.
             let claim = LoanControl.Claim(loan: batch.epoch > epoch ? .newer : .closed,
+                                          startedAt: (batch.events.map(\.loggedAt) + [batch.sentAt].compactMap { $0 }).min(),
                                           refusedBefore: refusedRevivedEpochs.contains(batch.epoch))
             let decision = decideAndAct(.watchClaims(claim), why: "records from the watch on e\(batch.epoch)", claimEpoch: batch.epoch)
             if batch.epoch > epoch, decision != .sendStop, newestForeignLoanEvidence.map({ batch.epoch >= $0.epoch }) ?? true {
