@@ -72,6 +72,10 @@ struct BolusConfirmationView: View {
         .onReceive(resetProgress) {
             self.progress.wrappedValue = 0
         }
+        #if targetEnvironment(simulator)
+        // A test in the Simulator cannot turn the crown: a double tap stands in for the turn.
+        .onTapGesture(count: 2) { self.progress.wrappedValue = 1 }
+        #endif
     }
 
     private var isFinished: Bool { abs(progress.wrappedValue) >= 1.0 }
