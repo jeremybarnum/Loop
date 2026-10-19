@@ -2934,7 +2934,7 @@ extension PodLoanPhoneControllerTests {
 
 }
 
-// MARK: - A silent watch is asked, then taken from (grid 9.9, 9.10)
+// MARK: - A silent watch is asked, then taken from (control rows 10 and 14)
 
 extension PodLoanPhoneControllerTests {
 
@@ -3402,7 +3402,7 @@ extension PodLoanPhoneControllerTests {
     }
 
     /// A short loan started away from the phone is caught at the next reading, however close: a gap is
-    /// not required (10-16 21:36, 5.8 min, +0.29 U looped on unseen).
+    /// not required.
     func testAShortWindowIsCheckedToo() throws {
         _ = seizeCredentialOutstanding()
         let controller = makeController()
@@ -3431,7 +3431,7 @@ extension PodLoanPhoneControllerTests {
     }
 
     /// The pump's report completes only once the reading's verdict is in the store, so the cycle the
-    /// report feeds sees the estimate (grid 9.8).
+    /// report feeds sees the estimate.
     func testTheReportCompletesOnlyOnceTheEstimateIsInTheStore() throws {
         _ = seizeCredentialOutstanding()
         let controller = makeController()
@@ -3509,7 +3509,7 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(base?.at, lastRead)
     }
 
-    /// The 10-16 00:27 case: the watch's takeover reading is older than the phone's last reading (the
+    /// The watch's takeover reading is older than the phone's last reading (the
     /// phone held the pod and dosed after the watch took over). The later reading keeps the window.
     func testAnOlderTakeoverReadingDoesNotMoveTheWindowBack() throws {
         let token = seizeCredentialOutstanding()
