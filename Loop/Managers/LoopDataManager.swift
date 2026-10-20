@@ -35,7 +35,6 @@ final class LoopDataManager {
     
     private let mealDetectionManager: MealDetectionManager
     
-    private let observedAbsorptionManager: ObservedAbsorptionManager
     
     private var absorptionRatio = 1.0
 
@@ -143,7 +142,6 @@ final class LoopDataManager {
             maximumBolus: settings.maximumBolus
         )
         
-        self.observedAbsorptionManager = ObservedAbsorptionManager()
         
         self.lockedPumpInsulinType = Locked(pumpInsulinType)
 
@@ -2897,158 +2895,61 @@ extension LoopDataManager: ServicesManagerDelegate {
 
 extension LoopDataManager {
     
-    /// Generates a glucose prediction effect of applying observed carb absorptionRatio to currentCarbEffects
-    ///
-    /// - Throws: LoopError.configurationError
-    private func updateObservedAbsorptionEffect() throws {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-        
-        let excludeCarbEntriesAfterThisTime = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 15 minutes ago
-        
-        let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
-        
-        guard let recentCarbEntries = recentCarbEntries,
-              carbEffect?.isEmpty == false else {
-            observedAbsorptionEffect = []
-            self.absorptionRatio = 1.0
-            return
-        }
-
-        let carbEntriesExcludingVeryRecentAndFuture = recentCarbEntries.filter {
-            $0.startDate <= excludeCarbEntriesAfterThisTime
-        }
-
-        guard !carbEntriesExcludingVeryRecentAndFuture.isEmpty else {
-            observedAbsorptionEffect = []
-            self.absorptionRatio = 1.0
-            return
-        }
-
-            
-        let carbEffectExcludeRecentAndFutureEntries = try carbStore.glucoseEffects(
-            of: carbEntriesExcludingVeryRecentAndFuture,
-            startingAt: carbEffectStart,
-            endingAt: nil,
-            effectVelocities: insulinCounteractionEffects
-        ) // these are the carb effects to be modified by the ratio
-        
-        // Judged on the same entries the ratio will scale.
-        let absorptionRatio = try self.observedAbsorptionManager.computeObservedAbsorptionRatio(
-            insulinCounteractionEffects: insulinCounteractionEffects
-        ) { readings in
-            try self.carbStore.glucoseEffects(
-                of: carbEntriesExcludingVeryRecentAndFuture,
-                startingAt: carbEffectStart,
-                endingAt: nil,
-                effectVelocities: readings
-            )
-        }
-        
-        observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffectExcludeRecentAndFutureEntries )
-        
-        self.absorptionRatio = absorptionRatio // updating class variable with latest value for logging and warning text purposes. the class variable is never an input to a calculation
-    }
-    
-    private func updateObservedAbsorptionPredictions() throws {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-        
-        
-        let usePendingInsulin = true
-        
-        do {
-                   try updateObservedAbsorptionEffect()
-               }
-        
-        catch { predictionLogger.info(" try updateObservedAbsorptionEffect() produced an error ")
-            
-               }
-     
-        
-        
-        // --- Prediction 1: self.predictionWithObservedAbsorption ---
-        // Standard effects  PLUS .observedAbsorptionEffect
-        // .all = [.carbs, .insulin, .momentum, .retrospection]
-        var inputs1: PredictionInputEffect = .all
-        inputs1.insert(.observedAbsorptionEffect)
-        // Resulting inputs1: [.insulin, .momentum, .retrospection, .observedAbsorptionEffect]
-        self.predictionWithObservedAbsorption = try self.predictGlucose(
-            using: inputs1,
-            includingPendingInsulin: usePendingInsulin
-        )
-        predictionLogger.info("**Generated predictionWithObservedAbsorption")
-        
-        // --- Prediction 2: self.predictionWithObservedAbsorptionAndZeroTemp ---
-        // Effects from Prediction 1 PLUS .suspend
-        var inputs2 = inputs1 // Start with effects from prediction 1
-        inputs2.insert(.suspend)
-        // Resulting inputs2: [.insulin, .momentum, .retrospection, .observedAbsorptionEffect, .suspend]
-        self.predictionWithObservedAbsorptionAndZeroTemp = try self.predictGlucose(
-            using: inputs2,
-            includingPendingInsulin: usePendingInsulin
-        )
-        predictionLogger.info("**Generated predictionWithObservedAbsorptionAndZeroTemp")
-        
-        
-        // --- Prediction 4: self.predictionWithZeroTemp (Standard Zero Temp) ---
-        //note it's 4 because no IRC used to be 3 and we got rid of it
-        // Effects: All standard effects PLUS .suspend
-        let inputs4: PredictionInputEffect = [.all, .suspend]
-        // Resulting inputs4: [.carbs, .insulin, .momentum, .retrospection, .suspend]
-        self.predictionWithZeroTemp = try self.predictGlucose(
-            using: inputs4,
-            includingPendingInsulin: usePendingInsulin
-        )
-        predictionLogger.info("**Generated predictionWithZeroTemp using inputs")
-       
-    }
-    
-    //TODO: the observed absorption prediction is a little off sometimes need to debug the generation of the effects
-
-    // MARK: - Observed Absorption Warning Pipeline
-
+    /// The predicted-low warning. Its ratio, its three forecasts and its decision are shared with
+    /// the watch (`LowGlucoseWarning.assess`); the phone fills in its ingredients and posts.
     private func processObservedAbsorptionAndIssueWarnings() {
         // This function assumes it's already being called on self.dataAccessQueue
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
-        do {
-            try self.updateObservedAbsorptionPredictions()
-            predictionLogger.info("**Updated specialized predictions (predictionWithObservedAbsorption, etc.) for warnings.")
-            logCombinedAbsorptionAndPredictions()
-        } catch {
-            predictionLogger.info("**Error updating observed absorption predictions: %{public}@", String(describing: error))
+        guard let glucose = glucoseStore.latestGlucose else {
+            decisionLogger.info("No glucose for warning check.")
             return
         }
-
-        // The decision is shared with the watch (`LowGlucoseWarning`): the phone gathers its inputs
-        // and posts the result its own way.
-        let currentDate = now()
         guard let displayUnit = settings.glucoseUnit else {
             decisionLogger.info("Missing glucose unit for warning check.")
             return
         }
+        let currentDate = now()
+        let carbEffectStart = currentDate.addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
         let correctionTarget = settings.glucoseTargetRangeSchedule?
             .quantityRange(at: currentDate.addingTimeInterval(30 * 60)).lowerBound.doubleValue(for: displayUnit) ?? 100.0
-        func series(_ values: [GlucoseValue]) -> [PredictedGlucoseValue] {
-            values.map { PredictedGlucoseValue(startDate: $0.startDate, quantity: $0.quantity) }
-        }
-        let inputs = LowGlucoseWarning.Inputs(
-            predictionWithZeroTemp: series(predictionWithZeroTemp),
-            predictionWithObservedAbsorption: series(predictionWithObservedAbsorption),
-            predictionWithObservedAbsorptionAndZeroTemp: series(predictionWithObservedAbsorptionAndZeroTemp),
-            absorptionRatio: absorptionRatio,
+
+        let assessment = LowGlucoseWarning.assess(LowGlucoseWarning.Ingredients(
+            glucose: glucose,
+            lastPumpDataDate: doseStore.lastAddedPumpData,
+            momentum: glucoseMomentumEffect ?? [],
+            carbEffect: carbEffect ?? [],
+            insulinEffect: insulinEffectIncludingPendingInsulin ?? [],
+            retrospectiveEffect: retrospectiveGlucoseEffect,
+            suspendEffect: suspendInsulinDeliveryEffect,
+            insulinCounteractionEffects: insulinCounteractionEffects,
+            carbEntries: recentCarbEntries ?? [],
+            carbEffectOf: { entries, readings in
+                try self.carbStore.glucoseEffects(of: entries, startingAt: carbEffectStart, endingAt: nil,
+                                                  effectVelocities: readings)
+            },
+            longestEffectDuration: doseStore.longestEffectDuration,
             suspendThreshold: settings.suspendThreshold?.quantity,
             displayUnit: displayUnit,
             insulinSensitivity: settings.insulinSensitivitySchedule?.value(at: currentDate),
             carbRatio: settings.carbRatioSchedule?.value(at: currentDate),
             correctionTarget: correctionTarget,
-            mostRecentCarbEntryDate: recentCarbEntries?.last?.startDate,
             lastNotificationTime: lastNotificationTime,
             now: currentDate,
             // The same snapshot of the Alert Management settings that a loan hands the watch.
-            settings: PodLoanPhoneController.lowBGWarningSettingsForGrant(lastNotificationTime: lastNotificationTime))
+            settings: PodLoanPhoneController.lowBGWarningSettingsForGrant(lastNotificationTime: lastNotificationTime)
+        )) { self.decisionLogger.info("%{public}@", $0) }
 
-        let (outcome, context) = LowGlucoseWarning.evaluate(inputs) { self.decisionLogger.info("%{public}@", $0) }
-        guard let context = context, let message = LowGlucoseWarning.messages(for: outcome, context: context) else {
+        // Kept for the Predicted Glucose screen, which can show the observed-absorption curve, and the logs.
+        absorptionRatio = assessment.absorptionRatio
+        observedAbsorptionEffect = assessment.observedAbsorptionEffect
+        predictionWithZeroTemp = assessment.predictionWithZeroTemp
+        predictionWithObservedAbsorption = assessment.predictionWithObservedAbsorption
+        predictionWithObservedAbsorptionAndZeroTemp = assessment.predictionWithObservedAbsorptionAndZeroTemp
+        logCombinedAbsorptionAndPredictions()
+
+        guard let context = assessment.context,
+              let message = LowGlucoseWarning.messages(for: assessment.outcome, context: context) else {
             decisionLogger.info("Handling outcome: No warning needed.")
             return
         }

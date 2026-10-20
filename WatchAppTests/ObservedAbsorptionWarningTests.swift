@@ -2,9 +2,10 @@
 //  ObservedAbsorptionWarningTests.swift
 //  WatchAppTests
 //
-//  The predicted-low warning's carb half, end to end: a declared meal, a stream of insulin
-//  counteraction readings showing how fast its carbs actually arrive, Loop's own carb math turning
-//  that into a carb effect, the shared absorption ratio, and the warning decision.
+//  The predicted-low warning's carb half, end to end: declared meals, a stream of insulin
+//  counteraction readings showing how fast their carbs actually arrive, Loop's own carb math, and
+//  the shared `LowGlucoseWarning.assess` — the same function the phone and the watch call — from
+//  the ratio through the three forecasts to the decision.
 //
 //  What the warning is for: once carbs are declared, the insulin for them is aboard. Loop's own
 //  forecast assumes every declared gram still arrives, only later if absorption is slow. The
@@ -12,16 +13,13 @@
 //  over the last 15 minutes with what Loop's carb forecast, as it stood 15 minutes ago, expected for
 //  those minutes, and scaling the remaining carbs by that ratio (fewer carbs, same timing).
 //
-//  The expectation is whatever the configured absorption model said at the time — linear,
-//  nonlinear or adaptive — so these tests run real LoopKit carb and insulin math, and the model is
+//  The expectation is whatever the configured absorption model said at the time, so the model is
 //  part of each test:
 //  - named models (`overrunOfOne`, `stretched`, `adaptive`) pin exact numbers, and do not depend on
 //    the app's constants;
 //  - `device` reads the app's own `LoopCoreConstants` (the minimum absorption rate and the
 //    absorption time overrun), and its tests assert only what must hold for any overrun from 1.0
 //    up to the minimum multiplier, so tuning the overrun does not break them.
-//  The three warning predictions are assembled as `WatchLoopManager.evaluateLowGlucoseWarning()`
-//  assembles them.
 //
 
 import XCTest
@@ -54,10 +52,12 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
 
     /// The carb model a test runs under: `overrun` sets the minimum absorption rate, `expectationOverrun`
     /// the expected curve (CarbStore's `absorptionTimeOverrun` and `expectedAbsorptionTimeOverrun`).
+    /// `scale` multiplies sensitivity and carb ratio, as an active override does.
     private struct CarbModel {
         var overrun = CarbMath.defaultAbsorptionTimeOverrun
         var expectationOverrun = CarbMath.defaultAbsorptionTimeOverrun
         var adaptive = false
+        var scale = (isf: 1.0, carbRatio: 1.0)
         /// What the phone and watch run, from the app's constants, capped as CarbStore caps it.
         static let device = CarbModel(
             overrun: LoopCoreConstants.minimumAbsorptionRateTimeMultiplier,
@@ -73,50 +73,59 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
 
     private struct Run {
         let measurement: ObservedAbsorptionManager.AbsorptionRatioMeasurement?
-        let ratio: Double
-        let outcome: LowGlucoseWarning.Outcome
+        let assessment: LowGlucoseWarning.Assessment
         let glucoseNow: Double
-        let loopMinimum: Double        // P1: Loop's own forecast, suspend applied
-        let warningMinimum: Double     // P2: the warning's forecast
+        var ratio: Double { assessment.absorptionRatio }
+        var outcome: LowGlucoseWarning.Outcome { assessment.outcome }
+        /// P1: Loop's own forecast, suspend applied.
+        var loopMinimum: Double { Self.minimum(assessment.predictionWithZeroTemp) }
+        /// P2: the warning's forecast.
+        var warningMinimum: Double { Self.minimum(assessment.predictionWithObservedAbsorption) }
+        static func minimum(_ p: [PredictedGlucoseValue]) -> Double {
+            p.map { $0.quantity.doubleValue(for: .milligramsPerDeciliter) }.min() ?? .nan
+        }
     }
 
-    private lazy var span = DateInterval(start: t0.addingTimeInterval(.days(-1)), end: t0.addingTimeInterval(.days(1)))
-    private lazy var carbRatios = [AbsoluteScheduleValue(startDate: span.start, endDate: span.end, value: carbRatio)]
-    private lazy var sensitivities = [AbsoluteScheduleValue(startDate: span.start, endDate: span.end,
-                                                            value: HKQuantity(unit: mgdl, doubleValue: isf))]
-    private lazy var sensitivitySchedule = InsulinSensitivitySchedule(
-        unit: mgdl, dailyItems: [RepeatingScheduleValue(startTime: 0, value: isf)],
-        timeZone: TimeZone(identifier: "UTC")!)!
-
-    /// The declared arrival rate at `minute` after `start`, in g/min: the entered grams over the
-    /// entered time, shaped by Loop's carb curve, zero during the start delay.
-    private func declaredRate(atMinute minute: Double) -> Double {
+    /// The declared arrival rate `minute` after an entry's start, in g/min: the entered grams over
+    /// the entered time, shaped by Loop's carb curve, zero during the start delay.
+    private func declaredRate(atMinute minute: Double, grams: Double? = nil) -> Double {
         let absorbing = minute - delay.minutes
         guard absorbing > 0 else { return 0 }
-        return carbGrams / declaredAbsorptionTime.minutes
+        return (grams ?? carbGrams) / declaredAbsorptionTime.minutes
             * piecewise.percentRateAtPercentTime(absorbing / declaredAbsorptionTime.minutes)
     }
 
-    /// Counteraction readings every 5 minutes from `start` until `minutes` later, showing carbs
-    /// arriving at `fraction(minute)` of the declared rate. Zero throughout = never eaten.
+    /// Counteraction readings every 5 minutes from `start` until `minutes` later, at `rate(minute)`
+    /// mg/dL/min, the minute being the reading's midpoint. Readings starting inside `gap` are missing.
     private func counteraction(from start: Date, minutes: Double, skipping gap: ClosedRange<Double>? = nil,
-                               _ fraction: (Double) -> Double) -> [GlucoseEffectVelocity] {
+                               rate: (Double) -> Double) -> [GlucoseEffectVelocity] {
         stride(from: 0.0, to: minutes, by: 5.0).compactMap { m in
             if let gap = gap, gap.contains(m) { return nil }
-            let rate = fraction(m + 2.5) * declaredRate(atMinute: m + 2.5) * csf
             return GlucoseEffectVelocity(startDate: start.addingTimeInterval(.minutes(m)),
                                          endDate: start.addingTimeInterval(.minutes(m + 5)),
-                                         quantity: HKQuantity(unit: mgdlPerMinute, doubleValue: rate))
+                                         quantity: HKQuantity(unit: mgdlPerMinute, doubleValue: rate(m + 2.5)))
         }
+    }
+
+    private func schedules(_ model: CarbModel) -> (carbRatios: [AbsoluteScheduleValue<Double>],
+                                                    sensitivities: [AbsoluteScheduleValue<HKQuantity>],
+                                                    sensitivity: InsulinSensitivitySchedule) {
+        let start = t0.addingTimeInterval(.days(-1)), end = t0.addingTimeInterval(.days(1))
+        let isf = self.isf * model.scale.isf
+        return ([AbsoluteScheduleValue(startDate: start, endDate: end, value: carbRatio * model.scale.carbRatio)],
+                [AbsoluteScheduleValue(startDate: start, endDate: end, value: HKQuantity(unit: mgdl, doubleValue: isf))],
+                InsulinSensitivitySchedule(unit: mgdl, dailyItems: [RepeatingScheduleValue(startTime: 0, value: isf)],
+                                           timeZone: TimeZone(identifier: "UTC")!)!)
     }
 
     /// The carb effect exactly as CarbStore builds it from a set of readings.
     private func carbEffect(_ entries: [NewCarbEntry], model: CarbModel, from start: Date,
                             readings: [GlucoseEffectVelocity]) -> [GlucoseEffect] {
-        entries.map(
+        let s = schedules(model)
+        return entries.map(
             to: readings,
-            carbRatio: carbRatios,
-            insulinSensitivity: sensitivities,
+            carbRatio: s.carbRatios,
+            insulinSensitivity: s.sensitivities,
             absorptionTimeOverrun: model.overrun,
             defaultAbsorptionTime: declaredAbsorptionTime,
             delay: delay,
@@ -125,66 +134,63 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
             adaptiveAbsorptionRateEnabled: model.adaptive
         ).dynamicGlucoseEffects(
             from: start,
-            carbRatios: carbRatios,
-            insulinSensitivities: sensitivities,
+            carbRatios: s.carbRatios,
+            insulinSensitivities: s.sensitivities,
             defaultAbsorptionTime: declaredAbsorptionTime,
             absorptionModel: piecewise,
             delay: delay,
             delta: .minutes(5))
     }
 
-    private func meal(at start: Date) -> NewCarbEntry {
-        NewCarbEntry(quantity: HKQuantity(unit: .gram(), doubleValue: carbGrams),
+    private func meal(at start: Date, grams: Double? = nil) -> NewCarbEntry {
+        NewCarbEntry(quantity: HKQuantity(unit: .gram(), doubleValue: grams ?? carbGrams),
                      startDate: start, foodType: nil, absorptionTime: declaredAbsorptionTime)
     }
 
+    /// One meal, its carbs arriving at `fraction(minute)` of the declared rate.
     private func run(_ label: String, model: CarbModel = .device, mealAt start: Date? = nil,
                      judgedAtMinute minutes: Double = 60, skipping gap: ClosedRange<Double>? = nil,
                      arriving fraction: @escaping (Double) -> Double) -> Run {
         let start = start ?? t0
-        let now = start.addingTimeInterval(.minutes(minutes))
-        let entries = [meal(at: start)]
-        let ice = counteraction(from: start, minutes: minutes, skipping: gap, fraction)
+        return assess(label, model: model, start: start, minutes: minutes, entries: [meal(at: start)],
+                      readings: counteraction(from: start, minutes: minutes, skipping: gap) {
+                          fraction($0) * self.declaredRate(atMinute: $0) * self.csf
+                      })
+    }
 
-        let manager = ObservedAbsorptionManager(test_currentDate: now)
-        let effect: ([GlucoseEffectVelocity]) -> [GlucoseEffect] = { readings in
+    /// The shared assessment, fed as the devices feed it.
+    private func assess(_ label: String, model: CarbModel, start: Date, minutes: Double,
+                        entries: [NewCarbEntry], readings ice: [GlucoseEffectVelocity],
+                        glucoseAge: TimeInterval = 0, pumpDataAge: TimeInterval? = 0) -> Run {
+        let now = start.addingTimeInterval(.minutes(minutes))
+        let effect: ([NewCarbEntry], [GlucoseEffectVelocity]) -> [GlucoseEffect] = { entries, readings in
             self.carbEffect(entries, model: model, from: start, readings: readings)
         }
-        let measurement = manager.measureAbsorptionRatio(insulinCounteractionEffects: ice, carbEffect: effect)
-        let ratio = manager.computeObservedAbsorptionRatio(insulinCounteractionEffects: ice, carbEffect: effect)
+        // For the numbers only: what the ratio saw, for the same entries the assessment judges.
+        let judged = entries.filter { $0.startDate <= now.addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow) }
+        let measurement = ObservedAbsorptionManager().measureAbsorptionRatio(insulinCounteractionEffects: ice) {
+            effect(judged, $0)
+        }
 
-        // What the device builds every cycle: the carb effect from all readings, and the warning's
-        // extra effect on top of it. The meal is older than the recent-carb exclusion, so the
-        // effect to scale is the whole carb effect.
-        let carbEffectNow = effect(ice)
-        let observedAbsorptionEffect = manager.generateObservedAbsorptionEffects(absorptionRatio: ratio,
-                                                                                 carbEffects: carbEffectNow)
-
+        let sensitivity = schedules(model).sensitivity
         let insulinModels = PresetInsulinModelProvider(defaultRapidActingModel: nil)
         let insulinEffect = [DoseEntry(type: .bolus, startDate: start, endDate: start, value: bolusUnits, unit: .units)]
             .glucoseEffects(insulinModelProvider: insulinModels, longestEffectDuration: .hours(6),
-                            insulinSensitivity: sensitivitySchedule)
+                            insulinSensitivity: sensitivity)
         let suspendEffect = [DoseEntry(type: .tempBasal, startDate: now, endDate: now.addingTimeInterval(.hours(6)),
                                        value: -1.0, unit: .unitsPerHour)]
             .glucoseEffects(insulinModelProvider: insulinModels, longestEffectDuration: .hours(6),
-                            insulinSensitivity: sensitivitySchedule)
+                            insulinSensitivity: sensitivity)
 
-        // BG now from what actually happened — the bolus so far plus the carbs that actually
-        // arrived — not from Loop's carb effect, which below its minimum curve counts carbs it
-        // assumes arrived rather than ones that did.
+        // BG now from what actually happened — the bolus so far plus the carbs that actually arrived —
+        // not from Loop's carb effect, which below its minimum curve counts carbs it assumes arrived.
         let insulinSoFar = ObservedAbsorptionManager.cumulativeEffect(insulinEffect, at: now)
         let carbsSoFar = ice.reduce(0) {
             $0 + $1.quantity.doubleValue(for: mgdlPerMinute) * $1.endDate.timeIntervalSince($1.startDate).minutes
         }
         let glucoseNow = startingGlucose + insulinSoFar + carbsSoFar
-        let glucose = SimpleGlucoseValue(startDate: now, quantity: HKQuantity(unit: mgdl, doubleValue: glucoseNow))
-
-        func predict(_ extra: [[GlucoseEffect]]) -> [PredictedGlucoseValue] {
-            LoopMath.predictGlucose(startingAt: glucose, momentum: [], effects: [carbEffectNow, insulinEffect] + extra)
-        }
-        let p1 = predict([suspendEffect])
-        let p2 = predict([observedAbsorptionEffect])
-        let p3 = predict([observedAbsorptionEffect, suspendEffect])
+        let glucose = SimpleGlucoseValue(startDate: now.addingTimeInterval(-glucoseAge),
+                                         quantity: HKQuantity(unit: mgdl, doubleValue: glucoseNow))
 
         // Timing windows opened wide on purpose: these tests are about whether the carb forecast
         // predicts a low at all, not when the user is told. The gates have their own tests.
@@ -196,29 +202,32 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
             nightStartMinutes: 22 * 60 + 30, nightEndMinutes: 6 * 60 + 30,
             glucoseUnitString: mgdl.unitString, lastNotificationTime: nil)
 
-        let (outcome, _) = LowGlucoseWarning.evaluate(LowGlucoseWarning.Inputs(
-            predictionWithZeroTemp: p1,
-            predictionWithObservedAbsorption: p2,
-            predictionWithObservedAbsorptionAndZeroTemp: p3,
-            absorptionRatio: ratio,
+        let assessment = LowGlucoseWarning.assess(LowGlucoseWarning.Ingredients(
+            glucose: glucose,
+            lastPumpDataDate: pumpDataAge.map { now.addingTimeInterval(-$0) },
+            momentum: [],
+            carbEffect: effect(entries, ice),
+            insulinEffect: insulinEffect,
+            retrospectiveEffect: [],
+            suspendEffect: suspendEffect,
+            insulinCounteractionEffects: ice,
+            carbEntries: entries,
+            carbEffectOf: effect,
+            longestEffectDuration: .hours(6),
             suspendThreshold: HKQuantity(unit: mgdl, doubleValue: 70),
             displayUnit: mgdl,
-            insulinSensitivity: isf, carbRatio: carbRatio,
+            insulinSensitivity: isf * model.scale.isf,
+            carbRatio: carbRatio * model.scale.carbRatio,
             correctionTarget: 100,
-            mostRecentCarbEntryDate: start,
             lastNotificationTime: nil,
             now: now,
             settings: settings))
 
-        func minimum(_ p: [PredictedGlucoseValue]) -> Double {
-            p.map { $0.quantity.doubleValue(for: mgdl) }.min() ?? .nan
-        }
-        let result = Run(measurement: measurement, ratio: ratio, outcome: outcome, glucoseNow: glucoseNow,
-                         loopMinimum: minimum(p1), warningMinimum: minimum(p2))
+        let result = Run(measurement: measurement, assessment: assessment, glucoseNow: glucoseNow)
         print(String(format: "[observed-absorption] %@ · minimum %.1f expected %.1f%@ · ratio %.2f (observed %.1f / expected %.1f mg/dL) · BG now %.0f · Loop min %.0f · warning min %.0f · %@",
-                     label, model.overrun, model.expectationOverrun, model.adaptive ? " adaptive" : "", ratio,
+                     label, model.overrun, model.expectationOverrun, model.adaptive ? " adaptive" : "", result.ratio,
                      measurement?.observedEffect ?? .nan, measurement?.expectedEffect ?? .nan,
-                     glucoseNow, result.loopMinimum, result.warningMinimum, String(describing: outcome)))
+                     glucoseNow, result.loopMinimum, result.warningMinimum, String(describing: result.outcome)))
         return result
     }
 
@@ -321,6 +330,110 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
                               arriving: slowdown).ratio, 0.5)
     }
 
+    // MARK: - Rulings (2026-10-20)
+
+    /// (1) Overlapping meals share one blended ratio: a main course on pace and a dessert whose carbs
+    /// never arrive read somewhere between the two.
+    func testOverlappingMealsShareOneBlendedRatio() {
+        let dessert = meal(at: t0.addingTimeInterval(.minutes(20)), grams: 30)
+        let readings = counteraction(from: t0, minutes: 60) { self.declaredRate(atMinute: $0) * self.csf }
+        let r = assess("main on pace + dessert never arrives", model: .overrunOfOne, start: t0, minutes: 60,
+                       entries: [meal(at: t0), dessert], readings: readings)
+        XCTAssertGreaterThan(r.ratio, 0.1)
+        XCTAssertLessThan(r.ratio, 0.9)
+    }
+
+    /// (2) Rescue carbs eaten in the last 15 minutes are kept out of the expectation and the scaling,
+    /// but their arrival counts in the observed rate: they really are raising BG, so the ratio rises.
+    func testRecentRescueCarbsRaiseTheRatio() {
+        let tabs = NewCarbEntry(quantity: HKQuantity(unit: .gram(), doubleValue: 15),
+                                startDate: t0.addingTimeInterval(.minutes(48)), foodType: nil, absorptionTime: .minutes(30))
+        let mealStopped = { (m: Double) in m < 45 ? 1.5 * self.declaredRate(atMinute: m) * self.csf : 0 }
+        let tabsArriving = { (m: Double) in m > 50 ? 0.5 * self.csf : 0 }   // 0.5 g/min from minute 50
+        let without = assess("meal stopped", model: .overrunOfOne, start: t0, minutes: 60,
+                             entries: [meal(at: t0)], readings: counteraction(from: t0, minutes: 60, rate: mealStopped))
+        let with = assess("meal stopped + tabs", model: .overrunOfOne, start: t0, minutes: 60,
+                          entries: [meal(at: t0), tabs],
+                          readings: counteraction(from: t0, minutes: 60) { mealStopped($0) + tabsArriving($0) })
+        XCTAssertEqual(without.ratio, 0, accuracy: 0.01)
+        XCTAssertGreaterThan(with.ratio, 0.2)
+    }
+
+    /// (3) Exercise mid-meal: counteraction below zero reads as nothing arriving, and warns — the
+    /// warning's job is the low, not the diagnosis.
+    func testExerciseMidMealWarns() {
+        let r = run("exercise", model: .overrunOfOne, arriving: { $0 < 45 ? 1.0 : -0.5 })
+        XCTAssertEqual(r.ratio, 0)
+        XCTAssertNotEqual(r.outcome, .none)
+    }
+
+    /// (4) An edited entry is the truth, backwards too: the same arrival judged against a smaller
+    /// corrected entry reads higher.
+    func testAnEditedEntryIsJudgedAsEdited() {
+        let readings = counteraction(from: t0, minutes: 60) { 0.5 * self.declaredRate(atMinute: $0) * self.csf }
+        let asEntered = assess("45 g", model: .overrunOfOne, start: t0, minutes: 60,
+                               entries: [meal(at: t0)], readings: readings)
+        let corrected = assess("edited to 30 g", model: .overrunOfOne, start: t0, minutes: 60,
+                               entries: [meal(at: t0, grams: 30)], readings: readings)
+        XCTAssertGreaterThan(corrected.ratio, asEntered.ratio * 1.3)
+    }
+
+    /// (5) A noisy reading in the middle of the window cancels: its jump up and its jump back.
+    func testANoisyReadingInTheMiddleOfTheWindowCancels() {
+        let clean = { (m: Double) in 0.5 * self.declaredRate(atMinute: m) * self.csf }
+        let spike = { (m: Double) -> Double in   // +3 mg/dL/min for 50–55, −3 for 55–60: one reading 15 mg/dL high
+            m > 50 && m < 55 ? clean(m) + 3 : (m > 55 && m < 60 ? clean(m) - 3 : clean(m))
+        }
+        let a = assess("clean", model: .overrunOfOne, start: t0, minutes: 60, entries: [meal(at: t0)],
+                       readings: counteraction(from: t0, minutes: 60, rate: clean))
+        let b = assess("one noisy reading", model: .overrunOfOne, start: t0, minutes: 60, entries: [meal(at: t0)],
+                       readings: counteraction(from: t0, minutes: 60, rate: spike))
+        XCTAssertEqual(a.ratio, b.ratio, accuracy: 0.01)
+    }
+
+    /// (6) An override divides sensitivity and carb ratio by the same factor, so a gram is worth the
+    /// same and the ratio is unchanged.
+    func testAnOverrideDoesNotChangeTheRatio() {
+        let override = TemporaryScheduleOverrideSettings(unit: mgdl, targetRange: nil, insulinNeedsScaleFactor: 0.5)
+        var withOverride = CarbModel.overrunOfOne
+        withOverride.scale = (isf: override.insulinSensitivityMultiplier!, carbRatio: override.carbRatioMultiplier!)
+        let plain = run("50%", model: .overrunOfOne, arriving: steady(0.5))
+        let overridden = run("50%, 50% override", model: withOverride, arriving: steady(0.5))
+        XCTAssertEqual(plain.ratio, overridden.ratio, accuracy: 0.001)
+    }
+
+    // MARK: - Loop's recency rules
+
+    func testOldGlucoseMakesNoWarningAndNoForecast() {
+        let readings = counteraction(from: t0, minutes: 60) { _ in 0 }
+        let r = assess("glucose 20 min old", model: .overrunOfOne, start: t0, minutes: 60,
+                       entries: [meal(at: t0)], readings: readings, glucoseAge: .minutes(20))
+        XCTAssertEqual(r.outcome, .none)
+        XCTAssertTrue(r.assessment.predictionWithObservedAbsorption.isEmpty)
+    }
+
+    func testFutureGlucoseMakesNoWarning() {
+        let readings = counteraction(from: t0, minutes: 60) { _ in 0 }
+        XCTAssertEqual(assess("glucose 10 min ahead", model: .overrunOfOne, start: t0, minutes: 60,
+                              entries: [meal(at: t0)], readings: readings, glucoseAge: .minutes(-10)).outcome, .none)
+    }
+
+    func testStaleOrMissingPumpDataMakesNoWarning() {
+        let readings = counteraction(from: t0, minutes: 60) { _ in 0 }
+        for age in [TimeInterval.minutes(20), nil] {
+            XCTAssertEqual(assess("pump data \(String(describing: age))", model: .overrunOfOne, start: t0, minutes: 60,
+                                  entries: [meal(at: t0)], readings: readings, pumpDataAge: age).outcome, .none)
+        }
+    }
+
+    /// The same never-eaten meal does warn with fresh data, so the three tests above fail for the
+    /// reason they name.
+    func testFreshDataDoesWarn() {
+        let readings = counteraction(from: t0, minutes: 60) { _ in 0 }
+        XCTAssertNotEqual(assess("fresh", model: .overrunOfOne, start: t0, minutes: 60,
+                                 entries: [meal(at: t0)], readings: readings).outcome, .none)
+    }
+
     // MARK: - The measurement's mechanics
 
     /// A meal and its readings off Loop's 5-minute grid. The window ends on the grid (here 100 s
@@ -344,14 +457,7 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
 
     /// Two readings missing: too little evidence to judge, so no adjustment.
     func testTooFewReadingsMakeNoAdjustment() {
-        let r = run("0%, 45–55 missing", model: .overrunOfOne, skipping: 45...50, arriving: steady(0))
-        XCTAssertEqual(r.ratio, 1.0)
-    }
-
-    /// Counteraction below zero (insulin acting faster than modelled, exercise) is not negative carbs.
-    func testNegativeCounteractionReadsZeroNotNegative() {
-        let r = run("negative", model: .overrunOfOne, arriving: { $0 < 45 ? 1.0 : -0.5 })
-        XCTAssertEqual(r.ratio, 0)
+        XCTAssertEqual(run("0%, 45–55 missing", model: .overrunOfOne, skipping: 45...50, arriving: steady(0)).ratio, 1.0)
     }
 
     /// Long after the entry has finished, Loop expects nothing, so there is nothing to scale.

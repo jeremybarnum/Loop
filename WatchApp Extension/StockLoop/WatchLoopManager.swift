@@ -2490,17 +2490,8 @@ final class WatchLoopManager {
     // MARK: - Predicted-low warning (INFORMATION ONLY)
 
     /// Everything in this section exists to decide whether to post a notification. None of it is
-    /// reachable from dosing: `predictGlucose()` is untouched, the two extra effects below are
-    /// appended ONLY inside `warningPrediction(extraEffects:)`, and `absorptionRatio` is message
-    /// text. The phone enforces the same separation by keeping these out of `PredictionInputEffect.all`.
-    private let observedAbsorptionManager = ObservedAbsorptionManager()
-
-    /// The amount to add to the carb effect so absorption continues at the OBSERVED rate rather
-    /// than the declared one. Warning predictions only.
-    private var observedAbsorptionEffect: [GlucoseEffect] = []
-
-    /// Observed ÷ expected carb velocity. Message text and logging; never an input to a calculation.
-    private var absorptionRatio: Double = 1.0
+    /// reachable from dosing: `predictGlucose()` is untouched, and the warning's ratio, forecasts and
+    /// decision are built by the shared `LowGlucoseWarning.assess` from values this manager hands it.
 
     /// The glucose effect of zero-temping from now to the end of insulin action. Warning predictions only.
     private var suspendInsulinDeliveryEffect: [GlucoseEffect] = []
@@ -2539,78 +2530,6 @@ final class WatchLoopManager {
     /// Two readings farther apart than this are not a consecutive pair, so the artifact test does
     /// not apply. One G7 interval is 5 min; this allows a little jitter without spanning a gap.
     private static let compressionCheckMaximumGap: TimeInterval = 6 * 60
-
-    /// A read-only mirror of `predictGlucose()` that can append extra effect timelines. Same
-    /// inputs, same order, same tail extension — the only difference is what is added and that it
-    /// never throws. Uses the pending-insulin effect because the phone's warning arm does
-    /// (`usePendingInsulin = true`): a bolus already commanded should count against a predicted low.
-    private func warningPrediction(extraEffects: [[GlucoseEffect]]) -> [PredictedGlucoseValue] {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-        guard let glucose = glucoseStore.latestGlucose else { return [] }
-
-        var effects: [[GlucoseEffect]] = []
-        if let carbEffect = self.carbEffect { effects.append(carbEffect) }
-        if let insulinEffect = self.insulinEffectIncludingPendingInsulin { effects.append(insulinEffect) }
-        effects.append(retrospectiveGlucoseEffect)
-        effects.append(contentsOf: extraEffects)
-
-        let momentum = self.glucoseMomentumEffect ?? []
-
-        var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)
-        let finalDate = glucose.startDate.addingTimeInterval(doseStore.longestEffectDuration)
-        if let last = prediction.last, last.startDate < finalDate {
-            prediction.append(PredictedGlucoseValue(startDate: finalDate, quantity: last.quantity))
-        }
-        return prediction
-    }
-
-    /// Mirrors the phone's `updateObservedAbsorptionEffect()`. Very recent and future carb entries
-    /// are excluded because they are usually rescue carbs — scaling those down by an observed
-    /// shortfall would argue for treating a low that is already being treated.
-    private func updateObservedAbsorptionEffect() {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-
-        guard let recentCarbEntries = recentCarbEntries,
-              self.carbEffect?.isEmpty == false else {
-            observedAbsorptionEffect = []
-            absorptionRatio = 1.0
-            return
-        }
-
-        let cutoff = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)
-        let entries = recentCarbEntries.filter { $0.startDate <= cutoff }
-        guard !entries.isEmpty else {
-            observedAbsorptionEffect = []
-            absorptionRatio = 1.0
-            return
-        }
-
-        do {
-            let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
-            let effectsToScale = try carbStore.glucoseEffects(
-                of: entries,
-                startingAt: carbEffectStart,
-                endingAt: nil,
-                effectVelocities: insulinCounteractionEffects)
-
-            // Judged on the same entries the ratio will scale.
-            let ratio = try observedAbsorptionManager.computeObservedAbsorptionRatio(
-                insulinCounteractionEffects: insulinCounteractionEffects
-            ) { readings in
-                try carbStore.glucoseEffects(of: entries, startingAt: carbEffectStart,
-                                             endingAt: nil, effectVelocities: readings)
-            }
-
-            observedAbsorptionEffect = observedAbsorptionManager.generateObservedAbsorptionEffects(
-                absorptionRatio: ratio, carbEffects: effectsToScale)
-            absorptionRatio = ratio
-        } catch {
-            // Warning-only: a failure here costs a warning, never a dose.
-            observedAbsorptionEffect = []
-            absorptionRatio = 1.0
-            SportLog.event("lowbg", "observed absorption effect failed — \(error)")
-        }
-    }
 
     /// Mirrors the phone: synthesize the negative-basal doses that a full suspend would represent
     /// over one insulin action duration, and turn them into a glucose effect. These doses are
@@ -2677,12 +2596,9 @@ final class WatchLoopManager {
             }
         }
 
-        updateObservedAbsorptionEffect()
         updateSuspendInsulinDeliveryEffect()
 
-        let p1 = warningPrediction(extraEffects: [suspendInsulinDeliveryEffect])
-        let p2 = warningPrediction(extraEffects: [observedAbsorptionEffect])
-        let p3 = warningPrediction(extraEffects: [observedAbsorptionEffect, suspendInsulinDeliveryEffect])
+        guard let glucose = glucoseStore.latestGlucose else { return }
 
         // Resolved by comparison rather than `HKUnit(from:)`, which raises on an unrecognised
         // string — a crash on the device currently driving the pod.
@@ -2690,30 +2606,40 @@ final class WatchLoopManager {
             ? .millimolesPerLiter
             : .milligramsPerDeciliter
 
-        // Raw schedules, matching the phone's warning arm. The dosing path applies override history;
+        // Raw schedules, matching the phone's warning. The dosing path applies override history;
         // this deliberately does not, so a warning reads the same on both devices.
         let currentDate = now()
         let correctionTarget = settings.glucoseTargetRangeSchedule?
             .quantityRange(at: currentDate.addingTimeInterval(30 * 60)).lowerBound.doubleValue(for: unit)
+        let carbEffectStart = currentDate.addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
 
-        let inputs = LowGlucoseWarning.Inputs(
-            predictionWithZeroTemp: p1,
-            predictionWithObservedAbsorption: p2,
-            predictionWithObservedAbsorptionAndZeroTemp: p3,
-            absorptionRatio: absorptionRatio,
+        let assessment = LowGlucoseWarning.assess(LowGlucoseWarning.Ingredients(
+            glucose: glucose,
+            lastPumpDataDate: lastPumpDataDate,
+            momentum: glucoseMomentumEffect ?? [],
+            carbEffect: carbEffect ?? [],
+            insulinEffect: insulinEffectIncludingPendingInsulin ?? [],
+            retrospectiveEffect: retrospectiveGlucoseEffect,
+            suspendEffect: suspendInsulinDeliveryEffect,
+            insulinCounteractionEffects: insulinCounteractionEffects,
+            carbEntries: recentCarbEntries ?? [],
+            carbEffectOf: { entries, readings in
+                try self.carbStore.glucoseEffects(of: entries, startingAt: carbEffectStart, endingAt: nil,
+                                                  effectVelocities: readings)
+            },
+            longestEffectDuration: doseStore.longestEffectDuration,
             suspendThreshold: settings.suspendThreshold?.quantity,
             displayUnit: unit,
             insulinSensitivity: settings.insulinSensitivitySchedule?.value(at: currentDate),
             carbRatio: settings.carbRatioSchedule?.value(at: currentDate),
             correctionTarget: correctionTarget,
-            mostRecentCarbEntryDate: recentCarbEntries?.last?.startDate,
             lastNotificationTime: lastLowBGWarningTime ?? settingsForWarning.lastNotificationTime,
             now: currentDate,
-            settings: settingsForWarning)
+            settings: settingsForWarning
+        )) { SportLog.event("lowbg", $0) }
 
-        let (outcome, context) = LowGlucoseWarning.evaluate(inputs) { SportLog.event("lowbg", $0) }
-        guard outcome != .none, let context = context,
-              let message = LowGlucoseWarning.messages(for: outcome, context: context) else { return }
+        guard let context = assessment.context,
+              let message = LowGlucoseWarning.messages(for: assessment.outcome, context: context) else { return }
 
         WatchLowGlucoseWarning.post(title: message.title, body: message.body)
         lastLowBGWarningTime = currentDate

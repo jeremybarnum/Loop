@@ -201,6 +201,135 @@ enum LowGlucoseWarning {
         }
     }
 
+    // MARK: - Assessment: from a cycle's ingredients to a decision
+
+    /// What a device has at the end of a loop cycle that the warning needs — raw ingredients only.
+    /// The warning's ratio, its three forecasts and its decision are all built from these, here,
+    /// once for both devices; each device only fills this in from its own stores and state.
+    struct Ingredients<Entry: CarbEntry> {
+        /// The latest glucose; the forecasts start from it.
+        let glucose: GlucoseValue
+        /// When this device last received pump data — from its own clock (the watch must not use
+        /// `doseStore.lastAddedPumpData`).
+        let lastPumpDataDate: Date?
+        let momentum: [GlucoseEffect]
+        let carbEffect: [GlucoseEffect]
+        /// Including insulin already commanded but not yet delivered: a bolus in flight should count
+        /// against a predicted low.
+        let insulinEffect: [GlucoseEffect]
+        let retrospectiveEffect: [GlucoseEffect]
+        /// The glucose effect of zero-temping from now to the end of insulin action.
+        let suspendEffect: [GlucoseEffect]
+        let insulinCounteractionEffects: [GlucoseEffectVelocity]
+        let carbEntries: [Entry]
+        /// The device's carb store: the carb effect of `entries`, computed from `readings`.
+        let carbEffectOf: (_ entries: [Entry], _ readings: [GlucoseEffectVelocity]) throws -> [GlucoseEffect]
+        /// How far the forecasts must reach (the longest insulin action).
+        let longestEffectDuration: TimeInterval
+        let suspendThreshold: HKQuantity?
+        let displayUnit: HKUnit
+        let insulinSensitivity: Double?
+        let carbRatio: Double?
+        let correctionTarget: Double?
+        let lastNotificationTime: Date?
+        let now: Date
+        let settings: LoanLowBGWarningSettings
+    }
+
+    struct Assessment {
+        let outcome: Outcome
+        let context: Context?
+        /// Carbs actually arriving ÷ carbs Loop expected (1.0 when there is nothing to judge).
+        let absorptionRatio: Double
+        /// What the ratio adds to the carb effect: the remaining carbs scaled, same timing.
+        let observedAbsorptionEffect: [GlucoseEffect]
+        /// P1, P2, P3 — empty when the data is too old to forecast from.
+        let predictionWithZeroTemp: [PredictedGlucoseValue]
+        let predictionWithObservedAbsorption: [PredictedGlucoseValue]
+        let predictionWithObservedAbsorptionAndZeroTemp: [PredictedGlucoseValue]
+    }
+
+    static func assess<Entry>(_ i: Ingredients<Entry>, log: (String) -> Void = { _ in }) -> Assessment {
+        // The ratio and the effect it adds. Very recent and future entries are left out of both the
+        // expectation and the scaling: they are usually rescue carbs, and scaling those down would
+        // argue for treating a low that is already being treated.
+        var ratio = 1.0
+        var observedAbsorptionEffect: [GlucoseEffect] = []
+        let cutoff = i.now.addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)
+        let judged = i.carbEntries.filter { $0.startDate <= cutoff }
+        if !judged.isEmpty, !i.carbEffect.isEmpty {
+            do {
+                let manager = ObservedAbsorptionManager()
+                ratio = try manager.computeObservedAbsorptionRatio(insulinCounteractionEffects: i.insulinCounteractionEffects) {
+                    try i.carbEffectOf(judged, $0)
+                }
+                observedAbsorptionEffect = manager.generateObservedAbsorptionEffects(
+                    absorptionRatio: ratio, carbEffects: try i.carbEffectOf(judged, i.insulinCounteractionEffects))
+            } catch {
+                // Warning-only: a failure here costs a warning, never a dose.
+                ratio = 1.0
+                observedAbsorptionEffect = []
+                log("observed absorption effect failed — \(error)")
+            }
+        }
+
+        func assessment(_ outcome: Outcome, _ context: Context?, _ p1: [PredictedGlucoseValue] = [],
+                        _ p2: [PredictedGlucoseValue] = [], _ p3: [PredictedGlucoseValue] = []) -> Assessment {
+            Assessment(outcome: outcome, context: context, absorptionRatio: ratio,
+                       observedAbsorptionEffect: observedAbsorptionEffect,
+                       predictionWithZeroTemp: p1, predictionWithObservedAbsorption: p2,
+                       predictionWithObservedAbsorptionAndZeroTemp: p3)
+        }
+
+        // Loop's own recency rules for forecasting: never warn from old or future glucose, or from
+        // pump data too old to know what insulin is aboard.
+        let glucoseAge = i.now.timeIntervalSince(i.glucose.startDate)
+        guard glucoseAge <= LoopCoreConstants.inputDataRecencyInterval else {
+            log(String(format: "skip — glucose is %.0f min old", glucoseAge / 60))
+            return assessment(.none, nil)
+        }
+        guard -glucoseAge <= LoopCoreConstants.futureGlucoseDataInterval else {
+            log("skip — glucose is in the future")
+            return assessment(.none, nil)
+        }
+        guard let pumpDate = i.lastPumpDataDate,
+              i.now.timeIntervalSince(pumpDate) <= LoopCoreConstants.inputDataRecencyInterval else {
+            log("skip — pump data is too old")
+            return assessment(.none, nil)
+        }
+
+        // The three forecasts: Loop's own forecast (carb, insulin with pending, retrospective
+        // correction, momentum) plus the extra effects, run to the end of insulin action.
+        func predict(_ extra: [[GlucoseEffect]]) -> [PredictedGlucoseValue] {
+            var prediction = LoopMath.predictGlucose(startingAt: i.glucose, momentum: i.momentum,
+                                                     effects: [i.carbEffect, i.insulinEffect, i.retrospectiveEffect] + extra)
+            let finalDate = i.glucose.startDate.addingTimeInterval(i.longestEffectDuration)
+            if let last = prediction.last, last.startDate < finalDate {
+                prediction.append(PredictedGlucoseValue(startDate: finalDate, quantity: last.quantity))
+            }
+            return prediction
+        }
+        let p1 = predict([i.suspendEffect])
+        let p2 = predict([observedAbsorptionEffect])
+        let p3 = predict([observedAbsorptionEffect, i.suspendEffect])
+
+        let (outcome, context) = evaluate(Inputs(
+            predictionWithZeroTemp: p1,
+            predictionWithObservedAbsorption: p2,
+            predictionWithObservedAbsorptionAndZeroTemp: p3,
+            absorptionRatio: ratio,
+            suspendThreshold: i.suspendThreshold,
+            displayUnit: i.displayUnit,
+            insulinSensitivity: i.insulinSensitivity,
+            carbRatio: i.carbRatio,
+            correctionTarget: i.correctionTarget,
+            mostRecentCarbEntryDate: i.carbEntries.map(\.startDate).max(),
+            lastNotificationTime: i.lastNotificationTime,
+            now: i.now,
+            settings: i.settings), log: log)
+        return assessment(outcome, context, p1, p2, p3)
+    }
+
     // MARK: - Analysis
 
     static func analyze(_ prediction: [PredictedGlucoseValue], threshold: HKQuantity, now: Date) -> PredictionMetrics {
