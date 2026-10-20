@@ -553,7 +553,7 @@ final class WatchLoopManager {
     func claimCGMLoopTrigger(at now: Date) -> Bool {
         cgmLoopTriggerLock.lock()
         defer { cgmLoopTriggerLock.unlock() }
-        guard now.timeIntervalSince(lastCGMLoopTrigger) > .minutes(4.2) else { return false }
+        guard now.timeIntervalSince(lastCGMLoopTrigger) > LoanControl.scaled(.minutes(4.2)) else { return false }
         lastCGMLoopTrigger = now
         return true
     }

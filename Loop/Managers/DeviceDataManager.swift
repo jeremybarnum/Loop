@@ -652,7 +652,7 @@ final class DeviceDataManager {
         //  - Keeping the interval floor stops a fast CGM (or the irregular ~2 min heartbeat) from
         //    looping more often than once per ~5 min, matching the push path's rate limit.
         let lastLoopCompleted = self.loopControl.lastLoopCompleted
-        if storedNewGlucose, lastLoopCompleted == nil || lastLoopCompleted!.timeIntervalSinceNow < -.minutes(4.2) {
+        if storedNewGlucose, lastLoopCompleted == nil || lastLoopCompleted!.timeIntervalSinceNow < -LoanControl.scaled(.minutes(4.2)) {
             self.log.default("Triggering Loop from refreshCGM() — new glucose stored")
             await self.checkPumpDataAndLoop()
         }
@@ -971,7 +971,7 @@ extension DeviceDataManager: CGMManagerDelegate {
             let now = Date()
             // A CGM can re-deliver readings the store already holds (Nightscout polls do, every
             // poll). Only a reading that was actually stored is a reason to run the loop.
-            if storedNewGlucose, now.timeIntervalSince(self.lastCGMLoopTrigger) > .minutes(4.2) {
+            if storedNewGlucose, now.timeIntervalSince(self.lastCGMLoopTrigger) > LoanControl.scaled(.minutes(4.2)) {
                 self.log.default("Triggering loop from new CGM data at %{public}@", String(describing: now))
                 self.lastCGMLoopTrigger = now
                 await self.checkPumpDataAndLoop()

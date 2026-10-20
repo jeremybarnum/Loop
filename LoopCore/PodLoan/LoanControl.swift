@@ -191,8 +191,29 @@ public enum LoanControl {
         }
     }
 
-    /// The watch's report is overdue after this long without one: one loop cycle and a margin.
-    public static let watchReportOverdue: TimeInterval = 6 * 60
+    /// Simulator testing only, and only in a build with SIMULATED_TIME_SCALE_ENABLED: the waits a
+    /// test sits through on Sport Mode's own clocks (a report overdue, a settle, a copy's refresh,
+    /// the loop's rate limit) are divided by SPORTMODE_TIME_SCALE from the app's environment. 1 on a
+    /// device, in a build without the flag, in an app launched without the variable, and under
+    /// XCTest. The answer waits and the takeover lease are real latencies and stay as they are.
+    /// Timestamps are untouched: only how long something waits before it acts.
+    public static let timeScale: Double = {
+        #if SIMULATED_TIME_SCALE_ENABLED && targetEnvironment(simulator)
+        if NSClassFromString("XCTestCase") == nil,
+           let text = ProcessInfo.processInfo.environment["SPORTMODE_TIME_SCALE"],
+           let scale = Double(text), scale >= 1 {
+            return scale
+        }
+        #endif
+        return 1
+    }()
+
+    /// `interval`, shortened by `timeScale`.
+    public static func scaled(_ interval: TimeInterval) -> TimeInterval { interval / timeScale }
+
+    /// The watch's report is overdue after this long without one: one loop cycle and a margin. The
+    /// cycle follows the time scale; the margin covers real latencies and does not.
+    public static let watchReportOverdue: TimeInterval = scaled(5 * 60) + 60
 
     /// How long a takeover has to reach the pod, for a grant and for an offline start alike. Every
     /// takeover seen reached the pod within 25 s, most within 4; a pod not reached in a minute was

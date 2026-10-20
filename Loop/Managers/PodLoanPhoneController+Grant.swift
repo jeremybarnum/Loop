@@ -326,10 +326,10 @@ extension PodLoanPhoneController {
     }
 
     /// Floor on unprompted refreshes (~25 KB each).
-    private static let dormantRefreshInterval: TimeInterval = .minutes(30)
+    private static let dormantRefreshInterval: TimeInterval = LoanControl.scaled(.minutes(30))
 
     /// Floor on book-triggered refreshes, with one trailing refresh.
-    private static let bookRefreshFloor: TimeInterval = 30
+    private static let bookRefreshFloor: TimeInterval = LoanControl.scaled(30)
 
     /// Everything in the settings the wrist would behave differently on.
     private static func settingsFingerprint(_ s: LoopSettings) -> String {

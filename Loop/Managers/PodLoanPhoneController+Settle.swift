@@ -17,7 +17,7 @@ import os.log
 extension PodLoanPhoneController {
 
     /// Ceiling on the settle; also bounds how long a grant can be refused as not-yet-ready.
-    static let reclaimSettleTimeout: TimeInterval = .minutes(5)
+    static let reclaimSettleTimeout: TimeInterval = LoanControl.scaled(.minutes(5))
 
     /// A typical settle; the progress bar is drawn against it.
     static let reclaimSettleExpectation: TimeInterval = 10

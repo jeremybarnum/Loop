@@ -143,4 +143,15 @@ final class LoanControlTests: XCTestCase {
         XCTAssertEqual(C.Wait.inBackground.seconds, 30)
         XCTAssertEqual(C.watchReportOverdue, 6 * 60)
     }
+
+    // MARK: - The Simulator time scale
+
+    func testTheTimeScaleIsOneUnderTest() {
+        XCTAssertEqual(C.timeScale, 1)
+    }
+
+    func testScaledDividesByTheTimeScale() {
+        XCTAssertEqual(C.scaled(300), 300 / C.timeScale)
+        XCTAssertEqual(C.watchReportOverdue, C.scaled(5 * 60) + 60)
+    }
 }
