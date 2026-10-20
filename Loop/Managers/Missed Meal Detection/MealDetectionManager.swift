@@ -247,7 +247,7 @@ class MealDetectionManager {
         guard
             case .hasMissedMeal(let startTime, let carbAmount) = status,
             !notificationTimeTooRecent,
-            UserDefaults.standard.bool(forKey: "com.loopkit.Loop.missedMealNotificationsEnabled")
+            UserDefaults.standard.missedMealNotificationsEnabled
         else {
             // No notification needed!
             return
