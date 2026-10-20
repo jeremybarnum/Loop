@@ -2939,6 +2939,9 @@ extension PodLoanPhoneControllerTests {
         ).transportDictionary())
         waitForState(controller, .owner)
 
+        // The phone refuses a grant until the pod has answered its reclaim: wait for that answer.
+        waitUntil(timeout: 8, "reclaim verification") { controller.reclaimVerifiedAt != nil }
+
         // Six minutes: past the 5-minute settle window, which is asynchronous.
         clock = clock.addingTimeInterval(360)
         lock.lock(); diags.removeAll(); lock.unlock()
