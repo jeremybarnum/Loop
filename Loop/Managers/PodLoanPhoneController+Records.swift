@@ -21,16 +21,14 @@ extension PodLoanPhoneController {
         guard batch.epoch == epoch, state == .loaned || state == .reclaimPending else {
             handbackDiag(batch.epoch, "batch DROPPED — \(batch.events.count) event(s) ev=\(batch.epoch) vs phone ev=\(epoch), state=\(state.rawValue) (recovered via the offer path if the watch still resends)")
 
-            // Records are the watch saying it holds the pod: `LoanControl` decides (rows 6, 17, 19).
-            // A loan logs and sends nothing before it starts, so its first record, or the batch's
-            // send time, bounds its start: records that reach the phone before the watch's own report
-            // can still be refused under row 19.
-            let claim = LoanControl.Claim(loan: batch.epoch > epoch ? .newer : .closed,
-                                          startedAt: (batch.events.map(\.loggedAt) + [batch.sentAt].compactMap { $0 }).min(),
-                                          refusedBefore: refusedRevivedEpochs.contains(batch.epoch))
-            let decision = decideAndAct(.watchClaims(claim), why: "records from the watch on e\(batch.epoch)", claimEpoch: batch.epoch)
-            if batch.epoch > epoch, decision != .sendStop, newestForeignLoanEvidence.map({ batch.epoch >= $0.epoch }) ?? true {
+            // Records never move control: records and control are separate messages. From the loan this
+            // phone already stands aside for, they show the watch is still there. From any other loan the
+            // phone asks the watch, and its report, which says when the loan started, goes to
+            // `LoanControl` (rows 6, 17, 19); the records come home with the hand-back either way.
+            if controlRole == .standingAside, let held = newestForeignLoanEvidence, batch.epoch == held.epoch {
                 newestForeignLoanEvidence = (batch.epoch, deps.now())
+            } else {
+                askAboutForeignRecords(epoch: batch.epoch)
             }
             return
         }
@@ -40,6 +38,16 @@ extension PodLoanPhoneController {
         if let snap = batch.odometer {
             logRunningAudit(snap, context: "batch")
         }
+    }
+
+    /// Asks the watch about records from a loan this phone does not hold, at most every 20 s: a drain
+    /// sends several batches, and one answer settles them all.
+    func askAboutForeignRecords(epoch claimed: Int) {
+        let now = deps.now()
+        guard foreignRecordsAskedAt.map({ now.timeIntervalSince($0) >= 20 }) ?? true else { return }
+        foreignRecordsAskedAt = now
+        handbackDiag(claimed, "records from the watch on e\(claimed), a loan this phone does not hold — asking the watch; its report decides")
+        sendMessage(.statusQuery(StatusQuery(epoch: epoch)))
     }
 
     /// The phone's half of the periodic pod-link census, logged regardless of traffic.
