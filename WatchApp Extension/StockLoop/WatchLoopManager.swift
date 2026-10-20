@@ -2571,7 +2571,7 @@ final class WatchLoopManager {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
         guard let recentCarbEntries = recentCarbEntries,
-              let carbEffect = self.carbEffect, !carbEffect.isEmpty else {
+              self.carbEffect?.isEmpty == false else {
             observedAbsorptionEffect = []
             absorptionRatio = 1.0
             return
@@ -2593,9 +2593,13 @@ final class WatchLoopManager {
                 endingAt: nil,
                 effectVelocities: insulinCounteractionEffects)
 
-            let ratio = observedAbsorptionManager.computeObservedAbsorptionRatio(
-                insulinCounteractionEffects: insulinCounteractionEffects,
-                expectedCarbEffects: carbEffect)
+            // Judged on the same entries the ratio will scale.
+            let ratio = try observedAbsorptionManager.computeObservedAbsorptionRatio(
+                insulinCounteractionEffects: insulinCounteractionEffects
+            ) { readings in
+                try carbStore.glucoseEffects(of: entries, startingAt: carbEffectStart,
+                                             endingAt: nil, effectVelocities: readings)
+            }
 
             observedAbsorptionEffect = observedAbsorptionManager.generateObservedAbsorptionEffects(
                 absorptionRatio: ratio, carbEffects: effectsToScale)
@@ -2692,7 +2696,7 @@ final class WatchLoopManager {
         let correctionTarget = settings.glucoseTargetRangeSchedule?
             .quantityRange(at: currentDate.addingTimeInterval(30 * 60)).lowerBound.doubleValue(for: unit)
 
-        let inputs = WatchLowGlucoseWarning.Inputs(
+        let inputs = LowGlucoseWarning.Inputs(
             predictionWithZeroTemp: p1,
             predictionWithObservedAbsorption: p2,
             predictionWithObservedAbsorptionAndZeroTemp: p3,
@@ -2707,9 +2711,9 @@ final class WatchLoopManager {
             now: currentDate,
             settings: settingsForWarning)
 
-        let (outcome, context) = WatchLowGlucoseWarning.evaluate(inputs)
+        let (outcome, context) = LowGlucoseWarning.evaluate(inputs) { SportLog.event("lowbg", $0) }
         guard outcome != .none, let context = context,
-              let message = WatchLowGlucoseWarning.messages(for: outcome, context: context) else { return }
+              let message = LowGlucoseWarning.messages(for: outcome, context: context) else { return }
 
         WatchLowGlucoseWarning.post(title: message.title, body: message.body)
         lastLowBGWarningTime = currentDate

@@ -22,5 +22,11 @@ public struct ObservedAbsorptionSettings {
     //when adjusting future carb absorption, don't adjust very recent carb entries or entries in the future, since these may well be rescue carbs.  Some overlap between this setting and the warning delay
     public static let recentAndFutureCarbExclusionWindow = TimeInterval(minutes: 15)
 
+    //the absorption ratio compares carbs that arrived over this many most recent minutes of counteraction readings with what Loop's carb forecast, made at the start of those minutes, expected for them
+    public static let absorptionRatioWindow = TimeInterval(minutes: 15)
+
+    //readings must cover at least this much of the window, or there is too little evidence to judge and the ratio is 1.0 (no adjustment)
+    public static let absorptionRatioMinimumCoverage = TimeInterval(minutes: 10)
+
 }
 

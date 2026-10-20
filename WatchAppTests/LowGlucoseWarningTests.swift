@@ -64,8 +64,8 @@ final class LowGlucoseWarningTests: XCTestCase {
                         settings s: LoanLowBGWarningSettings? = nil,
                         lastCarbEntry: Date? = nil,
                         lastNotificationTime: Date? = nil,
-                        now: Date? = nil) -> WatchLowGlucoseWarning.Inputs {
-        WatchLowGlucoseWarning.Inputs(
+                        now: Date? = nil) -> LowGlucoseWarning.Inputs {
+        LowGlucoseWarning.Inputs(
             predictionWithZeroTemp: prediction(crosses: p1, from: now),
             predictionWithObservedAbsorption: prediction(crosses: p2, from: now),
             predictionWithObservedAbsorptionAndZeroTemp: prediction(crosses: p3, from: now),
@@ -83,7 +83,7 @@ final class LowGlucoseWarningTests: XCTestCase {
     // MARK: - The truth table
 
     func testEveryCellOfTheTruthTable() {
-        typealias Outcome = WatchLowGlucoseWarning.Outcome
+        typealias Outcome = LowGlucoseWarning.Outcome
         // (P1 zero-temp, P2 observed, P3 observed+zero-temp) -> outcome
         //
         // Every row where P2 does not cross is `.none`, and that is structural rather than a
@@ -104,14 +104,14 @@ final class LowGlucoseWarningTests: XCTestCase {
         ]
 
         for row in table {
-            let (outcome, context) = WatchLowGlucoseWarning.evaluate(
+            let (outcome, context) = LowGlucoseWarning.evaluate(
                 inputs(p1: row.p1, p2: row.p2, p3: row.p3))
             XCTAssertEqual(outcome, row.expected,
                            "(\(row.p1),\(row.p2),\(row.p3)) should be \(row.expected) — \(row.why)")
             if row.expected == .none {
                 XCTAssertNil(context, "silence carries no context")
             } else if let context = context {
-                XCTAssertNotNil(WatchLowGlucoseWarning.messages(for: outcome, context: context),
+                XCTAssertNotNil(LowGlucoseWarning.messages(for: outcome, context: context),
                                 "a warning must be able to render its message")
             } else {
                 XCTFail("(\(row.p1),\(row.p2),\(row.p3)) warned but carried no context")
@@ -122,31 +122,31 @@ final class LowGlucoseWarningTests: XCTestCase {
     /// The phone traps here. On a wrist, while this device is the only thing driving the pod,
     /// a trap is strictly worse than a missed warning.
     func testNoneOutcomeReturnsNilRatherThanTrapping() {
-        let empty = WatchLowGlucoseWarning.PredictionMetrics(
+        let empty = LowGlucoseWarning.PredictionMetrics(
             minimumGlucoseValue: nil, glucoseValueAtAbsorptionTime: nil,
             timeToMinimumGlucose: nil, timeToCrossThreshold: nil, velocityAtThresholdCrossing: nil)
-        let context = WatchLowGlucoseWarning.Context(
+        let context = LowGlucoseWarning.Context(
             standardWithSuspend: empty, observedAbsorption: empty, observedAbsorptionWithSuspend: empty,
             rescueCarbMessageStr: nil, absorptionRatio: 1, displayUnit: mgdl)
-        XCTAssertNil(WatchLowGlucoseWarning.messages(for: .none, context: context))
+        XCTAssertNil(LowGlucoseWarning.messages(for: .none, context: context))
     }
 
     // MARK: - Gates
 
     func testDisabledByThePhoneStaysSilent() {
-        let (outcome, _) = WatchLowGlucoseWarning.evaluate(
+        let (outcome, _) = LowGlucoseWarning.evaluate(
             inputs(p1: true, p2: true, p3: true, settings: settings(enabled: false)))
         XCTAssertEqual(outcome, .none, "the phone's master switch must be honoured on the wrist")
     }
 
     func testSnoozeSuppressesASecondWarning() {
         // Warned 3 minutes ago, snooze is 9.
-        let (suppressed, _) = WatchLowGlucoseWarning.evaluate(
+        let (suppressed, _) = LowGlucoseWarning.evaluate(
             inputs(p1: false, p2: true, p3: true, lastNotificationTime: t0.addingTimeInterval(-.minutes(3))))
         XCTAssertEqual(suppressed, .none)
 
         // ...and 10 minutes ago is past it.
-        let (allowed, _) = WatchLowGlucoseWarning.evaluate(
+        let (allowed, _) = LowGlucoseWarning.evaluate(
             inputs(p1: false, p2: true, p3: true, lastNotificationTime: t0.addingTimeInterval(-.minutes(10))))
         XCTAssertEqual(allowed, .rescueCarbsLikelyNeeded)
     }
@@ -154,11 +154,11 @@ final class LowGlucoseWarningTests: XCTestCase {
     func testRecentCarbsSuppressMostClassesButNotTheAggressiveOne() {
         let justAte = t0.addingTimeInterval(-.minutes(5))   // inside the 30 min delay
 
-        let (softened, _) = WatchLowGlucoseWarning.evaluate(
+        let (softened, _) = LowGlucoseWarning.evaluate(
             inputs(p1: false, p2: true, p3: true, lastCarbEntry: justAte))
         XCTAssertEqual(softened, .none, "a low already being treated should not warn")
 
-        let (aggressive, _) = WatchLowGlucoseWarning.evaluate(
+        let (aggressive, _) = LowGlucoseWarning.evaluate(
             inputs(p1: true, p2: true, p3: true, lastCarbEntry: justAte))
         XCTAssertEqual(aggressive, .carbsDefinitelyNeeded,
                        "the (T,T,*) case fires even on recent carbs — the low lands regardless")
@@ -170,12 +170,12 @@ final class LowGlucoseWarningTests: XCTestCase {
         comps.hour = 2; comps.minute = 0
         let night = Calendar.current.date(from: comps)!
 
-        let (off, _) = WatchLowGlucoseWarning.evaluate(
+        let (off, _) = LowGlucoseWarning.evaluate(
             inputs(p1: true, p2: true, p3: true,
                    settings: settings(nightWarningsEnabled: false), now: night))
         XCTAssertEqual(off, .none, "night warnings disabled means silence overnight")
 
-        let (on, _) = WatchLowGlucoseWarning.evaluate(
+        let (on, _) = LowGlucoseWarning.evaluate(
             inputs(p1: true, p2: true, p3: true,
                    settings: settings(nightWarningsEnabled: true), now: night))
         XCTAssertEqual(on, .carbsDefinitelyNeeded, "night warnings enabled means the wrist still speaks")
@@ -196,7 +196,7 @@ final class LowGlucoseWarningTests: XCTestCase {
 
     func testMissingTherapySettingsStaySilentRatherThanGuessing() {
         var input = inputs(p1: true, p2: true, p3: true)
-        input = WatchLowGlucoseWarning.Inputs(
+        input = LowGlucoseWarning.Inputs(
             predictionWithZeroTemp: input.predictionWithZeroTemp,
             predictionWithObservedAbsorption: input.predictionWithObservedAbsorption,
             predictionWithObservedAbsorptionAndZeroTemp: input.predictionWithObservedAbsorptionAndZeroTemp,
@@ -204,20 +204,20 @@ final class LowGlucoseWarningTests: XCTestCase {
             suspendThreshold: nil,                       // <- the thing the warning level is built from
             displayUnit: mgdl, insulinSensitivity: 50, carbRatio: 10, correctionTarget: 100,
             mostRecentCarbEntryDate: nil, lastNotificationTime: nil, now: t0, settings: settings())
-        let (outcome, context) = WatchLowGlucoseWarning.evaluate(input)
+        let (outcome, context) = LowGlucoseWarning.evaluate(input)
         XCTAssertEqual(outcome, .none)
         XCTAssertNil(context)
     }
 
     func testEmptyPredictionsStaySilent() {
-        let input = WatchLowGlucoseWarning.Inputs(
+        let input = LowGlucoseWarning.Inputs(
             predictionWithZeroTemp: [], predictionWithObservedAbsorption: [],
             predictionWithObservedAbsorptionAndZeroTemp: [],
             absorptionRatio: 1,
             suspendThreshold: HKQuantity(unit: mgdl, doubleValue: 70), displayUnit: mgdl,
             insulinSensitivity: 50, carbRatio: 10, correctionTarget: 100,
             mostRecentCarbEntryDate: nil, lastNotificationTime: nil, now: t0, settings: settings())
-        let (outcome, _) = WatchLowGlucoseWarning.evaluate(input)
+        let (outcome, _) = LowGlucoseWarning.evaluate(input)
         XCTAssertEqual(outcome, .none, "no prediction, no opinion")
     }
 }

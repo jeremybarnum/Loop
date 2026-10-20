@@ -40,88 +40,111 @@ class ObservedAbsorptionManager {
     let carbUnit = HKUnit.milligramsPerDeciliter
     let ICEUnit = HKUnit.milligramsPerDeciliterPerMinute
     
-    // MARK: SlowAbsorption Detection
-    
-    func computeObservedAbsorptionRatio(insulinCounteractionEffects: [GlucoseEffectVelocity], expectedCarbEffects: [GlucoseEffect]) -> Double {
-        
-        let now = self.currentDate
-        
-        // Step 1: Find 3 consecutive non-zero carb velocities going backwards from now
-        let recentModeledCarbEffects = expectedCarbEffects.filter { $0.startDate <= now }
-            .sorted { $0.startDate < $1.startDate }
-        
-        guard recentModeledCarbEffects.count >= 4 else {
-            predictionLogger.info("Insufficient carb effects for absorption ratio calculation")
-            return 1.0
-        }
-        
-        var carbVelocities: [(timestamp: Date, velocity: Double)] = []
-        
-        // Start from the most recent and work backwards
-        for i in stride(from: recentModeledCarbEffects.count - 1, through: 1, by: -1) {
-            let currentEffect = recentModeledCarbEffects[i].quantity.doubleValue(for: carbUnit)
-            let previousEffect = recentModeledCarbEffects[i - 1].quantity.doubleValue(for: carbUnit)
-            let velocity = (currentEffect - previousEffect) / 5.0 // Convert to mg/dL/minute
-            
-            if velocity == 0 {
-                // Hit a zero velocity, stop here and use what we have
-                break
-            }
-            
-            carbVelocities.append((timestamp: recentModeledCarbEffects[i].startDate, velocity: velocity))
-            
-            if carbVelocities.count == 3 {
-                break // Found our 3 consecutive non-zero velocities
-            }
-        }
-        
-        guard carbVelocities.count == 3 else {
-            predictionLogger.info("Could not find 3 consecutive non-zero carb velocities, found: %d", carbVelocities.count)
-            return 1.0
-        }
-        
-        // carbVelocities is now [newest, middle, oldest] - reverse for chronological order
-        carbVelocities.reverse()
-        let averageCarbVelocity = carbVelocities.map { $0.velocity }.reduce(0, +) / 3.0
-        
-        // Step 2: Find matching ICE values
-        // Step 2: Get the 3 most recent ICE values
-        guard insulinCounteractionEffects.count >= 3 else {
-            predictionLogger.info("Insufficient ICE data for absorption ratio calculation")
-            return 1.0
+    // MARK: Absorption ratio
+
+    /// How a ratio was reached, kept for logging and for tests.
+    struct AbsorptionRatioMeasurement: Equatable {
+        /// The minutes judged: `absorptionRatioWindow`, ending at the carb-effect grid point at or
+        /// before the newest counteraction reading.
+        let window: DateInterval
+        /// How much of the window the readings actually cover.
+        let covered: TimeInterval
+        /// Carbs that arrived over the covered minutes, as glucose effect (mg/dL), from counteraction.
+        let observedEffect: Double
+        /// Carbs Loop's carb forecast, as it stood at the start of the window, expected over the
+        /// same minutes (mg/dL).
+        let expectedEffect: Double
+        let ratio: Double
+    }
+
+    /// The share of the expected carbs that is actually arriving.
+    ///
+    /// Observed: insulin counteraction over the most recent `absorptionRatioWindow` of readings.
+    /// The window ends on the carb effect's 5-minute grid, so both ends of the expectation are values
+    /// the carb store computed rather than interpolations across the point where its record of
+    /// absorbed carbs hands over to its forecast — readings fall at arbitrary seconds, the grid does not.
+    /// Expected: what Loop's own carb forecast, as it stood at the START of that window, said would
+    /// arrive during it. That forecast is rebuilt by handing `carbEffect` only the readings that
+    /// existed then — the same carb-store call the device makes every cycle — so the expectation is
+    /// whatever the configured absorption model (linear, nonlinear or adaptive) said at the time.
+    /// The model decides when the remaining carbs are due; this compares that with what came.
+    ///
+    /// Applied to Loop's forecast of the remaining carbs, the ratio keeps their timing and changes
+    /// their amount: Loop assumes slow carbs arrive later, the warning asks what happens if fewer do.
+    ///
+    /// - Parameters:
+    ///   - insulinCounteractionEffects: the device's counteraction readings, oldest first.
+    ///   - carbEffect: the device's carb effect for the entries being judged, computed from the
+    ///     readings passed in — the carb store's `glucoseEffects(of:startingAt:endingAt:effectVelocities:)`.
+    /// - Returns: nil when there are no readings at all.
+    func measureAbsorptionRatio(
+        insulinCounteractionEffects: [GlucoseEffectVelocity],
+        carbEffect: ([GlucoseEffectVelocity]) throws -> [GlucoseEffect]
+    ) rethrows -> AbsorptionRatioMeasurement? {
+        guard let newest = insulinCounteractionEffects.last?.endDate else { return nil }
+        let windowEnd = newest.dateFlooredToTimeInterval(GlucoseMath.defaultDelta)
+        let window = DateInterval(start: windowEnd.addingTimeInterval(-ObservedAbsorptionSettings.absorptionRatioWindow),
+                                  end: windowEnd)
+
+        let forecastAtWindowStart = try carbEffect(insulinCounteractionEffects.filter { $0.endDate <= window.start })
+
+        // Both sides over exactly the same minutes: wherever a reading overlaps the window, what it
+        // showed arriving, and what the forecast expected for that stretch.
+        var covered: TimeInterval = 0
+        var observed = 0.0
+        var expected = 0.0
+        for reading in insulinCounteractionEffects where reading.endDate > window.start && reading.endDate > reading.startDate {
+            guard let overlap = DateInterval(start: reading.startDate, end: reading.endDate).intersection(with: window),
+                  overlap.duration > 0 else { continue }
+            covered += overlap.duration
+            observed += reading.quantity.doubleValue(for: ICEUnit) * overlap.duration / 60
+            expected += Self.cumulativeEffect(forecastAtWindowStart, at: overlap.end)
+                - Self.cumulativeEffect(forecastAtWindowStart, at: overlap.start)
         }
 
-        // Take the last 3 elements directly
-        let lastThreeICE = Array(insulinCounteractionEffects.suffix(3))
-        predictionLogger.info("Last 3 ICE entries:")
-        for (index, ice) in lastThreeICE.enumerated() {
-            predictionLogger.info("ICE[%d]: startDate=%@, endDate=%@, value=%.3f",
-                                 index,
-                                 ice.startDate as CVarArg,
-                                 ice.endDate as CVarArg,
-                                 ice.quantity.doubleValue(for: ICEUnit))
+        let ratio: Double
+        if covered < ObservedAbsorptionSettings.absorptionRatioMinimumCoverage {
+            ratio = 1.0   // too little evidence to judge: no adjustment
+        } else if expected <= 0 {
+            ratio = 1.0   // Loop expected nothing in these minutes, so there is nothing to scale
+        } else {
+            ratio = max(observed / expected, 0)
         }
-        let iceValues = lastThreeICE.map { $0.quantity.doubleValue(for: ICEUnit) }
-        predictionLogger.info("ICE values array: %@", iceValues)
-        let averageICE = iceValues.reduce(0, +) / 3.0
-        predictionLogger.info("Average ICE: %.3f", averageICE)
-        // Step 3: Calculate ratio
-        guard averageCarbVelocity > 0 else {
-            predictionLogger.info("Average carb velocity is zero or negative")
+        return AbsorptionRatioMeasurement(window: window, covered: covered,
+                                          observedEffect: observed, expectedEffect: expected, ratio: ratio)
+    }
+
+    /// `measureAbsorptionRatio`, reduced to the ratio and logged; 1.0 when there is nothing to judge.
+    func computeObservedAbsorptionRatio(
+        insulinCounteractionEffects: [GlucoseEffectVelocity],
+        carbEffect: ([GlucoseEffectVelocity]) throws -> [GlucoseEffect]
+    ) rethrows -> Double {
+        guard let m = try measureAbsorptionRatio(insulinCounteractionEffects: insulinCounteractionEffects,
+                                                 carbEffect: carbEffect) else {
+            predictionLogger.info("Absorption ratio: no counteraction readings, 1.0")
             return 1.0
         }
-        
-        
-        
-        let absorptionRatio = max(averageICE / averageCarbVelocity, 0.0)
-        
-        predictionLogger.info("Carb velocities: [%.3f, %.3f, %.3f], avg: %.3f mg/dL/min",
-                             carbVelocities[0].velocity, carbVelocities[1].velocity, carbVelocities[2].velocity, averageCarbVelocity)
-        predictionLogger.info("ICE values: [%.3f, %.3f, %.3f], avg: %.3f mg/dL/min",
-                             iceValues[0], iceValues[1], iceValues[2], averageICE)
-        predictionLogger.info("Absorption Ratio: %.3f", absorptionRatio)
-        
-        return absorptionRatio
+        predictionLogger.info("Absorption ratio %.3f: observed %.1f mg/dL vs expected %.1f mg/dL over %.1f of the last %.0f min of readings",
+                              m.ratio, m.observedEffect, m.expectedEffect, m.covered / 60, m.window.duration / 60)
+        return m.ratio
+    }
+
+    /// A cumulative effect timeline's value at `date`, interpolated between its points: zero before
+    /// the first, flat after the last.
+    static func cumulativeEffect(_ effects: [GlucoseEffect], at date: Date) -> Double {
+        let unit = HKUnit.milligramsPerDeciliter
+        guard let after = effects.firstIndex(where: { $0.startDate >= date }) else {
+            return effects.last?.quantity.doubleValue(for: unit) ?? 0
+        }
+        let next = effects[after]
+        guard after > 0 else {
+            return next.startDate == date ? next.quantity.doubleValue(for: unit) : 0
+        }
+        let previous = effects[after - 1]
+        let span = next.startDate.timeIntervalSince(previous.startDate)
+        let fraction = span > 0 ? date.timeIntervalSince(previous.startDate) / span : 1
+        let a = previous.quantity.doubleValue(for: unit), b = next.quantity.doubleValue(for: unit)
+        return a + (b - a) * fraction
     }
 
     func generateObservedAbsorptionEffects(absorptionRatio: Double, carbEffects: [GlucoseEffect]) -> [GlucoseEffect] {

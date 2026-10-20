@@ -3240,22 +3240,12 @@ final class PodLoanPhoneController {
     /// Writes the phone's snooze anchor when a hand-back returns one from the wrist.
     var setLowBGWarningLastNotificationTime: ((Date) -> Void)?
 
-    /// Snapshot the phone's predicted-low warning configuration for the grant.
+    /// Snapshot the phone's predicted-low warning configuration (Alert Management). The phone's
+    /// own warning reads it every cycle, and a grant hands the same snapshot to the watch, so both
+    /// devices decide on identical settings (`LowGlucoseWarning`).
     ///
-    /// INFORMATION ONLY — these values decide whether a notification is posted on the wrist and
-    /// what it says. The defaults mirror the phone's own accessors exactly, so an unset preference
-    /// behaves identically on both devices.
-    ///
-    /// The night window is hardcoded 22:30–06:30 in LoopDataManager rather than being a setting,
-    /// so it is reproduced here as minutes-since-midnight instead of invented.
-    ///
-    /// KNOWN PHONE DEFECT, deliberately NOT reproduced: the phone gates night warnings on
-    /// `com.loopkit.Loop.nightwarningEnabled`, a key nothing in the app ever writes — the Alert
-    /// Management toggle writes `...nightLowBGNotificationsEnabled`. `bool(forKey:)` returns false
-    /// for the unwritten key, so night warnings never fire on the phone no matter how the toggle
-    /// reads. The grant carries what the TOGGLE says, because propagating a typo to a second
-    /// device would bake it in. Flagged for a ruling rather than fixed here, since fixing the
-    /// phone changes behaviour Jeremy has been living with.
+    /// INFORMATION ONLY — these values decide whether a notification is posted and what it says.
+    /// The night window, 22:30–06:30, is not a setting; it is carried as minutes since midnight.
     static func lowBGWarningSettingsForGrant(lastNotificationTime: Date?) -> LoanLowBGWarningSettings {
         let defaults = UserDefaults.standard
         return LoanLowBGWarningSettings(

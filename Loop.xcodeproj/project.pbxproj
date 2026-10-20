@@ -343,6 +343,7 @@
 		89F9119624358E6900ECCAF3 /* BolusPickerValues.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89F9119524358E6900ECCAF3 /* BolusPickerValues.swift */; };
 		89FE21AD24AC57E30033F501 /* Collection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89FE21AC24AC57E30033F501 /* Collection.swift */; };
 		991346FF2AE6D1350067EE27 /* ObservedAbsorptionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991346FE2AE6D1350067EE27 /* ObservedAbsorptionManager.swift */; };
+		0B5E70A1C0FFEE0000000002 /* LowGlucoseWarning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B5E70A1C0FFEE0000000001 /* LowGlucoseWarning.swift */; };
 		991347012AE6D1490067EE27 /* ObservedAbsorptionSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991347002AE6D1490067EE27 /* ObservedAbsorptionSettings.swift */; };
 		A62AD2C62E5AE33B4055D49B /* SportComplicationPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 140AF72BDD0D577371B4D439 /* SportComplicationPublisher.swift */; };
 		A90EF53C25DEF06200F32D61 /* PluginManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16DA84122E8E112008624C2 /* PluginManager.swift */; };
@@ -640,6 +641,7 @@
 		FADE00040000000000000061 /* WatchLowGlucoseWarning.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000060 /* WatchLowGlucoseWarning.swift */; };
 		FADE00040000000000000063 /* WatchDiagnosticLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000062 /* WatchDiagnosticLog.swift */; };
 		FADE00040000000000000064 /* ObservedAbsorptionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991346FE2AE6D1350067EE27 /* ObservedAbsorptionManager.swift */; };
+		0B5E70A1C0FFEE0000000003 /* LowGlucoseWarning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B5E70A1C0FFEE0000000001 /* LowGlucoseWarning.swift */; };
 		FADE00040000000000000065 /* ObservedAbsorptionSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991347002AE6D1490067EE27 /* ObservedAbsorptionSettings.swift */; };
 		FADE00040000000000000069 /* WristAlertScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000068 /* WristAlertScheduler.swift */; };
 		FADE00040000000000000092 /* LoanCarbListController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000091 /* LoanCarbListController.swift */; };
@@ -1226,6 +1228,7 @@
 		8F7573A63D5CD2F7C23B1176 /* WatchBluetoothStateLog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WatchBluetoothStateLog.swift; sourceTree = "<group>"; };
 		96D1B4EE2E1B741BEE994D47 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		991346FE2AE6D1350067EE27 /* ObservedAbsorptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservedAbsorptionManager.swift; sourceTree = "<group>"; };
+		0B5E70A1C0FFEE0000000001 /* LowGlucoseWarning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LowGlucoseWarning.swift; sourceTree = "<group>"; };
 		991347002AE6D1490067EE27 /* ObservedAbsorptionSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservedAbsorptionSettings.swift; sourceTree = "<group>"; };
 		997DDB47302D82A800A03F53 /* WatchAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WatchAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A6F3C5DBAF5AED2722087B06 /* SportComplications.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SportComplications.swift; sourceTree = "<group>"; };
@@ -2617,6 +2620,7 @@
 			isa = PBXGroup;
 			children = (
 				991346FE2AE6D1350067EE27 /* ObservedAbsorptionManager.swift */,
+				0B5E70A1C0FFEE0000000001 /* LowGlucoseWarning.swift */,
 				991347002AE6D1490067EE27 /* ObservedAbsorptionSettings.swift */,
 			);
 			path = ObservedAbsorption;
@@ -3703,6 +3707,7 @@
 				E98A55ED24EDD6380008715D /* LatestStoredSettingsProvider.swift in Sources */,
 				C1FB428F217921D600FAB378 /* PumpManagerUI.swift in Sources */,
 				991346FF2AE6D1350067EE27 /* ObservedAbsorptionManager.swift in Sources */,
+				0B5E70A1C0FFEE0000000002 /* LowGlucoseWarning.swift in Sources */,
 				A9B996F227238705002DC09C /* DosingDecisionStore.swift in Sources */,
 				43C513191E864C4E001547C7 /* GlucoseRangeSchedule.swift in Sources */,
 				B4D904412AA8989100CBD826 /* StatefulPluginManager.swift in Sources */,
@@ -3910,6 +3915,7 @@
 				FADE00040000000000000069 /* WristAlertScheduler.swift in Sources */,
 				FADE00040000000000000063 /* WatchDiagnosticLog.swift in Sources */,
 				FADE00040000000000000064 /* ObservedAbsorptionManager.swift in Sources */,
+				0B5E70A1C0FFEE0000000003 /* LowGlucoseWarning.swift in Sources */,
 				FADE00040000000000000065 /* ObservedAbsorptionSettings.swift in Sources */,
 				FADE00040000000000000028 /* LoopStallWatchdog.swift in Sources */,
 				FADE00040000000000000069 /* WristAlertScheduler.swift in Sources */,
