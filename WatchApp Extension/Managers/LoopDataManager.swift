@@ -73,6 +73,8 @@ class LoopDataManager {
             cacheLength: .hours(24),    // Require 24 hours to store recent carbs "since midnight" for CarbEntryListController
             defaultAbsorptionTimes: LoopCoreConstants.defaultCarbAbsorptionTimes,
             syncVersion: 0,
+            absorptionTimeOverrun: LoopCoreConstants.minimumAbsorptionRateTimeMultiplier,
+            expectedAbsorptionTimeOverrun: LoopCoreConstants.absorptionTimeOverrun,
             provenanceIdentifier: HKSource.default().bundleIdentifier
         )
         glucoseStore = GlucoseStore(

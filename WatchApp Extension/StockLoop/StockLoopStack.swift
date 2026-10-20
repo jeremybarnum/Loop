@@ -161,6 +161,8 @@ enum StockLoopStack {
             cacheLength: .hours(24),
             defaultAbsorptionTimes: LoopCoreConstants.defaultCarbAbsorptionTimes,
             overrideHistory: overrideHistory,
+            absorptionTimeOverrun: LoopCoreConstants.minimumAbsorptionRateTimeMultiplier,
+            expectedAbsorptionTimeOverrun: LoopCoreConstants.absorptionTimeOverrun,
             provenanceIdentifier: provenanceIdentifier
         )
 

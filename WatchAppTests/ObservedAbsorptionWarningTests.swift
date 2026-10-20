@@ -13,10 +13,15 @@
 //  those minutes, and scaling the remaining carbs by that ratio (fewer carbs, same timing).
 //
 //  The expectation is whatever the configured absorption model said at the time — linear,
-//  nonlinear or adaptive — so these tests run real LoopKit carb and insulin math configured as both
-//  devices configure it (nonlinear, 1.5 overrun, 10-minute delay), and vary the model where the
-//  model is the point. The three warning predictions are assembled as
-//  `WatchLoopManager.evaluateLowGlucoseWarning()` assembles them.
+//  nonlinear or adaptive — so these tests run real LoopKit carb and insulin math, and the model is
+//  part of each test:
+//  - named models (`overrunOfOne`, `stretched`, `adaptive`) pin exact numbers, and do not depend on
+//    the app's constants;
+//  - `device` reads the app's own `LoopCoreConstants` (the minimum absorption rate and the
+//    absorption time overrun), and its tests assert only what must hold for any overrun from 1.0
+//    up to the minimum multiplier, so tuning the overrun does not break them.
+//  The three warning predictions are assembled as `WatchLoopManager.evaluateLowGlucoseWarning()`
+//  assembles them.
 //
 
 import XCTest
@@ -47,12 +52,19 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
     private let delay = CarbMath.defaultEffectDelay
     private let piecewise = PiecewiseLinearAbsorption()
 
-    /// The carb model a test runs under. `stock` is what both devices run.
+    /// The carb model a test runs under: `overrun` sets the minimum absorption rate, `expectationOverrun`
+    /// the expected curve (CarbStore's `absorptionTimeOverrun` and `expectedAbsorptionTimeOverrun`).
     private struct CarbModel {
         var overrun = CarbMath.defaultAbsorptionTimeOverrun
         var expectationOverrun = CarbMath.defaultAbsorptionTimeOverrun
         var adaptive = false
-        static let stock = CarbModel()
+        /// What the phone and watch run, from the app's constants, capped as CarbStore caps it.
+        static let device = CarbModel(
+            overrun: LoopCoreConstants.minimumAbsorptionRateTimeMultiplier,
+            expectationOverrun: min(LoopCoreConstants.absorptionTimeOverrun,
+                                    LoopCoreConstants.minimumAbsorptionRateTimeMultiplier))
+        /// LoopKit's default: expectation and minimum both stretched 1.5×.
+        static let stretched = CarbModel(overrun: 1.5, expectationOverrun: 1.5)
         /// As the warning was first written and tested by hand.
         static let overrunOfOne = CarbModel(overrun: 1.0, expectationOverrun: 1.0)
         /// LoopKit's `.adaptiveRateNonlinear`: expectation 1.0, minimum 1.5, observed pace carried forward.
@@ -126,7 +138,7 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
                      startDate: start, foodType: nil, absorptionTime: declaredAbsorptionTime)
     }
 
-    private func run(_ label: String, model: CarbModel = .stock, mealAt start: Date? = nil,
+    private func run(_ label: String, model: CarbModel = .device, mealAt start: Date? = nil,
                      judgedAtMinute minutes: Double = 60, skipping gap: ClosedRange<Double>? = nil,
                      arriving fraction: @escaping (Double) -> Double) -> Run {
         let start = start ?? t0
@@ -203,8 +215,8 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
         }
         let result = Run(measurement: measurement, ratio: ratio, outcome: outcome, glucoseNow: glucoseNow,
                          loopMinimum: minimum(p1), warningMinimum: minimum(p2))
-        print(String(format: "[observed-absorption] %@ · overrun %.1f%@ · ratio %.2f (observed %.1f / expected %.1f mg/dL) · BG now %.0f · Loop min %.0f · warning min %.0f · %@",
-                     label, model.overrun, model.adaptive ? " adaptive" : "", ratio,
+        print(String(format: "[observed-absorption] %@ · minimum %.1f expected %.1f%@ · ratio %.2f (observed %.1f / expected %.1f mg/dL) · BG now %.0f · Loop min %.0f · warning min %.0f · %@",
+                     label, model.overrun, model.expectationOverrun, model.adaptive ? " adaptive" : "", ratio,
                      measurement?.observedEffect ?? .nan, measurement?.expectedEffect ?? .nan,
                      glucoseNow, result.loopMinimum, result.warningMinimum, String(describing: outcome)))
         return result
@@ -219,7 +231,7 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
     /// Guards the setup, not the warning: if Loop's own forecast went low, a warning test could pass
     /// for the wrong reason.
     func testLoopsOwnForecastStaysAboveTheWarningLevelInEveryScenario() {
-        for model in [CarbModel.stock, .overrunOfOne] {
+        for model in [CarbModel.device, .overrunOfOne, .stretched] {
             for (label, fraction) in [("0%", steady(0)), ("33%", steady(1.0 / 3.0)), ("50%", steady(0.5)),
                                       ("80%", steady(0.8)), ("150%", steady(1.5)),
                                       ("fast then 30%", fastStart(then: 0.3)), ("fast then stop", fastStart(then: 0))] {
@@ -251,27 +263,44 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
     /// The other case the old ratio could not see: credited carbs that stop. It stopped at the first
     /// zero step and returned 1.0.
     func testCarbsThatStopArrivingReadZero() {
-        for model in [CarbModel.stock, .overrunOfOne] {
+        for model in [CarbModel.device, .overrunOfOne, .stretched] {
             XCTAssertEqual(run("fast then stop", model: model, arriving: fastStart(then: 0)).ratio, 0, accuracy: 0.01)
         }
     }
 
     func testCarbsFasterThanExpectedReadAboveOne() {
-        for model in [CarbModel.stock, .overrunOfOne] {
+        for model in [CarbModel.device, .overrunOfOne, .stretched] {
             XCTAssertGreaterThan(run("150%", model: model, arriving: steady(1.5)).ratio, 1.2)
         }
     }
 
-    // MARK: - The ratio under the devices' own model (overrun 1.5)
+    // MARK: - The ratio under a stretched expectation (LoopKit's default 1.5)
 
-    /// Both devices stretch the expectation 1.5×, so the ratio is measured against the stretched
-    /// rate: a third of the ENTERED rate is about half of what Loop expected. This pins that
-    /// property — if the expectation's stretch changes, this test should change with it.
-    func testUnderTheStretchedExpectationTheRatioIsMeasuredAgainstTheStretchedRate() {
-        let third = run("33%", arriving: steady(1.0 / 3.0)).ratio
-        let half = run("50%", arriving: steady(0.5)).ratio
+    /// With the expectation stretched 1.5×, the ratio is measured against the stretched rate: a
+    /// third of the ENTERED rate is about half of what Loop expected.
+    func testUnderAStretchedExpectationTheRatioIsMeasuredAgainstTheStretchedRate() {
+        let third = run("33%", model: .stretched, arriving: steady(1.0 / 3.0)).ratio
+        let half = run("50%", model: .stretched, arriving: steady(0.5)).ratio
         XCTAssertEqual(third, 0.5, accuracy: 0.08)
         XCTAssertEqual(half, 0.75, accuracy: 0.1)
+        XCTAssertLessThan(run("fast then 30%", model: .stretched, arriving: fastStart(then: 0.3)).ratio, 0.6)
+    }
+
+    // MARK: - The ratio under the devices' own model, whatever the overrun
+
+    /// Slow carbs read between their share of the ENTERED rate (overrun 1.0) and that share
+    /// stretched by the minimum multiplier (overrun at its cap) — and always below 1.
+    func testOnTheDevicesModelSlowCarbsReadBetweenTheirShareAndItsStretch() {
+        let stretch = LoopCoreConstants.minimumAbsorptionRateTimeMultiplier
+        for fraction in [1.0 / 3.0, 0.5] {
+            let ratio = run("\(fraction)", arriving: steady(fraction)).ratio
+            XCTAssertGreaterThanOrEqual(ratio, fraction - 0.06, "arriving at \(fraction) of entered")
+            XCTAssertLessThanOrEqual(ratio, fraction * stretch + 0.1, "arriving at \(fraction) of entered")
+            XCTAssertLessThan(ratio, 1, "arriving at \(fraction) of entered")
+        }
+    }
+
+    func testOnTheDevicesModelASlowdownAfterAFastStartIsSeen() {
         XCTAssertLessThan(run("fast then 30%", arriving: fastStart(then: 0.3)).ratio, 0.6)
     }
 
@@ -343,7 +372,7 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
         XCTAssertEqual(ObservedAbsorptionManager.cumulativeEffect(effects, at: t0.addingTimeInterval(.minutes(60))), 30)
     }
 
-    // MARK: - The warning, under the devices' own model
+    // MARK: - The warning, under the devices' own model, whatever the overrun
 
     func testCarbsNeverEatenWarnOfALow() {
         XCTAssertNotEqual(run("0%", arriving: steady(0)).outcome, .none)
