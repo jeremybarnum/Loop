@@ -292,6 +292,7 @@
 		5E12EA02302D82A800A03F53 /* SeizeActivationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E12EA01302D82A800A03F53 /* SeizeActivationTests.swift */; };
 		5E12EA72302D82A800A03F53 /* WakeResumeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E12EA71302D82A800A03F53 /* WakeResumeTests.swift */; };
 		5E12EA730000000000000049 /* PodReturnsWithUnknownDeliveryStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E12EA740000000000000049 /* PodReturnsWithUnknownDeliveryStateTests.swift */; };
+		5E12EA7A000000000000004B /* EndDuringBolusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E12EA7B000000000000004B /* EndDuringBolusTests.swift */; };
 		5E12EA750000000000000050 /* PodLoanPhoneController+Hold.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E12EA760000000000000050 /* PodLoanPhoneController+Hold.swift */; };
 		5E12EA770000000000000051 /* LoanReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDBF9B08E9314F23AB94CF5A /* LoanReconciler.swift */; };
 		5E16C423E6FB4551BA3BCAD2 /* RileyLinkKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = ACC381BA270149C9B0DDCB01 /* RileyLinkKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -1273,6 +1274,7 @@
 		5E12EA01302D82A800A03F53 /* SeizeActivationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeizeActivationTests.swift; sourceTree = "<group>"; };
 		5E12EA71302D82A800A03F53 /* WakeResumeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WakeResumeTests.swift; sourceTree = "<group>"; };
 		5E12EA740000000000000049 /* PodReturnsWithUnknownDeliveryStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodReturnsWithUnknownDeliveryStateTests.swift; sourceTree = "<group>"; };
+		5E12EA7B000000000000004B /* EndDuringBolusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndDuringBolusTests.swift; sourceTree = "<group>"; };
 		5E12EA760000000000000050 /* PodLoanPhoneController+Hold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PodLoanPhoneController+Hold.swift"; path = "Loop/Managers/PodLoanPhoneController+Hold.swift"; sourceTree = SOURCE_ROOT; };
 		62F7CB5D5DC337E705032AC7 /* dings.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop/Resources/Sounds/dings.caf; sourceTree = SOURCE_ROOT; };
 		6470B4DA5621FAD246F50E7A /* PodLoanPhoneController+Settle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PodLoanPhoneController+Settle.swift"; path = "Loop/Managers/PodLoanPhoneController+Settle.swift"; sourceTree = SOURCE_ROOT; };
@@ -3086,6 +3088,7 @@
 				5E12EA71302D82A800A03F53 /* WakeResumeTests.swift */,
 				E489814AB551420DA40399A4 /* G7TimedConnectTests.swift */,
 				5E12EA740000000000000049 /* PodReturnsWithUnknownDeliveryStateTests.swift */,
+				5E12EA7B000000000000004B /* EndDuringBolusTests.swift */,
 				E5F6A7B8C9D0E1F2A3B4C5D6 /* G7SilenceHintTests.swift */,
 				9A7CE01A302D82A800A03F53 /* WatchAppTests.swift */,
 				9A7CE070302D82A800A03F53 /* RecordingWristAlertScheduler.swift */,
@@ -4680,6 +4683,7 @@
 				5E12EA72302D82A800A03F53 /* WakeResumeTests.swift in Sources */,
 				BDE04F37312A4F6C86EC7872 /* G7TimedConnectTests.swift in Sources */,
 				5E12EA730000000000000049 /* PodReturnsWithUnknownDeliveryStateTests.swift in Sources */,
+				5E12EA7A000000000000004B /* EndDuringBolusTests.swift in Sources */,
 				F6A7B8C9D0E1F2A3B4C5D6E7 /* G7SilenceHintTests.swift in Sources */,
 				9A7CE02E302D82A800A03F53 /* WatchAppTests.swift in Sources */,
 				9A7CE071302D82A800A03F53 /* RecordingWristAlertScheduler.swift in Sources */,
