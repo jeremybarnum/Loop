@@ -3108,10 +3108,25 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 5, "a fresh Start honoured") { controller.yieldingToInferredLoan }
     }
 
-    /// Records never move control. Records from a loan this phone does not hold, arriving before the
-    /// watch's own report (queued while the phone was away), only make the phone ask; the report decides,
-    /// and a loan begun before the phone took over on silence gets the stop (control row 19).
-    func testRecordsFromALoanThisPhoneDoesNotHoldOnlyPromptAQuestion() throws {
+    /// Records from a loan begun before this phone took over on silence, arriving before the watch's
+    /// own report (they were queued while the phone was away), get the stop; the phone keeps the pod
+    /// (control document, row 19). Seen in the Simulator run of T19, 2026-10-19.
+    func testRecordsOfALoanOlderThanTheTakeoverArrivingFirstAreRefused() throws {
+        _ = seizeCredentialOutstanding()
+        let tookOver = Date().addingTimeInterval(-.minutes(1))
+        saveState { $0.tookOverOnSilenceAt = tookOver }
+        let controller = makeController()
+
+        // The first to land can be empty: its send time bounds the loan's start.
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: 40, events: [], tombstones: [], sentAt: tookOver.addingTimeInterval(-.minutes(9)))).transportDictionary())
+        controller.queue.sync { }
+        XCTAssertEqual(revokes(), 1, "the revived loan's records get the stop")
+        XCTAssertFalse(controller.yieldingToInferredLoan, "and the phone keeps the pod")
+    }
+
+    /// As above, with records and no send time: the first record bounds the loan's start.
+    func testRecordsWithoutASendTimeOfALoanOlderThanTheTakeoverAreRefused() throws {
         _ = seizeCredentialOutstanding()
         let tookOver = Date().addingTimeInterval(-.minutes(1))
         saveState { $0.tookOverOnSilenceAt = tookOver }
@@ -3120,35 +3135,9 @@ extension PodLoanPhoneControllerTests {
         let bolus = makeEvent(seq: 1, units: 0.5, at: tookOver.addingTimeInterval(-.minutes(10)))
         controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
             DoseRecordBatch(epoch: 40, events: [bolus], tombstones: [], sentAt: nil)).transportDictionary())
-        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
-            DoseRecordBatch(epoch: 40, events: [], tombstones: [], sentAt: Date())).transportDictionary())
         controller.queue.sync { }
-        XCTAssertEqual(statusQueries(), 1, "the records make the phone ask, once for the drain")
-        XCTAssertEqual(revokes(), 0, "they decide nothing themselves")
+        XCTAssertEqual(revokes(), 1, "the revived loan's records get the stop")
         XCTAssertFalse(controller.yieldingToInferredLoan, "and the phone keeps the pod")
-
-        controller.handleIncoming(userInfo: try report(epoch: 40, loanStartedAt: tookOver.addingTimeInterval(-.minutes(20))))
-        controller.queue.sync { }
-        XCTAssertEqual(revokes(), 1, "the watch's report shows a loan begun before the takeover: the stop")
-        XCTAssertFalse(controller.yieldingToInferredLoan)
-    }
-
-    /// Records from the loan this phone already stands aside for show the watch is still there; nothing
-    /// to ask.
-    func testRecordsFromTheLoanThePhoneStandsAsideForAskNothing() throws {
-        _ = seizeCredentialOutstanding()
-        let controller = makeController()
-        controller.handleIncoming(userInfo: try report(epoch: 40, loanStartedAt: Date().addingTimeInterval(-.minutes(5))))
-        controller.queue.sync { }
-        XCTAssertTrue(controller.yieldingToInferredLoan, "a loan started without the phone is honoured (row 17)")
-        let queriesBefore = statusQueries()
-
-        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
-            DoseRecordBatch(epoch: 40, events: [], tombstones: [], sentAt: Date())).transportDictionary())
-        controller.queue.sync { }
-        XCTAssertEqual(statusQueries(), queriesBefore, "records from the loan stood aside for ask nothing")
-        XCTAssertEqual(revokes(), 0)
-        XCTAssertTrue(controller.yieldingToInferredLoan)
     }
 
     /// A grant the watch never confirms: asked at the probe, silence takes the pod back after the

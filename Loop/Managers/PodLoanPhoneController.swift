@@ -352,10 +352,8 @@ final class PodLoanPhoneController {
     var lastWatchAnswerCannotReachPod = false
     /// The last report said the watch holds nothing.
     var lastWatchAnswerHoldsNothing = false
-    /// Loans a revived watch claimed that this phone refused; its later reports for them get the stop again.
+    /// Loans a revived watch claimed that this phone refused; its records for them get the stop again.
     var refusedRevivedEpochs: Set<Int> = []
-    /// When the phone last asked the watch about records from a loan it does not hold.
-    var foreignRecordsAskedAt: Date?
     /// The silence a "Watch Not Reporting" notice went out for, so it is said once.
     var silenceWarnedFor: Date?
     var lastDormantSettingsFingerprint: String?
