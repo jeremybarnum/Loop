@@ -140,6 +140,12 @@ private final class LoanBooksDriver {
         // Fixture construction (force-unwraps allowed here, per file convention).
         let schedule = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: basalRate)])!
         let overrideHistory = TemporaryScheduleOverrideHistory()
+        // Wait for the store's own start-up, not just the database's: until it has run, the
+        // insulin delivery store can't say where its last basal ended, and a write landing then
+        // saves the pump events but never copies them into the delivery store — while
+        // addPumpEvents still reports success. Every insulin read then answers zero (the
+        // harness's long-standing "zero rows" flake: reproduced 4 in 40, 2026-10-21).
+        let ready = host.expectation(description: "dose store ready")
         let doseStore = DoseStore(
             healthKitSampleStore: nil,
             cacheStore: cacheStore,
@@ -148,7 +154,12 @@ private final class LoanBooksDriver {
             basalProfile: nil,
             insulinSensitivitySchedule: nil,
             overrideHistory: overrideHistory,
-            provenanceIdentifier: "LoanBooksHarnessTests")
+            provenanceIdentifier: "LoanBooksHarnessTests",
+            onReady: { error in
+                XCTAssertNil(error, "dose store failed to start")
+                ready.fulfill()
+            })
+        host.wait(for: [ready], timeout: 10)
         // The WatchLoopManager.settings didSet path: schedule applied via the setter.
         doseStore.basalProfile = schedule
         self.store = doseStore

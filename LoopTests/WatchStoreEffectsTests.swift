@@ -94,6 +94,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// The stores exactly as StockLoopStack.makeStores shipped them through
     /// build 143: schedule-less, overrideHistory-less.
     private func makeStoresAsShipped() -> (DoseStore, CarbStore) {
+        let doseStoreReady = expectation(description: "dose store ready")
         let doseStore = DoseStore(
             healthKitSampleStore: nil,
             cacheStore: cacheStore,
@@ -101,8 +102,11 @@ final class WatchStoreEffectsTests: XCTestCase {
             longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration,
             basalProfile: nil,
             insulinSensitivitySchedule: nil,
-            provenanceIdentifier: "WatchStoreEffectsTests"
+            provenanceIdentifier: "WatchStoreEffectsTests",
+            onReady: { _ in doseStoreReady.fulfill() }
         )
+        // The store's own start-up must finish before anything is written — see LoanBooksDriver.
+        wait(for: [doseStoreReady], timeout: 10)
         let carbStore = CarbStore(
             healthKitSampleStore: nil,
             cacheStore: cacheStore,
@@ -119,6 +123,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// didSet does when the grant lands.
     private func makeStoresFixed() -> (DoseStore, CarbStore) {
         let overrideHistory = TemporaryScheduleOverrideHistory()
+        let doseStoreReady = expectation(description: "dose store ready")
         let doseStore = DoseStore(
             healthKitSampleStore: nil,
             cacheStore: cacheStore,
@@ -127,8 +132,11 @@ final class WatchStoreEffectsTests: XCTestCase {
             basalProfile: nil,
             insulinSensitivitySchedule: nil,
             overrideHistory: overrideHistory,
-            provenanceIdentifier: "WatchStoreEffectsTests"
+            provenanceIdentifier: "WatchStoreEffectsTests",
+            onReady: { _ in doseStoreReady.fulfill() }
         )
+        // The store's own start-up must finish before anything is written — see LoanBooksDriver.
+        wait(for: [doseStoreReady], timeout: 10)
         let carbStore = CarbStore(
             healthKitSampleStore: nil,
             cacheStore: cacheStore,
