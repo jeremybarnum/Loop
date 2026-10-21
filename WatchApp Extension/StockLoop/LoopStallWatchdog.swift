@@ -73,34 +73,6 @@ enum LoopStallWatchdog {
         center.removePendingRequests(withIdentifiers: rungIdentifiers)
         center.removeDeliveredRequests(withIdentifiers: rungIdentifiers)
     }
-
-    // MARK: - The phone's own ladder, copied onto the wrist
-
-    /// The PHONE's Loop-Failure rungs, by the identifiers AlertManager schedules them under
-    /// (`LoopNotificationCategory.loopNotRunning` + the interval as a TimeInterval). iOS copies
-    /// its scheduled notifications onto the watch, so they fire on the wrist with the phone out
-    /// of reach. At a granted loan the phone cancels them; at an OFFLINE start it is not there
-    /// to, and they fired at 20/40/60 min over a watch that was looping (field 2026-10-11).
-    static var phoneRungIdentifiers: [String] { rungs.map { "loopNotRunning\($0.interval)" } }
-
-    /// Take the phone's rungs off the wrist. Called at loan start and at every landed cycle:
-    /// while this watch loops, its own ladder above is the one that should speak.
-    static func removePhoneRungs() {
-        let center = WristAlerts.scheduler
-        center.removePendingRequests(withIdentifiers: phoneRungIdentifiers)
-        center.removeDeliveredRequests(withIdentifiers: phoneRungIdentifiers)
-    }
-
-    /// Loan start: say what the wrist was holding before removing it — whether watchOS shows
-    /// this app the phone's copies at all is the open question this log line answers.
-    static func removePhoneRungsReporting(_ report: @escaping (String) -> Void) {
-        UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
-            let ids = requests.map(\.identifier)
-            let phones = ids.filter { phoneRungIdentifiers.contains($0) }
-            removePhoneRungs()
-            report("phone's Loop-Failure rungs visible on the wrist: \(phones.count) of \(phoneRungIdentifiers.count) — removal requested for all \(phoneRungIdentifiers.count) · pending here: \(ids.count) [\(ids.sorted().joined(separator: ", "))]")
-        }
-    }
 }
 
 // SensorBlackoutAlert (WS4b, ruled 2026-07-19) DELETED by ruling 2026-08-24: a glucose

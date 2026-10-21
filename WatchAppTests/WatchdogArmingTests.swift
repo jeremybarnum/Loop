@@ -88,29 +88,6 @@ final class WatchdogArmingTests: XCTestCase {
         HandbackStuckAlert.disarm()
     }
 
-    /// Field 2026-10-11: an offline start left the PHONE's Loop-Failure rungs on the wrist, and
-    /// they fired at 20/40/60 min over a watch that was looping. The watch removes them by the
-    /// phone's own identifiers (AlertManager: category + interval) and keeps its own ladder.
-    func testThePhonesRungsAreTakenOffTheWristAndTheWatchsOwnStay() {
-        XCTAssertEqual(LoopStallWatchdog.phoneRungIdentifiers,
-                       ["loopNotRunning1200.0", "loopNotRunning2400.0", "loopNotRunning3600.0", "loopNotRunning7200.0"],
-                       "must match what the phone schedules — AlertManager.scheduleLoopNotRunningNotifications")
-        for id in LoopStallWatchdog.phoneRungIdentifiers {       // the phone's copies, as iOS places them here
-            scheduler.add(UNNotificationRequest(identifier: id, content: UNMutableNotificationContent(),
-                                                trigger: UNTimeIntervalNotificationTrigger(timeInterval: 600, repeats: false)))
-        }
-        LoopStallWatchdog.refresh()
-        XCTAssertEqual(pending().count, 8)
-
-        LoopStallWatchdog.removePhoneRungs()
-
-        XCTAssertEqual(pending().count, 4, "only the watch's own ladder is left")
-        XCTAssertTrue(scheduler.identifiers.isDisjoint(with: LoopStallWatchdog.phoneRungIdentifiers))
-        XCTAssertEqual(Set(scheduler.deliveredRemovals), Set(LoopStallWatchdog.phoneRungIdentifiers),
-                       "already-delivered copies are cleared from the wrist too")
-        LoopStallWatchdog.disarm()
-    }
-
     func testHandbackAlertFiresLongBeforeTheLoopWatchdog() {
         XCTAssertLessThan(HandbackStuckAlert.interval, LoopStallWatchdog.interval)
     }
