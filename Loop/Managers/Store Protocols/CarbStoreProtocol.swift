@@ -43,6 +43,9 @@ protocol CarbStoreProtocol: AnyObject {
     func getGlucoseEffects(start: Date, end: Date?, effectVelocities: [GlucoseEffectVelocity], completion: @escaping(_ result: CarbStoreResult<(entries: [StoredCarbEntry], effects: [GlucoseEffect])>) -> Void)
     
     func glucoseEffects<Sample: CarbEntry>(of samples: [Sample], startingAt start: Date, endingAt end: Date?, effectVelocities: [GlucoseEffectVelocity]) throws -> [GlucoseEffect]
+
+    /// The same, with each entry's carbs expected on the absorption time the user entered (the predicted-low warning's expectation).
+    func glucoseEffectsOnEnteredAbsorptionTimes<Sample: CarbEntry>(of samples: [Sample], startingAt start: Date, endingAt end: Date?, effectVelocities: [GlucoseEffectVelocity]) throws -> [GlucoseEffect]
     
     func getCarbsOnBoardValues(start: Date, end: Date?, effectVelocities: [GlucoseEffectVelocity]?, completion: @escaping (_ result: CarbStoreResult<[CarbValue]>) -> Void)
     

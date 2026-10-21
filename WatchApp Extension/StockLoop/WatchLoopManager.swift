@@ -2624,8 +2624,9 @@ final class WatchLoopManager {
             insulinCounteractionEffects: insulinCounteractionEffects,
             carbEntries: recentCarbEntries ?? [],
             carbEffectOf: { entries, readings in
-                try self.carbStore.glucoseEffects(of: entries, startingAt: carbEffectStart, endingAt: nil,
-                                                  effectVelocities: readings)
+                // The warning compares what arrives with what the user expected: the entries as entered.
+                try self.carbStore.glucoseEffectsOnEnteredAbsorptionTimes(of: entries, startingAt: carbEffectStart,
+                                                                          endingAt: nil, effectVelocities: readings)
             },
             longestEffectDuration: doseStore.longestEffectDuration,
             suspendThreshold: settings.suspendThreshold?.quantity,

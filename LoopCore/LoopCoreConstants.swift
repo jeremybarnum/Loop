@@ -22,11 +22,11 @@ public enum LoopCoreConstants {
     /// this): Loop's minimum absorption rate. Passed to CarbStore as `absorptionTimeOverrun`.
     public static let minimumAbsorptionRateTimeMultiplier = 1.5
 
-    /// Carbs are expected to absorb over (entered absorption time × this): the curve Loop's forecast,
-    /// dosing and the predicted-low warning's expectation follow. 1.0 trusts the entry as entered.
-    /// Never longer than the minimum-rate time (CarbStore caps it). Passed to CarbStore as
-    /// `expectedAbsorptionTimeOverrun`.
-    public static let absorptionTimeOverrun = 1.5
+    /// Carbs are expected to absorb over (entered absorption time × this): the curve Loop's forecast
+    /// and dosing follow. 1.0 trusts the entry as entered (ruled for the production line, 2026-10-21;
+    /// stock Loop uses 1.5). Never longer than the minimum-rate time (CarbStore caps it). Passed to
+    /// CarbStore as `expectedAbsorptionTimeOverrun`.
+    public static let absorptionTimeOverrun = 1.0
 
     /// How much historical glucose to include in a dosing decision
     /// Somewhat arbitrary, but typical maximum visible in bolus glucose preview

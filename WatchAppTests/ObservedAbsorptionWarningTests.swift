@@ -13,13 +13,13 @@
 //  over the last 15 minutes with what Loop's carb forecast, as it stood 15 minutes ago, expected for
 //  those minutes, and scaling the remaining carbs by that ratio (fewer carbs, same timing).
 //
-//  The expectation is whatever the configured absorption model said at the time, so the model is
-//  part of each test:
+//  The expectation is what the user entered (ruled 2026-10-21): the warning's carb-store calls are
+//  `glucoseEffectsOnEnteredAbsorptionTimes`, whatever curve dosing follows. The carb model is still
+//  part of each test, because Loop's OWN forecast (the one the warning scales) follows it:
 //  - named models (`overrunOfOne`, `stretched`, `adaptive`) pin exact numbers, and do not depend on
 //    the app's constants;
-//  - `device` reads the app's own `LoopCoreConstants` (the minimum absorption rate and the
-//    absorption time overrun), and its tests assert only what must hold for any overrun from 1.0
-//    up to the minimum multiplier, so tuning the overrun does not break them.
+//  - `device` reads the app's own `LoopCoreConstants` (the minimum absorption rate and dosing's
+//    absorption time overrun).
 //
 
 import XCTest
@@ -118,9 +118,12 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
                                            timeZone: TimeZone(identifier: "UTC")!)!)
     }
 
-    /// The carb effect exactly as CarbStore builds it from a set of readings.
+    /// The carb effect exactly as CarbStore builds it from a set of readings. `asEntered` stands for the
+    /// store's `glucoseEffectsOnEnteredAbsorptionTimes` (the warning's call: the entries as entered, a
+    /// multiplier of 1.0 on the entered time, not a tunable); without it, the model's expectation, as
+    /// Loop's own forecast uses.
     private func carbEffect(_ entries: [NewCarbEntry], model: CarbModel, from start: Date,
-                            readings: [GlucoseEffectVelocity]) -> [GlucoseEffect] {
+                            readings: [GlucoseEffectVelocity], asEntered: Bool = false) -> [GlucoseEffect] {
         let s = schedules(model)
         return entries.map(
             to: readings,
@@ -129,7 +132,7 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
             absorptionTimeOverrun: model.overrun,
             defaultAbsorptionTime: declaredAbsorptionTime,
             delay: delay,
-            initialAbsorptionTimeOverrun: model.expectationOverrun,
+            initialAbsorptionTimeOverrun: asEntered ? 1.0 : model.expectationOverrun,
             absorptionModel: piecewise,
             adaptiveAbsorptionRateEnabled: model.adaptive
         ).dynamicGlucoseEffects(
@@ -163,13 +166,18 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
                         entries: [NewCarbEntry], readings ice: [GlucoseEffectVelocity],
                         glucoseAge: TimeInterval = 0, pumpDataAge: TimeInterval? = 0) -> Run {
         let now = start.addingTimeInterval(.minutes(minutes))
-        let effect: ([NewCarbEntry], [GlucoseEffectVelocity]) -> [GlucoseEffect] = { entries, readings in
+        // Loop's own carb forecast follows the model's expectation; the warning's calls, as on the
+        // devices, take the entries as entered, whatever the model.
+        let loopEffect: ([NewCarbEntry], [GlucoseEffectVelocity]) -> [GlucoseEffect] = { entries, readings in
             self.carbEffect(entries, model: model, from: start, readings: readings)
+        }
+        let warningEffect: ([NewCarbEntry], [GlucoseEffectVelocity]) -> [GlucoseEffect] = { entries, readings in
+            self.carbEffect(entries, model: model, from: start, readings: readings, asEntered: true)
         }
         // For the numbers only: what the ratio saw, for the same entries the assessment judges.
         let judged = entries.filter { $0.startDate <= now.addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow) }
         let measurement = ObservedAbsorptionManager().measureAbsorptionRatio(insulinCounteractionEffects: ice) {
-            effect(judged, $0)
+            warningEffect(judged, $0)
         }
 
         let sensitivity = schedules(model).sensitivity
@@ -206,13 +214,13 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
             glucose: glucose,
             lastPumpDataDate: pumpDataAge.map { now.addingTimeInterval(-$0) },
             momentum: [],
-            carbEffect: effect(entries, ice),
+            carbEffect: loopEffect(entries, ice),
             insulinEffect: insulinEffect,
             retrospectiveEffect: [],
             suspendEffect: suspendEffect,
             insulinCounteractionEffects: ice,
             carbEntries: entries,
-            carbEffectOf: effect,
+            carbEffectOf: warningEffect,
             longestEffectDuration: .hours(6),
             suspendThreshold: HKQuantity(unit: mgdl, doubleValue: 70),
             displayUnit: mgdl,
@@ -283,34 +291,29 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
         }
     }
 
-    // MARK: - The ratio under a stretched expectation (LoopKit's default 1.5)
+    // MARK: - The expectation is the entered time, whatever curve dosing follows (ruled 2026-10-21)
 
-    /// With the expectation stretched 1.5×, the ratio is measured against the stretched rate: a
-    /// third of the ENTERED rate is about half of what Loop expected.
-    func testUnderAStretchedExpectationTheRatioIsMeasuredAgainstTheStretchedRate() {
-        let third = run("33%", model: .stretched, arriving: steady(1.0 / 3.0)).ratio
-        let half = run("50%", model: .stretched, arriving: steady(0.5)).ratio
-        XCTAssertEqual(third, 0.5, accuracy: 0.08)
-        XCTAssertEqual(half, 0.75, accuracy: 0.1)
-        XCTAssertLessThan(run("fast then 30%", model: .stretched, arriving: fastStart(then: 0.3)).ratio, 0.6)
+    /// Even with Loop's own forecast on LoopKit's stretched expectation (1.5×), the warning measures
+    /// against the ENTERED rate: a third of it reads a third, not the half the stretched curve
+    /// would make it.
+    func testWithDosingOnAStretchedExpectationTheWarningStillMeasuresAgainstTheEnteredRate() {
+        XCTAssertEqual(run("33%", model: .stretched, arriving: steady(1.0 / 3.0)).ratio, 1.0 / 3.0, accuracy: 0.06)
+        XCTAssertEqual(run("50%", model: .stretched, arriving: steady(0.5)).ratio, 0.5, accuracy: 0.06)
+        XCTAssertEqual(run("fast then 30%", model: .stretched, arriving: fastStart(then: 0.3)).ratio, 0.3, accuracy: 0.05)
     }
 
-    // MARK: - The ratio under the devices' own model, whatever the overrun
+    // MARK: - The ratio under the devices' own model
 
-    /// Slow carbs read between their share of the ENTERED rate (overrun 1.0) and that share
-    /// stretched by the minimum multiplier (overrun at its cap) — and always below 1.
-    func testOnTheDevicesModelSlowCarbsReadBetweenTheirShareAndItsStretch() {
-        let stretch = LoopCoreConstants.minimumAbsorptionRateTimeMultiplier
+    /// On the devices' model slow carbs read as their share of the entered rate.
+    func testOnTheDevicesModelSlowCarbsReadAsTheirShareOfTheEnteredRate() {
         for fraction in [1.0 / 3.0, 0.5] {
-            let ratio = run("\(fraction)", arriving: steady(fraction)).ratio
-            XCTAssertGreaterThanOrEqual(ratio, fraction - 0.06, "arriving at \(fraction) of entered")
-            XCTAssertLessThanOrEqual(ratio, fraction * stretch + 0.1, "arriving at \(fraction) of entered")
-            XCTAssertLessThan(ratio, 1, "arriving at \(fraction) of entered")
+            XCTAssertEqual(run("\(fraction)", arriving: steady(fraction)).ratio, fraction, accuracy: 0.06,
+                           "arriving at \(fraction) of entered")
         }
     }
 
     func testOnTheDevicesModelASlowdownAfterAFastStartIsSeen() {
-        XCTAssertLessThan(run("fast then 30%", arriving: fastStart(then: 0.3)).ratio, 0.6)
+        XCTAssertEqual(run("fast then 30%", arriving: fastStart(then: 0.3)).ratio, 0.3, accuracy: 0.05)
     }
 
     // MARK: - Adaptive: the expectation carries the history
