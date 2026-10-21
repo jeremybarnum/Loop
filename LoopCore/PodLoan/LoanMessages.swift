@@ -450,3 +450,14 @@ extension SharedDeviceConfiguration {
         self.init(rawValue: raw)
     }
 }
+
+extension PumpManagerStatus.BolusState {
+    /// This pump's own bolus as the bolus rule sees it: being started, given or cancelled.
+    public var underWay: LoanControl.BolusUnderWay? {
+        switch self {
+        case .noBolus: return nil
+        case .inProgress(let dose): return LoanControl.BolusUnderWay(endsAt: dose.endDate)
+        case .initiating, .canceling: return LoanControl.BolusUnderWay(endsAt: nil)
+        }
+    }
+}
