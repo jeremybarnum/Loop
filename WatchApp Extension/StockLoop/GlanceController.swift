@@ -1254,6 +1254,14 @@ struct GlanceView: View {
                             .foregroundColor(.glanceDim)
                             .multilineTextAlignment(.center)
                     }
+                } else if let note = model.state.idleNote {
+                    // No hand-back in progress: the only note set here is the failed End's
+                    // ("End didn't go through…"), which must show while the loan carries on.
+                    Text(note)
+                        .font(.system(size: 11))
+                        .foregroundColor(.glanceWarn)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 // R40(f): the phone returned during a seized loan. The choice is the
                 // user's — never auto (reachability is not presence: "phone could be
