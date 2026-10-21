@@ -235,6 +235,8 @@ final class PodLoanWatchController {
     private(set) var phase: Phase {
         didSet {
             defaults.set(phase.rawValue, forKey: Keys.phase)
+            if phase == .recoveredDrain || phase == .revoked { owesFinalOffer = true }
+            if phase != .active { endDidNotGoThrough = false }
             loanActiveMirrorLock.lock()
             _loanActiveMirror = (phase == .active)
             loanActiveMirrorLock.unlock()
@@ -348,6 +350,16 @@ final class PodLoanWatchController {
     /// the drain is fully acked does finalizeHandback() stop dosing and send the
     /// final (released=true) offer. In-memory only: any relaunch ends the loan.
     private var handbackRequested = false
+    /// A released, revoked or relaunch-ended loan whose final offer the phone has not yet
+    /// acknowledged. While true the watch rests in the drain, offering it — whatever else
+    /// happens (a refusal, a Start that times out) — because the phone stays loaned, with
+    /// nobody dosing, until it accepts one. Set on entering the drain or a revoke; cleared only
+    /// at the acknowledged close or when a new grant supersedes the drain.
+    private var owesFinalOffer = false
+    /// The last End gave up and the loan carried on: the watch screen says so until the next End
+    /// or until the loan stops being active.
+    private(set) var endDidNotGoThrough = false
+    static let endDidNotGoThroughText = "End didn't go through — Sport Mode is still running. Tap End again."
     /// Capability gate: interim offers only when the granting phone
     /// understands them; false/nil grant → legacy single-phase hand-back.
     private var phoneSupportsInterimHandback = false
@@ -436,6 +448,7 @@ final class PodLoanWatchController {
         // (stock recovery semantics live phone-side after reclaim, spec §5.3.3).
         if journal.hasUndrainedEvents {
             phase = .recoveredDrain
+            owesFinalOffer = true          // property observers do not run in init
             issueSessionEndedAlert()
         } else {
             switch phase {
@@ -458,6 +471,7 @@ final class PodLoanWatchController {
                 // the phone gets a released hand-back and reclaims (offer is idempotent
                 // by epoch; an empty event list still transitions the phone to owner).
                 phase = .recoveredDrain
+                owesFinalOffer = true      // property observers do not run in init
                 issueSessionEndedAlert()
             }
         }
@@ -536,9 +550,23 @@ final class PodLoanWatchController {
                 handbackTimedOut(refusal: denied.reason)
                 return
             }
+            // Any refusal while DRAINING (released, revoked or after a relaunch) — the phone's
+            // Bluetooth is off, or a late answer to an earlier Start: the watch holds no pod, so
+            // there is no loan to keep, only the final offer still to deliver, and the phone stays
+            // loaned until it accepts one. Stay in the drain and let its resend chain keep
+            // offering; it lands once the phone can reclaim. Going idle here stopped the resends
+            // and left the phone loaned with nobody dosing (simulator P6, 2026-10-21).
+            if phase == .recoveredDrain || phase == .revoked {
+                requestTimeoutWork?.cancel()
+                lastIdleNote = NSLocalizedString("The iPhone couldn't take the pod back yet. The watch keeps offering it.",
+                                                 comment: "Glance note: the phone refused while the watch was handing the pod back")
+                notifyUI()
+                SportLog.event("loan", "DENIED by phone — \(denied.reason) — drain keeps offering")
+                return
+            }
             // The phone refused — show why instead of hanging on "requesting…".
             requestTimeoutWork?.cancel()
-            if phase == .requested || phase == .idle || phase == .recoveredDrain {
+            if phase == .requested || phase == .idle {
                 returnToRestingPhase()
                 lastIdleNote = denied.reason
                 notifyUI()   // the reason must not wait for a tap
@@ -843,7 +871,8 @@ final class PodLoanWatchController {
     // MARK: - Request / Grant / Takeover (§2.1-2.3)
 
     /// Where a failed or abandoned start attempt comes to rest. Plain .idle — unless
-    /// undrained records are parked, in which case the resting phase is .recoveredDrain and
+    /// undrained records are parked, or a released loan's final offer is still owed to the
+    /// phone (`owesFinalOffer`), in which case the resting phase is .recoveredDrain and
     /// the drain's resend chain is restarted (the 15 s re-arm guard deliberately lets the
     /// chain die whenever phase leaves the drain family, so every return must re-kick it).
     /// This is what makes the drain a STATE the watch passes through rather than a wall:
@@ -851,7 +880,7 @@ final class PodLoanWatchController {
     /// Start — silently — until the phone came back. The records resend on their own;
     /// nothing about them should block the next attempt.
     private func returnToRestingPhase() {
-        if journal.hasUndrainedEvents {
+        if journal.hasUndrainedEvents || owesFinalOffer {
             phase = .recoveredDrain
             sendHandbackOffer(freshened: false, recovered: true)
         } else {
@@ -1122,6 +1151,9 @@ final class PodLoanWatchController {
         }
 
         epoch = grant.epoch
+        // A parked drain is superseded by this loan (its records, if any, folded in above), so
+        // its final offer is no longer owed.
+        owesFinalOffer = false
         // A parked drain's final-offer stamp must not time this loan's ack (09-24: "+446.8s").
         finalOfferSentAt = nil
         // Nor may its pod readings stand in for this loan's; takeover writes fresh ones.
@@ -2200,6 +2232,7 @@ final class PodLoanWatchController {
                 return
             }
             self.reunionPromptActive = false   // a manual End answers the R40(f) prompt too
+            self.endDidNotGoThrough = false
             self.handbackRequested = true
             self.handbackResendCount = 0
             self.handbackSawUnreachable = false
@@ -2296,31 +2329,39 @@ final class PodLoanWatchController {
         } else {
             // Interim: never stopped dosing; phase already .active. Just abort the drain.
             SportLog.event("loan", "HAND-BACK \(why) (interim); Sport Mode continues on the watch\(wedgeSuffix)")
-            if unreachable || refusal != nil {
-                // Known at once, so say it at once: the pre-scheduled notification is two
-                // minutes away and her signal must not be two minutes late.
-                HandbackStuckAlert.disarm()
-                issueProtocolAlert(title: "Couldn't End Sport Mode",
-                                   body: refusal ?? "Your iPhone isn't reachable, so Sport Mode is still running on your watch. Tap End again when the iPhone is nearby.")
+            // A failed End must say so (ruled 2026-10-19; field e42, 2026-10-13: every send failed,
+            // the budget ran out, and nothing told her the loan was still running). One alert,
+            // whatever the cause, raised here rather than left to the notification pre-scheduled
+            // at End — that one is removed first, delivered or not, so exactly one remains — and
+            // the same sentence on the watch screen until the next End.
+            HandbackStuckAlert.disarm()
+            let body: String
+            if let refusal {
+                body = refusal
+            } else if unreachable {
+                body = "Your iPhone isn't reachable, so Sport Mode is still running on your watch. Tap End again when the iPhone is nearby."
+            } else if wedge == .oneWay {
+                body = "End didn't go through — Sport Mode is still running. Your iPhone is reachable but didn't confirm: reopen Loop on both devices, then tap End again."
+            } else {
+                body = Self.endDidNotGoThroughText
             }
+            endDidNotGoThrough = true
+            issueProtocolAlert(title: "Couldn't End Sport Mode", body: body)
         }
         switch wedge {
         case .sessionReestablishing:
-            // No alert: this variant resolves on its own, and HandbackStuckAlert has already
-            // told the user End did not complete. A second, softer notice on top of it added
-            // words without adding an action.
-            SportLog.event("loan", "hand-back wedge variant B (session re-establishing) — no alert; expected to clear on its own")
+            // No second alert: the one above already says End did not go through. This variant
+            // usually resolves on its own, so "tap End again" is the whole remedy.
+            SportLog.event("loan", "hand-back wedge variant B (session re-establishing) — the End-failed alert stands; expected to clear on its own")
         case .oneWay:
             // Reachability is read live at the classify site, so "is reachable" is observed.
             // The remedy no longer names ONE device: this was written when the wedge was
             // believed to be watch-side only, and 2026-08-15 produced a PHONE-side instance
             // where restarting the watch app did nothing and only reinstalling the phone app
             // cleared it. The classifier cannot tell the two apart, so the copy must not either.
-            // The released case has already said its piece above; one alert, not two.
-            if !wasFinal {
-                issueProtocolAlert(title: "End Not Confirmed",
-                                   body: "Your iPhone is reachable but hasn't confirmed. Reopening Loop on both devices usually clears this.")
-            }
+            // Both cases have already said their piece above (the interim alert names this
+            // remedy); one alert, not two.
+            break
         case .none:
             break
         }
@@ -2589,6 +2630,7 @@ final class PodLoanWatchController {
                                       self.now().timeIntervalSince(releaseBegan)))
         finalOfferSentAt = nil
         journal.end()
+        owesFinalOffer = false
         phase = .idle
         epoch = nil
         deliveredAtTakeover = nil
@@ -2752,6 +2794,8 @@ final class PodLoanWatchController {
         let pendingUncertain: Bool
         let suspendEndsAt: Date?
         let lastIdleNote: String?
+        /// The last End gave up and the loan carried on (shown on the active screen).
+        let endDidNotGoThrough: Bool
         /// When the current Start attempt began (progress bar); only meaningful
         /// while phase is requested/takingOver.
         let startedAt: Date?
@@ -2854,6 +2898,7 @@ final class PodLoanWatchController {
                 pendingUncertain: pendingUncertainEventID != nil,
                 suspendEndsAt: (manualSuspendEnd ?? .distantPast) > self.now() ? manualSuspendEnd : nil,
                 lastIdleNote: lastIdleNote,
+                endDidNotGoThrough: endDidNotGoThrough,
                 startedAt: attemptStartedAt,
                 handbackPending: handbackRequested,
                 handbackStartedAt: handbackStartedAt,

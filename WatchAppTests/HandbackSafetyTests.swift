@@ -14,6 +14,7 @@
 //
 
 import XCTest
+import UserNotifications
 import LoopKit
 import LoopCore
 @testable import WatchApp_Extension
@@ -116,6 +117,75 @@ final class HandbackSafetyTests: XCTestCase {
         XCTAssertEqual(snap.phase, .active, "the loan continues")
         XCTAssertTrue(snap.hasPumpManager, "the watch still holds the pod")
         XCTAssertFalse(snap.handbackPending, "End stopped at once — no two-minute budget to wait out")
+    }
+
+    // MARK: 2a — a failed End says so (ruled 2026-10-19; field e42, 2026-10-13)
+
+    /// End gives up after its budget and the loan carries on: exactly one notification remains,
+    /// it says End didn't go through, the one pre-scheduled at End is gone, and the watch screen
+    /// says the same until the next End.
+    func testAFailedEndSaysSoOnceAndOnTheScreen() {
+        let alerts = RecordingWristAlertScheduler()
+        WristAlerts.scheduler = alerts
+        defer { WristAlerts.scheduler = UNUserNotificationCenter.current() }
+        let c = makeLiveLoan()
+        c.isPhoneReachable = { true }
+        c.send = { _ in }
+        c.beginHandback()
+        _ = c.debugSnapshot()                 // End runs on the controller's queue
+        XCTAssertTrue(alerts.identifiers.contains("sportmode.handbackStuck"), "precondition: the fallback is pre-scheduled at End")
+
+        c.expireHandbackForTesting()          // the budget ran out; nothing was refused or unreachable
+        XCTAssertEqual(c.debugSnapshot().phase, .active, "the loan carries on")
+        XCTAssertFalse(alerts.identifiers.contains("sportmode.handbackStuck"), "the pre-scheduled one is gone")
+        XCTAssertEqual(alerts.pending.count, 1, "exactly one notification")
+        XCTAssertEqual(alerts.pending.first?.content.title, "Couldn't End Sport Mode")
+        XCTAssertEqual(alerts.pending.first?.content.body, PodLoanWatchController.endDidNotGoThroughText)
+        XCTAssertTrue(c.debugSnapshot().endDidNotGoThrough, "and the screen says so")
+
+        c.beginHandback()
+        XCTAssertFalse(c.debugSnapshot().endDidNotGoThrough, "until the next End")
+    }
+
+    // MARK: 2b — a refused drain keeps offering (simulator P6, 2026-10-21)
+
+    /// After the watch has let go (released, revoked or relaunched) the phone stays loaned until
+    /// it accepts a final offer. A refusal — its Bluetooth is off — must not stop the offers: the
+    /// watch used to go idle there, and the phone stayed loaned with nobody dosing.
+    func testARefusedDrainKeepsOfferingUntilThePhoneCanTakeThePod() throws {
+        let c = makeLiveLoan()
+        var timers: [(label: String, work: DispatchWorkItem)] = []
+        c.scheduler = { _, label, work in timers.append((label, work)) }
+        c.isPhoneReachable = { true }
+        c.send = { _ in }
+        c.enterFinalStageForTesting()
+        c.expireHandbackForTesting()          // released: the drain, holding no pod
+        XCTAssertEqual(c.debugSnapshot().phase, .recoveredDrain, "precondition: the drain")
+
+        c.handleIncoming(userInfo: try LoanMessage.denied(LoanDenied(reason: "iPhone Bluetooth is off — still running")).transportDictionary(),
+                         channel: .urgent)
+        XCTAssertEqual(c.debugSnapshot().phase, .recoveredDrain, "still draining — never idle while the phone is loaned")
+        let resend = timers.last { $0.label == "handback-resend" }
+        XCTAssertNotNil(resend, "a resend is armed")
+        XCTAssertEqual(resend?.work.isCancelled, false, "and it will fire")
+    }
+
+    /// A Start tapped over a drain with no records left, timing out: it comes back to rest in the
+    /// drain, still owing the phone its final offer — not in idle with the offers stopped.
+    func testAStartThatTimesOutOverADrainReturnsToTheDrain() {
+        let c = makeLiveLoan()
+        c.isPhoneReachable = { true }
+        var sent: [[String: Any]] = []
+        c.send = { sent.append($0) }
+        c.enterFinalStageForTesting()
+        c.expireHandbackForTesting()
+        XCTAssertEqual(c.debugSnapshot().phase, .recoveredDrain, "precondition: the drain")
+        let offersBefore = offers(in: sent).count
+
+        c.scheduler = { _, label, work in if label == "request-timeout" { work.perform() } }
+        c.requestLoan(watchBuild: "test")
+        XCTAssertEqual(c.debugSnapshot().phase, .recoveredDrain, "back in the drain, not idle")
+        XCTAssertGreaterThan(offers(in: sent).count, offersBefore, "and offering again")
     }
 
     // MARK: 3 — released means released

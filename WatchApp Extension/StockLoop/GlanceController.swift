@@ -556,6 +556,9 @@ final class GlanceViewModel: ObservableObject {
                 if !snap.phoneReachable {
                     s.idleNote = NSLocalizedString("Can't reach iPhone — still looping. Move it closer or check its Bluetooth.", comment: "Glance note when an interim hand-back is blocked by an unreachable phone")
                 }
+            } else if snap.endDidNotGoThrough {
+                // The same sentence as the notification, so opening the app agrees with it.
+                s.idleNote = PodLoanWatchController.endDidNotGoThroughText
             }
             s.reunionPrompt = snap.reunionPromptVisible
             // A manual bolus spends most of its wall-clock waiting on the radio arbiter, with
