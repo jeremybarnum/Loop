@@ -3420,7 +3420,7 @@ extension WatchLoopManager: CGMManagerDelegate {
             let now = self.now()
             // Same 4.2-minute trigger gate as the phone (:1006) — under the G7's 5-minute
             // cadence this loops once per reading without double-firing on backfill.
-            if case .newData = readingResult, now.timeIntervalSince(self.lastCGMLoopTrigger) > .minutes(4.2) {
+            if case .newData = readingResult, now.timeIntervalSince(self.lastCGMLoopTrigger) > LoopCoreConstants.scaled(.minutes(4.2)) {
                 self.log.default("Triggering loop from new CGM data at %{public}@", String(describing: now))
                 self.lastCGMLoopTrigger = now
                 // Stock parity: the phone's CGM path also asserts pump data before
@@ -3606,7 +3606,7 @@ extension WatchLoopManager: CGMManagerDelegate {
                     "INGEST src=phone-relay stored=1/1 · latest \(mgdl) mg/dL age \(Int(self.now().timeIntervalSince(sample.date)))s (direct-G7 gap)")
                 SportLog.event("loan", "phone-BG fallback: ingested \(mgdl) mg/dL syncId=\(sample.syncIdentifier ?? "?") (direct-G7 gap) — triggering loop")
                 let now = self.now()
-                if now.timeIntervalSince(self.lastCGMLoopTrigger) > .minutes(4.2) {
+                if now.timeIntervalSince(self.lastCGMLoopTrigger) > LoopCoreConstants.scaled(.minutes(4.2)) {
                     self.lastCGMLoopTrigger = now
                     self.checkPumpDataAndLoop()
                 }
@@ -3708,7 +3708,7 @@ extension WatchLoopManager: CGMManagerDelegate {
                 }
                 self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }   // Momentum-invalidation parity
                 let now = self.now()
-                if now.timeIntervalSince(self.lastCGMLoopTrigger) > .minutes(4.2) {
+                if now.timeIntervalSince(self.lastCGMLoopTrigger) > LoopCoreConstants.scaled(.minutes(4.2)) {
                     self.lastCGMLoopTrigger = now
                     SportLog.event("sim", "SIM CGM \(Int(quantity.doubleValue(for: .milligramsPerDeciliter))) mg/dL (phone sim) — triggering real loop")
                     self.checkPumpDataAndLoop()
