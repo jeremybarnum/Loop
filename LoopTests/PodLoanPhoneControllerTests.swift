@@ -941,6 +941,43 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertNotNil(diagMatching("reconcile[provisional]"), "the provisional line is what stands")
     }
 
+    /// ...and when the settle ends without the pod, that session ends UNVERIFIED — notice, loop
+    /// opened — instead of staying pending for a later reading, which would book this phone's own
+    /// basal since as unexplained insulin, or be replaced unread by the next loan's audit
+    /// (simulator P10/P17, 2026-10-21). While it is pending, no new loan starts.
+    func testAnAnsweredHandbackThePodNeverReturnsFromEndsUnverifiedAndHoldsTheNextGrant() throws {
+        let controller = makeController()
+        let grant = try establishLoan(controller)
+        connectionReady = false
+
+        let ackSent = expectSend()
+        let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil,
+                                  odometer: LoanOdometerSnapshot(deliveredAtStart: 10, deliveredLatest: 10.5,
+                                                                 freshenSucceeded: false),
+                                  events: [], tombstones: [], recovered: false, released: true)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+
+        let refused = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+        wait(for: [refused], timeout: 5)
+        guard case .denied(let denied)? = lastSent() else {
+            return XCTFail("expected a refusal while the insulin check is pending, got \(String(describing: lastSent()))")
+        }
+        XCTAssertTrue(denied.reason.contains("checking the last session's insulin"), denied.reason)
+
+        controller.fireReclaimSettleCeilingForTesting()
+        lock.lock(); let opened = openLoopCalls; let urgent = urgentNotices; lock.unlock()
+        XCTAssertEqual(opened, 1, "unverified opens the loop")
+        XCTAssertTrue(urgent.contains("Watch Session Unverified"), "and says so")
+        XCTAssertNotNil(diagMatching("audit NEVER RAN (handback)"))
+
+        connectionReady = true
+        let next = try establishLoan(controller)
+        XCTAssertGreaterThan(next.epoch, grant.epoch, "nothing is left pending: the next Start is granted")
+    }
+
     // MARK: - A hand-over lost in transit
 
     /// Drives a controller into `.grantOffered` (grant sent, watch has not confirmed).
@@ -2237,6 +2274,9 @@ extension PodLoanPhoneControllerTests {
                           events: [], tombstones: [], recovered: false)).transportDictionary())
         wait(for: [ackSent], timeout: 5)
         waitForState(controller, .owner)
+        // The settle starts on the controller's queue just after the state flips; advancing the
+        // clock before it has taken its start time anchors it 9.5 s late (a flake under load).
+        waitUntil(timeout: 5, "settle started") { controller.reclaimProgress?.phase == .reconnectingToPod }
 
         clock = clock.addingTimeInterval(9.5)       // 0.95 of the 10 s promise
         let capped = try XCTUnwrap(controller.reclaimProgress)
@@ -2487,6 +2527,23 @@ extension PodLoanPhoneControllerTests {
         XCTAssertTrue(MockPumpManager.testConnectionReleased, "and the phone's pod link stays released")
         lock.lock(); let revoked = sent.contains { if case .revoke = $0 { return true }; return false }; lock.unlock()
         XCTAssertFalse(revoked, "nothing was sent to the watch either")
+    }
+
+    /// The checks ride the phone's 5-minute loop, and every mark is a multiple of it. A loop that
+    /// runs a fraction of a second early must not push a warning a whole loop later (simulator P7,
+    /// 2026-10-21: warnings at 26, 41 and 66 min).
+    func testWarningsLandOnTheirLoopEvenWhenItRunsSlightlyEarly() throws {
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        _ = try establishLoan(controller)
+        let silenceStart = clock
+        var warnedAt: [Int] = []
+        for tick in 1...14 {
+            clock = silenceStart.addingTimeInterval(.minutes(5 * Double(tick)) - 0.5)
+            let before = silenceWarnings()
+            holdTick(controller)
+            if silenceWarnings() > before { warnedAt.append(5 * tick) }
+        }
+        XCTAssertEqual(warnedAt, [20, 40, 60], "noticed at fifteen minutes, warned at twenty, forty and sixty")
     }
 
     /// Coming back into range, the phone notices an hour of silence at once — while the watch,

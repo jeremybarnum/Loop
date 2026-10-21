@@ -595,6 +595,9 @@ final class PodLoanPhoneController {
     /// an unrelated notification woke the phone). ensureCurrentPumpData is fired as soon as
     /// the link is up, so "returned" happens in seconds when the phone is awake instead of
     /// minutes by accident.
+    /// Tests: reach the settle's ceiling now rather than five minutes from now (it is wall-clock).
+    func fireReclaimSettleCeilingForTesting() { queue.sync { reclaimSettleWork?.perform() } }
+
     private func beginReclaimSettleWindow() {
         let started = deps.now()
         reclaimStartedAt = started
@@ -623,12 +626,17 @@ final class PodLoanPhoneController {
             self.reclaimStartedAt = nil            // ceiling reached — stop settling
             self.reclaimDisplayAnchor = nil
             self.deps.endReclaimBackgroundTask()
-            // A force-reclaim audit that never got its round-trip is an UNVERIFIED
-            // session, and dosing is still held from the reclaim. Unverified opens; it never
+            // An audit that never got its round-trip is an UNVERIFIED session, whichever way the
+            // pod came back: a forced take-back, or one the watch answered. It never stays
+            // pending — run later, against a pod reading that includes this phone's own basal
+            // since, it would book that basal as insulin the watch's records don't explain
+            // (simulator P10, 2026-10-21: a false +0.25 U OPEN LOOP at the next loan), or the
+            // next loan's audit would replace it unread (P17). Unverified opens; it never
             // quietly resumes.
-            if let pending = self.pendingHandbackAudit, pending.flavor == .forceReclaim {
+            if let pending = self.pendingHandbackAudit {
                 self.pendingHandbackAudit = nil
-                self.handbackDiag(pending.epoch, "** R37: audit NEVER RAN — pod unreachable through the settle window. Session UNVERIFIED, loop OPENS **")
+                let rung = pending.flavor == .forceReclaim ? "R37" : "R33"
+                self.handbackDiag(pending.epoch, "** \(rung): audit NEVER RAN (\(pending.flavor.rawValue)) — pod unreachable through the settle window. Session UNVERIFIED, loop OPENS **")
                 self.deps.setAutomaticDosingPaused(false)
                 self.deps.openLoopForUncertainReconciliation()
                 self.armOpenLoopReminder()
@@ -1776,6 +1784,15 @@ final class PodLoanPhoneController {
         }
         guard let lendable = pump as? PumpConnectionLendable else {
             deny("This pump can't be loaned to the watch (\(type(of: pump))).")
+            return
+        }
+        // Never lend the pod while the last session's insulin is still being checked: the next
+        // loan's audit would replace it unread. Normally seconds (the reclaim's own pod reading
+        // concludes it); up to the settle ceiling when the pod is out of reach, where it ends as
+        // unverified.
+        if let pending = pendingHandbackAudit {
+            handbackDiag(pending.epoch, "grant REFUSED — this session's insulin check is still pending (the pod hasn't answered since it came back)")
+            deny("The iPhone is still checking the last session's insulin. Tap Start again in a minute.")
             return
         }
         // No handover while this phone's bolus is being delivered (2026-09-28): the bolus stays
@@ -3916,6 +3933,12 @@ extension PodLoanPhoneController {
     /// Three missed cycles. Shorter than this and an ordinary late report reads as silence.
     static let watchSilenceThreshold: TimeInterval = .minutes(15)
 
+    /// These checks run on the phone's loop, every 5 minutes, and every mark above falls on a
+    /// multiple of that. A loop a fraction of a second early would miss its mark and push the
+    /// warning a whole loop later (simulator P7, 2026-10-21: 26/41/66 min instead of 21/41/61),
+    /// so a mark counts as reached this close to it.
+    static let watchSilenceTickTolerance: TimeInterval = 30
+
     /// Between noticing the silence and the first warning: one more chance to report, which is
     /// what a watch does within a cycle of coming back into range.
     static let watchSilenceGrace: TimeInterval = .minutes(5)
@@ -3990,7 +4013,7 @@ extension PodLoanPhoneController {
         let silence = now.timeIntervalSince(renewed)
         // Silent AND near the body. Away from the user the phone cannot tell a dead watch from
         // a distant one, so it says nothing rather than warning about a session that is fine.
-        guard silence > Self.watchSilenceThreshold,
+        guard silence > Self.watchSilenceThreshold - Self.watchSilenceTickTolerance,
               let reading = deps.latestGlucoseDate(), now.timeIntervalSince(reading) <= Self.nearTheBodyWindow else {
             if holdLapseNoticedAt != nil { holdLapseNoticedAt = nil }
             return
@@ -4004,7 +4027,7 @@ extension PodLoanPhoneController {
         }
         let issued = watchSilenceWarningsIssued
         guard issued < Self.watchSilenceWarningOffsets.count,
-              now.timeIntervalSince(noticed) >= Self.watchSilenceGrace + Self.watchSilenceWarningOffsets[issued] else { return }
+              now.timeIntervalSince(noticed) >= Self.watchSilenceGrace + Self.watchSilenceWarningOffsets[issued] - Self.watchSilenceTickTolerance else { return }
         watchSilenceWarningsIssued = issued + 1
         handbackDiag(epoch, String(format: "watch SILENT %.0f min — warning %d of %d issued; the pod stays assigned to the watch until the user takes it back",
                                    silence / 60, issued + 1, Self.watchSilenceWarningOffsets.count))
