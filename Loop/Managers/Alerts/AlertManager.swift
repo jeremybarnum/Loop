@@ -233,7 +233,9 @@ public final class AlertManager {
                 notificationContent.body = String(format: NSLocalizedString("Loop has not completed successfully in %@", comment: "The notification alert describing a long-lasting loop failure. The substitution parameter is the time interval since the last loop"), failureIntervalString)
             }
 
-            notificationContent.title = NSLocalizedString("Loop Failure", comment: "The notification title for a loop failure")
+            // Names the device: during a loan the watch has its own ladder with the same wording, and
+            // the wrist shows both (2026-10-21).
+            notificationContent.title = NSLocalizedString("Loop Failure (iPhone)", comment: "The notification title for a loop failure on the phone")
             let shouldMuteAlert = alertMuter.shouldMuteAlert(scheduledAt: timeUntilNotification)
             if isCritical, FeatureFlags.criticalAlertsEnabled {
                 if #available(iOS 15.0, *) {

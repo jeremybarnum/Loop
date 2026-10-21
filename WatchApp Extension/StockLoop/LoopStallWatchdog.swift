@@ -52,7 +52,8 @@ enum LoopStallWatchdog {
         formatter.unitsStyle = .full
         for rung in rungs {
             let content = UNMutableNotificationContent()
-            content.title = NSLocalizedString("Loop Failure", comment: "The notification title for a loop failure")
+            // Names the device: the phone's own ladder can reach the wrist too (2026-10-21).
+            content.title = NSLocalizedString("Loop Failure (Watch)", comment: "The notification title for a loop failure on the watch")
             content.body = String(format: NSLocalizedString("Loop has not completed successfully in %@", comment: "The notification alert describing a long-lasting loop failure. The substitution parameter is the time interval since the last loop"),
                                   formatter.string(from: rung.interval)?.localizedLowercase ?? "\(Int(rung.interval / 60)) minutes")
             // Critical rungs request .critical; without the Critical Alerts entitlement
