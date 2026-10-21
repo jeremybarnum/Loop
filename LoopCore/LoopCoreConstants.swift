@@ -34,3 +34,25 @@ public enum LoopCoreConstants {
     
 
 }
+
+// MARK: - A time scale for Simulator testing
+
+public extension LoopCoreConstants {
+    /// Simulator testing only, behind a build flag: SPORTMODE_TIME_SCALE=N in the app's environment
+    /// divides the waits that follow the sensor's 5-minute cadence by N, so a test harness whose
+    /// simulated sensor reads every 300/N s runs N times faster. 1 everywhere else: on a device,
+    /// without the flag, and under XCTest.
+    static let simulatedTimeScale: Double = {
+        #if SIMULATED_TIME_SCALE_ENABLED && targetEnvironment(simulator)
+        if NSClassFromString("XCTestCase") == nil,
+           let text = ProcessInfo.processInfo.environment["SPORTMODE_TIME_SCALE"],
+           let scale = Double(text), scale >= 1 {
+            return scale
+        }
+        #endif
+        return 1
+    }()
+
+    /// An interval divided by the Simulator time scale (unchanged outside Simulator testing).
+    static func scaled(_ interval: TimeInterval) -> TimeInterval { interval / simulatedTimeScale }
+}

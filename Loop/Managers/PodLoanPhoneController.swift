@@ -481,7 +481,7 @@ final class PodLoanPhoneController {
     /// (deps.isConnectionReady) or the ceiling elapses. nil = not settling.
     private var reclaimStartedAt: Date?
     private var reclaimSettleWork: DispatchWorkItem?
-    private static let reclaimSettleTimeout: TimeInterval = .minutes(5)
+    private static let reclaimSettleTimeout: TimeInterval = LoopCoreConstants.scaled(.minutes(5))
     /// The settle bar's single-stage promise, watch-present and watch-initiated alike.
     ///
     /// This replaced a two-stage bar (12 s, then a 105 s re-baseline) that was calibrated to a
@@ -1625,7 +1625,7 @@ final class PodLoanPhoneController {
     /// 2026-08-08: 283.1 s to 301.4 s, zero excursions past 302 s. One pulse period plus margin
     /// therefore separates a live watch from a dead one with enormous headroom — the one live
     /// revoke on record had a 6.5-second-old pulse, the five dead ones 5.5 to 21.2 minutes.
-    private static let watchContactLivenessWindow: TimeInterval = 330
+    private static let watchContactLivenessWindow: TimeInterval = LoopCoreConstants.scaled(330)
 
     /// Live branch: the drain is two urgent WatchConnectivity round trips plus one Core Data
     /// commit, with NO pod round-trip on the critical path. The one field revoke drained 9 doses
@@ -4253,25 +4253,25 @@ final class PodLoanPhoneController {
 
 extension PodLoanPhoneController {
     /// Three missed cycles. Shorter than this and an ordinary late report reads as silence.
-    static let watchSilenceThreshold: TimeInterval = .minutes(15)
+    static let watchSilenceThreshold: TimeInterval = LoopCoreConstants.scaled(.minutes(15))
 
     /// These checks run on the phone's loop, every 5 minutes, and every mark above falls on a
     /// multiple of that. A loop a fraction of a second early would miss its mark and push the
     /// warning a whole loop later (simulator P7, 2026-10-21: 26/41/66 min instead of 21/41/61),
     /// so a mark counts as reached this close to it.
-    static let watchSilenceTickTolerance: TimeInterval = 30
+    static let watchSilenceTickTolerance: TimeInterval = LoopCoreConstants.scaled(30)
 
     /// Between noticing the silence and the first warning: one more chance to report, which is
     /// what a watch does within a cycle of coming back into range.
-    static let watchSilenceGrace: TimeInterval = .minutes(5)
+    static let watchSilenceGrace: TimeInterval = LoopCoreConstants.scaled(.minutes(5))
 
     /// Warnings after the grace, then nothing. Repeating forever trains the user to ignore it.
-    static let watchSilenceWarningOffsets: [TimeInterval] = [0, .minutes(20), .minutes(40)]
+    static let watchSilenceWarningOffsets: [TimeInterval] = [0, .minutes(20), .minutes(40)].map(LoopCoreConstants.scaled)
 
     /// How fresh this phone's own sensor reading must be for it to count as near the user.
     /// A phone left at home hears nothing from the watch AND nothing from the sensor, and must
     /// not mistake its own absence for the watch's failure.
-    static let nearTheBodyWindow: TimeInterval = .minutes(11)
+    static let nearTheBodyWindow: TimeInterval = LoopCoreConstants.scaled(.minutes(11))
 
     private enum HoldKeys {
         static let renewedAt = "PodLoanPhoneController.holdRenewedAt"
