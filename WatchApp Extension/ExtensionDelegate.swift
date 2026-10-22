@@ -76,6 +76,15 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
             }
         })
 
+        // During a loan the glance complication shows the WATCH's loop: the glance mirror is
+        // republished at every landed cycle.
+        notifications.append(NotificationCenter.default.addObserver(forName: WatchLoopManager.glanceMirrorDidUpdate, object: nil, queue: nil) { [weak self] (_) in
+            DispatchQueue.main.async {
+                guard let self, self.stockLoopSession?.loanController.isLoanActiveNonBlocking == true else { return }
+                GlanceComplicationPublisher.publish(from: self)
+            }
+        })
+
         session.activate()
     }
 
@@ -239,6 +248,8 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
             log.default("Reloading complication timeline")
             server.reloadTimeline(for: complication)
         }
+        ComplicationPublisher.publish(from: loopManager)
+        GlanceComplicationPublisher.publish(from: self)
     }
 }
 

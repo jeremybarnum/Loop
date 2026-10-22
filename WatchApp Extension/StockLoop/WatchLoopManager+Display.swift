@@ -84,8 +84,9 @@ extension WatchLoopManager {
                 overrideSymbol: Self.overrideSymbol(for: scheduleOverride))
     }
 
-    /// The glance's override line ("🏓 70% 128"), only while the override is active. A preset's emoji
-    /// leads it; a preset drawn with an Apple symbol has it in `overrideSymbol` instead.
+    /// The glance's override line ("🏓 70% 128"), only while the override is active. Also used for the
+    /// Sport complications when the phone holds the pod. A preset's emoji leads it; a preset drawn with an
+    /// Apple symbol has it in `overrideSymbol` instead.
     static func overrideLabel(for override: TemporaryScheduleOverride?) -> String? {
         guard let o = override, o.isActive() else { return nil }
 
