@@ -1140,6 +1140,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         // window's length, so the shortfall does not depend on wall-clock timing in the test.)
         MockPumpManager.testOdometer = 10.0
         let bolus = makeEvent(seq: 1, units: 2.0, at: Date())
+        // The phone's verdict reading comes after the bolus has finished delivering (a reading
+        // inside it defers the check — testAVerdictInsideAWatchBolusIsDeferred).
+        pump.lastSync = Date().addingTimeInterval(600)
         let ackSent = expectSend()
         let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date().addingTimeInterval(60),
                                   finalStatus: nil,
@@ -1184,6 +1187,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
         MockPumpManager.testOdometer = 12.2
         let bolus = makeEvent(seq: 1, units: 2.4, at: Date())
+        pump.lastSync = Date().addingTimeInterval(600)   // the verdict reading comes after the bolus
         let ackSent = expectSend()
         let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil,
                                   odometer: LoanOdometerSnapshot(deliveredAtStart: 10.0, deliveredLatest: 12.2,
@@ -1296,6 +1300,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         // A synced stretch: a 1.0 U bolus streamed, and the checkpoint shows the pod metered
         // it plus 0.15 U of benign drift — within the band, window retired (base → 11.15).
         let bolus = makeEvent(seq: 1, units: 1.0, at: Date())
+        pump.lastSync = Date().addingTimeInterval(600)   // the verdict reading comes after the bolus
         try sendCheckpoint(controller, epoch: grant.epoch, events: [bolus], latest: 11.15,
                            asOf: Date().addingTimeInterval(2))
 
@@ -3275,5 +3280,45 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 5, "aged out") { self.persistedEstimates().isEmpty }
         controller.queue.sync { }
         XCTAssertTrue(deletedGapSyncs.isEmpty, "the dose stays in the books")
+    }
+}
+
+// MARK: - A verdict inside a watch bolus waits for it (2026-10-22; next-dev 64462351, 8a1ba84b)
+extension PodLoanPhoneControllerTests {
+
+    /// A hand-back answered seconds after a 2 U watch bolus: the pod has given part of it. Judged
+    /// at that reading, the whole bolus counted against the partial total raised a false
+    /// "Insulin On Board May Be Overstated". The check moves to the phone's next reading after
+    /// the bolus, where the phone's store explains it.
+    func testAVerdictInsideAWatchBolusIsDeferred() throws {
+        let controller = makeController()
+        let grant = try establishLoan(controller)
+        let bolusAt = Date()
+        MockPumpManager.testOdometer = 10.6          // 0.6 of the 2 U given so far
+        pump.lastSync = bolusAt.addingTimeInterval(24)
+        let ackSent = expectSend()
+        let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: bolusAt.addingTimeInterval(20), finalStatus: nil,
+                                  odometer: LoanOdometerSnapshot(deliveredAtStart: 10.0, deliveredLatest: 10.6,
+                                                                 freshenSucceeded: true),
+                                  events: [makeEvent(seq: 1, units: 2.0, at: bolusAt)],
+                                  tombstones: [], recovered: false, released: true)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+        waitUntil(timeout: 8, "deferred") { self.diagMatching("insulin check DEFERRED") != nil }
+        XCTAssertFalse(urgentNotices.contains("Insulin On Board May Be Overstated"), "no false notice mid-bolus")
+        XCTAssertEqual(pauseCalls.last, false, "dosing resumes")
+
+        // The next reading, after the bolus: the phone's store now holds the watch's bolus (booked as
+        // an instant). 2 U plus two minutes of schedule — explained, so silent.
+        storeDoses = [DoseEntry(type: .bolus, startDate: bolusAt, endDate: bolusAt, value: 2.0, unit: .units,
+                                deliveredUnits: 2.0, syncIdentifier: "watch-bolus")]
+        MockPumpManager.testOdometer = 12.0
+        pump.lastSync = bolusAt.addingTimeInterval(120)
+        let checked = expectation(description: "next reading")
+        controller.checkOwnPumpTotal { checked.fulfill() }
+        wait(for: [checked], timeout: 5)
+        XCTAssertEqual(positiveVerdicts, 0, "explained: nothing reported or booked, got \(urgentNotices)")
+        XCTAssertFalse(urgentNotices.contains("Insulin On Board May Be Overstated"), "got \(urgentNotices)")
     }
 }

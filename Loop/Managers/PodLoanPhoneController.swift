@@ -793,6 +793,28 @@ final class PodLoanPhoneController {
         guard let pending = pendingHandbackAudit else { return }
         pendingHandbackAudit = nil
 
+        // A watch bolus still being given at this reading (a Take Back or an End right after one):
+        // judged now, the whole bolus would count against a pod that has given part of it, a false
+        // "overstated" notice. The check moves to the phone's next pod reading after the bolus,
+        // against its dose store, which holds the watch's records (next-dev 64462351, 8a1ba84b).
+        let verdictReadingAt = deps.pumpManager()?.lastSync ?? deps.now()
+        if let until = pending.bolusDeliveringUntil, until > verdictReadingAt,
+           (deps.pumpManager() as? PumpConnectionLendable)?.lentDeviceInsulinDelivered != nil {
+            ownReading = OwnReading(units: pending.deliveredAtStart,
+                                    at: pending.windowStart ?? loanStartedAt ?? verdictReadingAt, owed: true)
+            handbackDiag(pending.epoch, String(format:
+                "insulin check DEFERRED — a watch bolus is still being given for %.0f s; the phone's next pod reading after it checks the loan's window",
+                until.timeIntervalSince(verdictReadingAt)))
+            deps.setAutomaticDosingPaused(false)
+            deps.cancelTempBasalAfterPodReturn { [weak self] error in
+                self?.queue.async {
+                    self?.handbackDiag(pending.epoch, error == nil ? "R33 temp cancelled — pod reverts to the user's schedule until the phone's next reading"
+                                                                   : "R33 temp cancel FAILED — pod keeps the watch's temp until the next cycle")
+                }
+            }
+            return
+        }
+
         if let latest = (deps.pumpManager() as? PumpConnectionLendable)?.lentDeviceInsulinDelivered {
             // The VERDICT residual is window-scoped: [audit base → this reading]. With no
             // checkpoints the base is the takeover anchor and this is the whole loan.
@@ -1142,8 +1164,10 @@ final class PodLoanPhoneController {
                 self.queue.async {
                     let own = doses.filter { !Self.isEstimate($0) }
                     // A bolus counts whole at its start, so a reading taken while one is still being
-                    // delivered would read short. Keep the window open until it has finished.
-                    if own.contains(where: { $0.type == .bolus && $0.startDate <= at && $0.endDate > at }) {
+                    // delivered would read short. Keep the window open until it has finished. A
+                    // watch bolus is booked as an instant, so its end is estimated from its size.
+                    if own.contains(where: { $0.type == .bolus && $0.startDate <= at
+                        && Self.bolusDeliveryEnd(start: $0.startDate, units: $0.programmedUnits, recordedEnd: $0.endDate) > at }) {
                         PhoneLog.event("loan", "[odometer] (own) a bolus is still being delivered — window kept open")
                         return finish()
                     }
@@ -1490,6 +1514,26 @@ final class PodLoanPhoneController {
         /// When the window's start reading was taken: the estimate a verdict books is named by
         /// [windowStart, verdict reading], and a check left owed resumes from it.
         var windowStart: Date? = nil
+        /// When the last watch bolus in the window will have finished delivering. A verdict read
+        /// before then counts the whole bolus against a pod that has given part of it (a Take Back
+        /// during a watch bolus raised a false "overstated" notice), so it waits for the phone's
+        /// next reading after it.
+        var bolusDeliveringUntil: Date? = nil
+    }
+
+    /// The pod gives a bolus at 1.5 U/min (0.05 U every 2 s). A watch bolus reaches the phone as a
+    /// single instant, so its delivery end is estimated from its size, the same way stock's
+    /// PodDoseProgressEstimator does.
+    static let podBolusUnitsPerMinute = 1.5
+
+    static func bolusDeliveryEnd(start: Date, units: Double, recordedEnd: Date? = nil) -> Date {
+        max(recordedEnd ?? start, start.addingTimeInterval(units / podBolusUnitsPerMinute * 60))
+    }
+
+    static func bolusDeliveringUntil(_ events: [LoanEvent]) -> Date? {
+        events.filter { $0.record.kind == .bolus }
+            .map { bolusDeliveryEnd(start: $0.record.startDate, units: $0.record.amount ?? 0, recordedEnd: $0.record.endDate) }
+            .max()
     }
     private var pendingHandbackAudit: PendingHandbackAudit? {
         didSet {
@@ -3083,7 +3127,8 @@ final class PodLoanPhoneController {
                     watchLatest: offer.odometer?.deliveredLatest,
                     watchFreshened: offer.odometer?.freshenSucceeded == true,
                     takeoverUnits: start, wholeLoanExpected: expected,
-                    windowStart: auditBase?.asOf ?? loanStartedAt)
+                    windowStart: auditBase?.asOf ?? loanStartedAt,
+                    bolusDeliveringUntil: Self.bolusDeliveringUntil(allStagedEvents))
             }
         }
 
@@ -3886,7 +3931,8 @@ final class PodLoanPhoneController {
             loanMinutes: deps.now().timeIntervalSince(start) / 60, cycles: 0,
             watchLatest: nil, watchFreshened: false, flavor: .forceReclaim,
             takeoverUnits: takeoverUnits, wholeLoanExpected: wholeLoanExpected,
-            windowStart: anchor.asOf)
+            windowStart: anchor.asOf,
+            bolusDeliveringUntil: Self.bolusDeliveringUntil(allEvents))
         // checkpointsThisLoan survives relaunch (persisted with the base), so this label
         // stays true even when the audit re-arms after a mid-loan restart.
         handbackDiag(epoch, String(format:
