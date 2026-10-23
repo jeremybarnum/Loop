@@ -89,12 +89,12 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
             }
         })
 
-        // During a loan the Sport complications (SportComplications widget extension) show the
-        // WATCH's loop, published through the glance mirror (refreshed at every landed cycle).
+        // During a loan the glance complication (SportComplications widget extension) shows the
+        // WATCH's loop: the glance mirror is republished at every landed cycle.
         notifications.append(NotificationCenter.default.addObserver(forName: WatchLoopManager.glanceMirrorDidUpdate, object: nil, queue: nil) { [weak self] (_) in
             DispatchQueue.main.async {
                 guard let self, self.stockLoopSession.loanController.isLoanActiveNonBlocking else { return }
-                SportComplicationPublisher.publish()
+                GlanceComplicationPublisher.publish(from: self)
             }
         })
 
@@ -151,6 +151,10 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         // KNOW we are executing.
         RuntimeStateLog.mark("app.ensureKeepalive")
         stockLoopSession.ensureKeepalive()
+
+        // In front, a complication reload costs no budget: refresh it on every open, so the face matches
+        // the app after any look at it, even when an earlier budgeted request was never carried out.
+        GlanceComplicationPublisher.publish(from: self, onOpen: true)
 
         RuntimeStateLog.mark("app.postDidBecomeActive")
         NotificationCenter.default.post(name: type(of: self).didBecomeActiveNotification, object: self)
@@ -291,7 +295,8 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         // was the trigger that drove the deadlock-shaped re-entrant server query in
         // ComplicationController (fixed there — this is the belt to that suspender).
         reloadComplicationsIfDue()
-        SportComplicationPublisher.publish()
+        ComplicationPublisher.publish(from: loopManager)
+        GlanceComplicationPublisher.publish(from: self)
     }
 
     private func reloadComplicationsIfDue() {
