@@ -153,17 +153,22 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
     /// One meal, its carbs arriving at `fraction(minute)` of the declared rate.
     private func run(_ label: String, model: CarbModel = .device, mealAt start: Date? = nil,
                      judgedAtMinute minutes: Double = 60, skipping gap: ClosedRange<Double>? = nil,
+                     startingGlucose: Double? = nil, grams: Double? = nil,
                      arriving fraction: @escaping (Double) -> Double) -> Run {
         let start = start ?? t0
-        return assess(label, model: model, start: start, minutes: minutes, entries: [meal(at: start)],
+        return assess(label, model: model, start: start, minutes: minutes, entries: [meal(at: start, grams: grams)],
+                      startingGlucose: startingGlucose,
+                      // A meal of another size gets the bolus her carb ratio gives it.
+                      bolus: grams.map { $0 / carbRatio },
                       readings: counteraction(from: start, minutes: minutes, skipping: gap) {
-                          fraction($0) * self.declaredRate(atMinute: $0) * self.csf
+                          fraction($0) * self.declaredRate(atMinute: $0, grams: grams) * self.csf
                       })
     }
 
     /// The shared assessment, fed as the devices feed it.
     private func assess(_ label: String, model: CarbModel, start: Date, minutes: Double,
-                        entries: [NewCarbEntry], readings ice: [GlucoseEffectVelocity],
+                        entries: [NewCarbEntry], startingGlucose start0: Double? = nil, bolus: Double? = nil,
+                        readings ice: [GlucoseEffectVelocity],
                         glucoseAge: TimeInterval = 0, pumpDataAge: TimeInterval? = 0) -> Run {
         let now = start.addingTimeInterval(.minutes(minutes))
         // Loop's own carb forecast follows the model's expectation; the warning's calls, as on the
@@ -182,7 +187,7 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
 
         let sensitivity = schedules(model).sensitivity
         let insulinModels = PresetInsulinModelProvider(defaultRapidActingModel: nil)
-        let insulinEffect = [DoseEntry(type: .bolus, startDate: start, endDate: start, value: bolusUnits, unit: .units)]
+        let insulinEffect = [DoseEntry(type: .bolus, startDate: start, endDate: start, value: bolus ?? bolusUnits, unit: .units)]
             .glucoseEffects(insulinModelProvider: insulinModels, longestEffectDuration: .hours(6),
                             insulinSensitivity: sensitivity)
         let suspendEffect = [DoseEntry(type: .tempBasal, startDate: now, endDate: now.addingTimeInterval(.hours(6)),
@@ -196,7 +201,7 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
         let carbsSoFar = ice.reduce(0) {
             $0 + $1.quantity.doubleValue(for: mgdlPerMinute) * $1.endDate.timeIntervalSince($1.startDate).minutes
         }
-        let glucoseNow = startingGlucose + insulinSoFar + carbsSoFar
+        let glucoseNow = (start0 ?? startingGlucose) + insulinSoFar + carbsSoFar
         let glucose = SimpleGlucoseValue(startDate: now.addingTimeInterval(-glucoseAge),
                                          quantity: HKQuantity(unit: mgdl, doubleValue: glucoseNow))
 
@@ -507,5 +512,32 @@ final class ObservedAbsorptionWarningTests: XCTestCase {
                               "arriving at \(fraction) of entered")
         }
         XCTAssertEqual(run("150%", model: .overrunOfOne, arriving: steady(1.5)).outcome, .none)
+    }
+
+    // MARK: - The absorption time override does not move the warning
+
+    /// Her build overrides Loop's expected absorption time to the entered time (1.0) instead of
+    /// LoopKit's 1.5× stretch. That changes Loop's own carb forecast, but the warning measures and
+    /// forecasts against the entries as entered, so the override must not change what the warning
+    /// sees or decides. Scenario: 30 g declared and bolused for, glucose starting low-ish at
+    /// 90 mg/dL, and carbs arriving at 70% of the entered rate — slow enough to warn.
+    ///
+    /// The minimum absorption rate (fixed at 1.5 on her build, and not what the override changes)
+    /// is held at 1.5 in both runs: lowering it does move the warning a little (ratio 0.70 → 0.74
+    /// at 1.0), which is a different setting and a different question.
+    func testTheAbsorptionTimeOverrideDoesNotChangeTheWarningWhenCarbsArriveAtSeventyPercent() {
+        let overridden = run("30 g at 70% from 90, override 1.0", model: .device,
+                             startingGlucose: 90, grams: 30, arriving: steady(0.7))
+        let loopKitDefault = run("30 g at 70% from 90, LoopKit 1.5", model: .stretched,
+                                 startingGlucose: 90, grams: 30, arriving: steady(0.7))
+
+        XCTAssertEqual(CarbModel.device.expectationOverrun, 1.0, "her build's override")
+        XCTAssertEqual(CarbModel.device.overrun, CarbModel.stretched.overrun, "only the override differs between the runs")
+
+        XCTAssertEqual(overridden.ratio, 0.70, accuracy: 0.03, "the warning sees 70% of the entered rate arriving")
+        XCTAssertEqual(overridden.ratio, loopKitDefault.ratio, accuracy: 0.005)
+        XCTAssertEqual(overridden.warningMinimum, loopKitDefault.warningMinimum, accuracy: 1)
+        XCTAssertNotEqual(overridden.outcome, .none, "70% from a low-ish start warns")
+        XCTAssertEqual(overridden.outcome, loopKitDefault.outcome, "the override does not change the decision")
     }
 }
