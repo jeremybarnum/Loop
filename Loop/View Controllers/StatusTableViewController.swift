@@ -732,6 +732,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
         case pumpSuspended(resuming: Bool)
         case onboardingSuspended
         case recommendManualGlucoseEntry
+        /// Sport Mode: the pod is on the watch (or handing over / coming back).
+        case podLoanedToWatch
 
         var hasRow: Bool {
             switch self {
@@ -748,7 +750,11 @@ final class StatusTableViewController: LoopChartsTableViewController {
     private func determineStatusRowMode() -> StatusRowMode {
         let statusRowMode: StatusRowMode
 
-        if case .initiating = bolusState {
+        // Sport Mode first, as on next-dev: while the watch has the pod, this phone's bolus and
+        // override rows describe nothing it controls.
+        if deviceManager.isPodLoanedToWatch {
+            statusRowMode = .podLoanedToWatch
+        } else if case .initiating = bolusState {
             statusRowMode = .enactingBolus
         } else if case .canceling = bolusState {
             statusRowMode = .cancelingBolus
@@ -1166,6 +1172,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
                     imageView.tintColor = .glucoseTintColor
                     cell.accessoryView = imageView
                     return cell
+                case .podLoanedToWatch:
+                    return podLoanedToWatchCell(fallback: getTitleSubtitleCell)
                 }
             }
         }
@@ -1299,6 +1307,12 @@ final class StatusTableViewController: LoopChartsTableViewController {
                     onboardingManager.resume()
                 case .recommendManualGlucoseEntry:
                     presentBolusEntryView(enableManualGlucoseEntry: true)
+                case .podLoanedToWatch:
+                    if deviceManager.isPodLoanReclaiming {
+                        presentPodSettlingNotice()
+                    } else {
+                        presentPodLoanReclaimPrompt()
+                    }
                 default:
                     break
                 }
@@ -1954,6 +1968,56 @@ final class StatusTableViewController: LoopChartsTableViewController {
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: NSLocalizedString("OK", comment: "Dismiss the pod-settling notice"), style: .default))
         present(alert, animated: true)
+    }
+
+    /// Sport Mode banner (ported from next-dev): the status row while the pod is on the watch;
+    /// tapping it offers the take-back.
+    private func podLoanedToWatchCell(fallback: () -> TitleSubtitleTableViewCell) -> UITableViewCell {
+        let subtitle: String
+        if deviceManager.isPodTakingOver {
+            subtitle = NSLocalizedString("Handing the pod to Apple Watch…", comment: "The subtitle of the banner while the watch is taking over the pod")
+        } else if deviceManager.isPodLoanReclaiming {
+            subtitle = NSLocalizedString("Reclaiming the pod…", comment: "The subtitle of the banner while the phone is reclaiming the pod")
+        } else {
+            subtitle = NSLocalizedString("Apple Watch is controlling the pod. Tap to reclaim.", comment: "The subtitle of the banner indicating the pod is controlled by the watch")
+        }
+        let title = NSLocalizedString("Sport Mode Active", comment: "The title of the banner indicating the pod is controlled by the watch")
+        // This line still targets iOS 15.1; the banner's hosted cell needs 16. Older systems get
+        // the screen's ordinary title-and-subtitle row with the same words.
+        guard #available(iOS 16.0, *) else {
+            let cell = fallback()
+            cell.titleLabel.text = title
+            cell.subtitleLabel.text = subtitle
+            cell.selectionStyle = .default
+            return cell
+        }
+        let cell = UITableViewCell()
+        cell.backgroundColor = .secondarySystemBackground
+        cell.contentConfiguration = UIHostingConfiguration {
+            HStack {
+                Text(Image(systemName: "applewatch")).font(.title) + Text(" ")
+
+                VStack(alignment: .leading) {
+                    Text(title)
+                        .font(.headline.bold())
+
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                Spacer()
+
+                Text(Image(systemName: "chevron.right"))
+                    .font(.headline)
+            }
+            .foregroundStyle(Color.black.opacity(0.85))
+            .padding(8)
+            .background(Color.warning.cornerRadius(10))
+            .padding([.top, .horizontal], 8)
+        }
+        .margins(.all, 0)
+        return cell
     }
 
     private func presentPodLoanReclaimPrompt() {

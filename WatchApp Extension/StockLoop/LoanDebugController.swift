@@ -176,83 +176,10 @@ struct LoanDebugView: View {
                 // toggle experiment that settled it: held link = 0 adoptions in ~130 min;
                 // released = adoption within 7-10 min, twice for two.
 
-                // *** RE-ACQUIRE (BENCH) *** Forget the adopted sensor and
-                // run a full COLD acquisition against the CURRENT sensor — scan, connect,
-                // service discovery, auth subscribe, adoption. This is the contested phase of
-                // the held-pod-link finding, and without this button it is testable only once
-                // per 10-day sensor. With it + the g7-ble radio census, held-vs-released link
-                // experiments are on demand. Ladybug-class: REMOVE PRE-PRODUCTION.
-                // Safe: worst case is a re-adoption delay while the relay covers, same as any
-                // new-sensor day; no therapy state is touched.
-                // Radio Lab probe (bench flag `Bench.radioLab`, default hidden): recycle the G7
-                // connection from scratch — the controlled form of the force-quit that has cured
-                // every mute in the field. Connection state only; no dosing path.
-                // Radio Lab is gated by BUNDLE ID, not a defaults key nobody can set on a
-                // watch: Jeremy's com.StockSportMode build shows it; Caitlin's com.Exercise
-                // build never does. The rows flip the UserDefaults switches the G7 stack and
-                // the pod-radio gate read at use, so bench arms need no reship.
-                if (Bundle.main.bundleIdentifier ?? "").contains("StockSportMode") {
-                    // Build 176 cleanup: "Scan while pending" and "Scan watchdog" are gone from the
-                    // lab — under ride-only (now the default) our app never scans, so both were
-                    // inert; the keys still exist for a ride-only-OFF diagnosis via the shell.
-                    // Build 179 cleanup: the minute-call blackouts row, the pod-radio cycler, "Log
-                    // WC backlog" and "Recycle G7 connect" are gone — T1/T1c retired the blackouts
-                    // and the four-way policy (one extended-phase hold now; bench key
-                    // `G7Lab.podRadioHoldOff` only), the backlog is in every [g7-window] line, and
-                    // the recycle did not clear the one stuck client it was tried on (13:32, 09-07).
-                    ForEach([(G7RidePolicy.key, "Ride-only (no request of ours)", true),
-                             (StockLoopSession.WCSilence.key, "WC silence (diagnosis)", false)], id: \.0) { key, title, def in
-                        Button("\(title): \((UserDefaults.standard.object(forKey: key) as? Bool ?? def) ? "ON" : "OFF") → tap to flip") {
-                            let now = !((UserDefaults.standard.object(forKey: key) as? Bool) ?? def)
-                            UserDefaults.standard.set(now, forKey: key)
-                            SportLog.event("lab", "switch \(key) = \(now) (tapped on the Radio Lab)")
-                            lastAction = "\(title) → \(now ? "ON" : "OFF")"
-                            // WC silence: switching ON also clears whatever the phone-away loan has
-                            // already queued, so the A/B/A inside one loan starts from an empty backlog.
-                            if key == StockLoopSession.WCSilence.key {
-                                if now {
-                                    let c = StockLoopSession.WCSilence.cancelOutstanding()
-                                    lastAction = "WC silence ON · cancelled \(c.userInfo) msg + \(c.files) file(s)"
-                                } else {
-                                    SportLog.event("lab", "WC silence OFF — sends resume · backlog \(StockLoopSession.WCSilence.backlogSummary())")
-                                }
-                            }
-                            // Ride-only: flipping the switch must re-arm the radio at once, either
-                            // way. Field 2026-09-05 17:01 (build 170): switched OFF while adopted
-                            // with no request of ours and no scan, nothing re-armed (re-arm only
-                            // runs after a disconnect or at launch), Dexcom's link came up, we
-                            // neither held a request nor joined — stuck between both behaviours.
-                            // Switching ON likewise drops our standing request immediately instead
-                            // of at the next disconnect.
-                            if key == G7RidePolicy.key {
-                                SportLog.event("g7-ble", "*** ride-only switched \(now ? "ON" : "OFF") — recycling the G7 connection so the new posture takes effect now")
-                                ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.recycleG7ConnectForLab()
-                                lastAction += " · G7 re-armed"
-                            }
-                        }
-                    }
-                    Text("pod hold: \(StockLoopSession.holdModeText)").font(.caption2).foregroundColor(.secondary)
-                    // E1 standalone-G7 soak, restored 2026-09-05 (Jeremy: "give me E1 back"). The
-                    // toggle went in the diagnostics declutter; the session methods never did.
-                    // Our G7 client under a keepalive with NO grant, NO loan and NO pod central —
-                    // the "second monitor by itself" arm of the mute investigation: run it with
-                    // the phone away and read the [g7-window] lines. Refuses to start over a
-                    // live loan.
-                    Button(session.standaloneG7TestActive ? "Stop standalone G7 soak (E1)" : "Start standalone G7 soak (E1, no pod)") {
-                        if session.standaloneG7TestActive {
-                            session.stopStandaloneG7Test()
-                            lastAction = "E1 soak stopped"
-                        } else {
-                            session.startStandaloneG7Test()
-                            lastAction = session.standaloneG7TestActive ? "E1 soak running (no pod)" : "blocked — end the loan first"
-                        }
-                    }
-                }
-                Button("Forget Sensor (re-acquire)") {
-                    SportLog.event("g7-ble", "*** BENCH RE-ACQUIRE *** forgetting adopted sensor — cold acquisition starts now")
-                    ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.scanForNewSensor()
-                    lastAction = "G7 re-acquire started"
-                }
+                // Bench controls removed from the production line (2026-10-23): the Radio Lab
+                // switches (ride-only, WC silence), the standalone G7 soak and Forget Sensor.
+                // This page is in every build, one swipe from the glance; what remains is
+                // read-only plus Read Status and the logs.
 
                 // RADIO STRESS RETIRED: the question it existed to
                 // answer — does a pod command every single cycle disturb the CGM? — came back
