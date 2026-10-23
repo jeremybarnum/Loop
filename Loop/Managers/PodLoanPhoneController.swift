@@ -5,7 +5,7 @@
 //  The phone half of loan protocol v2 (docs/DESIGN_LOAN_PROTOCOL_V2.md §3.1, §10).
 //  Persisted state machine (podLoanedToWatch is DERIVED from this state, never a
 //  volatile flag), epoch minting, grant assembly with deny-on-missing, the alarm
-//  inventory (exactly: T1 start-confirmation 5 min / loan-duration 6 h / paused-dosing
+//  inventory (exactly: T1 start-confirmation (the grant's lease, 60 s) / loan-duration 6 h / paused-dosing
 //  1 h repeating — deliberately NO heartbeat), record staging (the trap-cell defense),
 //  and reconcile-commit-ack ordering (ack ONLY after the store writes commit).
 //
@@ -1712,7 +1712,7 @@ final class PodLoanPhoneController {
     }
 
     private enum NotificationID {
-        static let t1 = "podloan.t1"           // start-confirmation, 5 min
+        static let t1 = "podloan.t1"           // start-confirmation, the grant's lease (60 s)
         static let duration = "podloan.6h"     // retired; kept so upgrades can cancel it
         static let paused = "podloan.paused1h" // retired; kept so upgrades can cancel it
         /// One reminder, an hour after an AUDIT opened the loop. Once only (ruled 2026-08-15):
@@ -1837,21 +1837,88 @@ final class PodLoanPhoneController {
         if podIsOnLoan {
             deps.setAutomaticDosingPaused(true)
             // Transient states (reconciling / reclaim-pending / grant-offered) should
-            // resolve quickly; a relaunch still sitting in one means it stranded, so
-            // give it a bounded self-heal to OWNER (records preserved). LOANED is NOT
-            // healed — a relaunch during a real multi-hour loan is normal; its
-            // recovery is a new request or the escape hatch, never a timer.
+            // resolve quickly; a relaunch still sitting in one picks the transfer up again on
+            // evidence: the watch is asked, and the phone acts on its answer or on silence after
+            // the question, never on a clock alone (control document: "control changes on
+            // evidence"). LOANED is not touched — a relaunch during a real multi-hour loan is
+            // normal; its recovery is a new request or the escape hatch, never a timer.
             if state == .reconciling || state == .reclaimPending {
                 armPausedReminder()
                 let stranded = state
-                queue.asyncAfter(deadline: .now() + 120) { [weak self] in
+                queue.async { [weak self] in
                     guard let self = self, self.state == stranded else { return }
-                    self.forceReclaimToOwner(reason: "relaunched into \(stranded.rawValue), no hand-back")
+                    self.resumeTransferAfterRelaunch(stranded)
                 }
             } else if state == .grantOffered {
                 // The T1 alarm doesn't survive relaunch; re-arm the auto-reclaim.
                 armT1(for: epoch)
             }
+        }
+    }
+
+    // MARK: - A transfer cut short by a relaunch
+
+    /// How long the phone waits for the watch's answer after a relaunch: a background question and
+    /// its answer may each travel queued (next-dev `LoanControl.Wait.background`). Settable for tests.
+    static var relaunchAnswerWait: TimeInterval = 30
+
+    /// The watch's latest status report: any report answers a question this phone asked.
+    private var lastWatchAnswer: (at: Date, report: StatusReport)?
+
+    /// A relaunch found a transfer in flight. Before, the phone waited 120 s and took the pod back
+    /// whatever had happened; now it asks and acts on what it hears.
+    ///
+    /// - Mid-take-back (`.reclaimPending`): the looper's Take Back tap is the latest decision, so
+    ///   the take-back resumes. The revoke goes again, aimed as at the tap, with a status query
+    ///   beside it; the watch answers by handing back its records, which completes it, and silence
+    ///   through the ladder's budget forces it, as on the tap (control row 9, production ladder).
+    ///   The relaunch lost the record of the watch's last word, which is not evidence that the
+    ///   watch is gone, so the ladder runs its live budget, never the dead branch's force-now.
+    /// - Reconciling (`.reconciling`): the watch released the pod with its final offer, and the
+    ///   relaunch cut the commit short. The watch is asked; its resent final offer completes the
+    ///   hand-back the ordinary way. If the answer wait ends with the hand-back still open: an
+    ///   answer that the watch holds this loan's pod means it is looping, so the phone stands aside
+    ///   (loaned); an answer that it holds nothing, or silence after the question, means nobody is
+    ///   looping, and the phone takes the pod back with the records it has. An answer that it holds
+    ///   a NEWER loan's pod (an offline start since) closes this loan with its records and is then
+    ///   handled as that report always is at owner (the inferred-loan yield).
+    /// MUST run on `queue`.
+    private func resumeTransferAfterRelaunch(_ stranded: State) {
+        let askedAt = deps.now()
+        switch stranded {
+        case .reclaimPending:
+            handbackDiag(epoch, "relaunched mid-take-back — revoke resent and the watch asked; the pod is taken on the watch's drain, or on silence through the ladder")
+            pendingRevoke = true
+            let revokeEpoch = supersededByLiveLoan(epoch) ? (newestForeignLoanEvidence?.epoch ?? epoch) : epoch
+            sendMessage(.revoke(Revoke(epoch: revokeEpoch)))
+            sendMessage(.statusQuery(StatusQuery(epoch: revokeEpoch)))
+            armReclaimLadder(branch: .live)
+        case .reconciling:
+            handbackDiag(epoch, String(format: "relaunched while reconciling e%d — asking the watch; acting on its answer or on silence after %.0fs", epoch, Self.relaunchAnswerWait))
+            sendMessage(.statusQuery(StatusQuery(epoch: epoch)))
+            let reconcilingEpoch = epoch
+            queue.asyncAfter(wallDeadline: .now() + Self.relaunchAnswerWait) { [weak self] in
+                guard let self = self, self.state == .reconciling, self.epoch == reconcilingEpoch else { return }
+                let answer = self.lastWatchAnswer.flatMap { $0.at >= askedAt ? $0.report : nil }
+                if let answer = answer, answer.holdsPod, answer.epoch == reconcilingEpoch {
+                    self.handbackDiag(reconcilingEpoch, "after the relaunch the watch says it holds e\(reconcilingEpoch)'s pod — it is looping; the phone stands aside")
+                    self.state = .loaned
+                    return
+                }
+                let why: String
+                switch answer {
+                case nil: why = "the watch did not answer"
+                case let a? where a.holdsPod: why = "the watch holds a newer loan, e\(a.epoch)"
+                default: why = "the watch answered that it holds no pod"
+                }
+                self.handbackDiag(reconcilingEpoch, "after the relaunch \(why) — nobody is looping; the phone takes the pod back with the records it has")
+                self.forceReclaimToOwner(reason: "relaunched into reconciling, no hand-back — \(why)")
+                if let answer = answer, answer.holdsPod, answer.epoch > reconcilingEpoch, self.state == .owner {
+                    self.handleStatusReport(answer)
+                }
+            }
+        default:
+            break
         }
     }
 
@@ -2200,7 +2267,7 @@ final class PodLoanPhoneController {
         // R40: assembly extracted so the dormant refresher issues EXACTLY what a live grant
         // would — a seized loan must dose on the same materials a granted loan gets.
         assembleGrant(epoch: grantEpoch, referenceDate: handedOverAt,
-                      expiresAt: handedOverAt.addingTimeInterval(.minutes(5)),
+                      expiresAt: handedOverAt.addingTimeInterval(Self.takeoverLease),
                       pumpRaw: pump.rawValue, loanSettingsRaw: loanSettings.rawValue,
                       settings: settings) { [weak self] grant in
             guard let self = self else { return }
@@ -2218,7 +2285,7 @@ final class PodLoanPhoneController {
     /// fetch chain (16 h doses, carbs, 3 h glucose, prediction snapshot) plus the
     /// LoanGrant construction, exactly as the live grant has always built it. Duplicating
     /// it would let the two grants drift. Completion runs on `queue`; nil = snapshot
-    /// encoding failed. `expiresAt` is the live path's 5-minute lease; the dormant path
+    /// encoding failed. `expiresAt` is the live path's lease (`takeoverLease`); the dormant path
     /// passes `referenceDate` (a dormant grant has no lease — R40(d) staleness is
     /// consent-based, shown in the seize confirm, never enforced).
     private func assembleGrant(epoch grantEpoch: Int, referenceDate: Date, expiresAt: Date,
@@ -2517,8 +2584,15 @@ final class PodLoanPhoneController {
         reclaimToOwner(alert: nil)
     }
 
-    /// T1: 5 min start-confirmation, cancelled by TakeoverComplete. Row 4:
-    /// query-before-reclaim — a watch whose TakeoverComplete was lost gets one chance
+    /// How long a takeover has to reach the pod, for a grant and for an offline start alike
+    /// (next-dev 69adf6d6, control document transfer G). Every takeover seen reached the pod
+    /// within 25 s, most within 4; a pod not reached in a minute was not reached in five either,
+    /// and the looper waited that long to be told. The watch abandons a takeover at the lease's
+    /// end (`grant.expiresAt`), and T1 asks once more then.
+    static let takeoverLease: TimeInterval = 60
+
+    /// T1: start-confirmation at the end of the grant's lease, cancelled by TakeoverComplete.
+    /// Row 4: query-before-reclaim — a watch whose TakeoverComplete was lost gets one chance
     /// to prove it holds the pod before auto-reclaim.
     /// How long to wait before ASKING whether the hand-over arrived. Not how long to wait
     /// before acting — those got conflated, and only the acting needed to be patient.
@@ -2533,7 +2607,7 @@ final class PodLoanPhoneController {
     /// The failure it catches: the phone has already stopped dosing and already released the pod
     /// (it must, so the watch can take it) when the grant is lost in transit. Nobody then holds
     /// the pod. It keeps delivering its last program on its own — no hazard — but no loop is
-    /// adjusting anything on either device, and that used to last 5 min 15 s.
+    /// adjusting anything on either device, and that used to last 5 min 15 s (the lease is 60 s now).
     ///
     /// Seen in the field when Start is tapped seconds after an install, before the watch
     /// messaging channel has finished waking.
@@ -2541,7 +2615,7 @@ final class PodLoanPhoneController {
     /// SILENCE IS NOT "NO". An unreachable watch that is perfectly fine and mid-takeover looks
     /// identical, from here, to a watch that never heard anything. So this only sends a question;
     /// the answer path (handleStatusReport) acts on an explicit `knowsGrant == false` and nothing
-    /// else. No answer ⇒ the original 5-minute timer runs exactly as before.
+    /// else. No answer ⇒ T1 at the lease's end asks once more, and takes the pod back on silence.
     private func armGrantLostProbe(for grantEpoch: Int) {
         queue.asyncAfter(deadline: .now() + Self.grantLostProbeDelay) { [weak self] in
             guard let self = self, self.state == .grantOffered, self.epoch == grantEpoch else { return }
@@ -2550,33 +2624,40 @@ final class PodLoanPhoneController {
         }
     }
 
+    /// Transfer G: at the lease's end, query the watch once more; an answer that it holds the pod
+    /// completes the takeover (`handleStatusReport`), and silence `t1AnswerWait` after the query
+    /// takes the pod back. The clock only decides when to ask.
+    static let t1AnswerWait: TimeInterval = 15
+
     private func armT1(for grantEpoch: Int) {
         armGrantLostProbe(for: grantEpoch)
-        // Pre-scheduled, so its text is fixed FIVE MINUTES before it lands and cannot describe
+        // Pre-scheduled, so its text is fixed a whole lease before it lands and cannot describe
         // anything that happens in between. It therefore states only what is certain at the
         // fire instant — no confirmation has arrived — and the phone's INTENT, not a completed
-        // act. The reclaim itself runs 15 s later, and only when the app is awake to run the
-        // work item; the suspended-app case this dead-man exists for is precisely where a
-        // "the phone reclaimed it" claim would be false, potentially for a long time.
+        // act. The reclaim itself runs after the query's answer wait, and only when the app is
+        // awake to run the work item; the suspended-app case this dead-man exists for is
+        // precisely where a "the phone reclaimed it" claim would be false.
         scheduleNotification(id: NotificationID.t1, title: "Watch Loan Not Confirmed",
                              body: "The watch hasn't confirmed taking the pod. The phone will take it back.",
-                             delay: .minutes(5), repeats: false)
+                             delay: Self.takeoverLease, repeats: false)
         t1WorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self, self.state == .grantOffered, self.epoch == grantEpoch else { return }
+            self.handbackDiag(grantEpoch, String(format: "grant's lease (%.0fs) ended unconfirmed — asking the watch once more before taking the pod back", Self.takeoverLease))
             self.sendMessage(.statusQuery(StatusQuery(epoch: grantEpoch)))
             let confirm = DispatchWorkItem { [weak self] in
                 guard let self = self, self.state == .grantOffered, self.epoch == grantEpoch else { return }
                 // Reclaims silently: the watch never confirmed, so in the common case nothing
                 // ever left the phone and there is nothing for the user to do. The phone's own
                 // pill already shows it holds the pod.
+                self.handbackDiag(grantEpoch, "no answer to the lease-end query — taking the pod back")
                 self.reclaimToOwner(alert: nil)
             }
             self.t1WorkItem = confirm
-            self.queue.asyncAfter(deadline: .now() + 15, execute: confirm)
+            self.scheduleLadderRung(after: Self.t1AnswerWait, label: "grant-lease-query", execute: confirm)
         }
         t1WorkItem = work
-        queue.asyncAfter(deadline: .now() + .minutes(5), execute: work)
+        scheduleLadderRung(after: Self.takeoverLease, label: "grant-lease", execute: work)
     }
 
     private func handleTakeoverComplete(_ complete: TakeoverComplete) {
@@ -2652,6 +2733,7 @@ final class PodLoanPhoneController {
     }
 
     private func handleStatusReport(_ report: StatusReport) {
+        lastWatchAnswer = (deps.now(), report)
         if let heldEpoch = retroAckHeld.first?.epoch {
             if report.holdsPod, report.epoch > heldEpoch {
                 handbackDiag(heldEpoch, "[seize] retro-ack WITHHELD — the watch holds newer e\(report.epoch); e\(heldEpoch)'s leftover offer is not adopted (a seize over a parked drain carries its records forward)")
@@ -2711,13 +2793,13 @@ final class PodLoanPhoneController {
             handleTakeoverComplete(TakeoverComplete(epoch: report.epoch, firstPodStatus: LoanPodStatus(timestamp: deps.now(), deliveredUnits: nil, reservoirLevel: nil, isSuspended: false, faultCode: report.podFault)))
         }
         // The watch says outright that the hand-over never reached it. Take the pod back
-        // now rather than in five more minutes — the phone released it for a takeover that is
+        // now rather than at the lease's end — the phone released it for a takeover that is
         // never going to start, so every second after this answer is time nobody is looping.
         //
         // `== false` deliberately, not `!= true`: nil is an older build that could not answer, and
-        // must fall through to the 5-minute timer. Only an explicit denial acts.
+        // must fall through to the lease's timer (T1). Only an explicit denial acts.
         if state == .grantOffered, report.knowsGrant == false, !report.holdsPod {
-            handbackDiag(report.epoch, "grant CONFIRMED LOST by the watch — reclaiming now instead of waiting out the 5-minute timer (#108)")
+            handbackDiag(report.epoch, "grant CONFIRMED LOST by the watch — reclaiming now instead of waiting out the lease (#108)")
             t1WorkItem?.cancel()
             cancelNotification(id: NotificationID.t1)
             // Tell the WATCH, don't post on the phone. Deleting the phone banner outright would
@@ -3621,14 +3703,16 @@ final class PodLoanPhoneController {
     /// that a returning watch finds a NEWER loan already started, and a stale offer forfeits the
     /// wrist's final loop-mode inheritance and one calibration sample. That is why the live branch
     /// stays generous enough for a real drain to finish instead of being tuned to the p50.
-    private func armReclaimLadder() {
+    /// `branch` nil: chosen from the evidence at the tap. A relaunch passes `.live` (see
+    /// `resumeTransferAfterRelaunch`).
+    private func armReclaimLadder(branch chosen: ReclaimLadder.Branch? = nil) {
         cancelReclaimLadder()
 
         let reachable = deps.isWatchReachable()
         let lastContact = deps.lastWatchContactAt()
         let contactAge = lastContact.map { deps.now().timeIntervalSince($0) }
         let heardRecently = (contactAge ?? .greatestFiniteMagnitude) < Self.watchContactLivenessWindow
-        let branch: ReclaimLadder.Branch = (reachable || heardRecently) ? .live : .dead
+        let branch: ReclaimLadder.Branch = chosen ?? ((reachable || heardRecently) ? .live : .dead)
 
         // The DEAD branch does not wait (field ruling, 2026-08-14). The reclaims that land here
         // are, realistically: a lost watch, or a watch out of battery — and in both, nothing can

@@ -87,13 +87,11 @@ enum WatchAlertPresenter {
         content.body = alert.backgroundContent.body
         content.threadIdentifier = alert.identifier.managerIdentifier
 
-        // Without the Critical Alerts entitlement watchOS delivers a .critical request as
-        // time-sensitive instead, which is the acceptable floor rather than a failure.
+        // Time-sensitive is the highest level Sport Mode asks for (control document, section 4:
+        // nothing is critical). This build has no Critical Alerts entitlement, so watchOS already
+        // delivered a .critical request as time-sensitive; asking for it changes nothing felt.
         switch alert.interruptionLevel {
-        case .critical:
-            content.interruptionLevel = .critical
-            content.sound = .defaultCritical
-        case .timeSensitive:
+        case .critical, .timeSensitive:
             content.interruptionLevel = .timeSensitive
             content.sound = .default
         case .active:

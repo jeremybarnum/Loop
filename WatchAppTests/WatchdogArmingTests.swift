@@ -60,6 +60,17 @@ final class WatchdogArmingTests: XCTestCase {
         XCTAssertEqual(intervals, expected, "the phone's exact ladder (ruling 2026-08-24)")
     }
 
+    /// Control document, section 4: anything about dosing is time-sensitive, nothing is critical.
+    /// Stock's 1 h and 2 h rungs are critical on the phone; on the wrist every rung asks for
+    /// time-sensitive (ruled 2026-10-23; the build has no Critical Alerts entitlement).
+    func testEveryStallRungIsTimeSensitiveNoneCritical() {
+        LoopStallWatchdog.refresh()
+        let levels = pending().map(\.content.interruptionLevel)
+        XCTAssertEqual(levels.count, 4)
+        XCTAssertTrue(levels.allSatisfy { $0 == .timeSensitive }, "no rung asks for critical: \(levels.map(\.rawValue))")
+        XCTAssertTrue(pending().allSatisfy { $0.content.sound == .default }, "and none asks for the critical sound")
+    }
+
     func testHandbackStuckArmsAtTwoMinutes() {
         HandbackStuckAlert.arm()
         let reqs = pending()
@@ -162,11 +173,13 @@ final class WatchAlertPresenterTests: XCTestCase {
         XCTAssertNil(request?.trigger, "an immediate alert fires now, not on a timer")
     }
 
-    /// A pod fault is not something to sleep through.
+    /// A pod fault is not something to sleep through: time-sensitive, the highest level Sport Mode
+    /// asks for (control document, section 4: nothing is critical), with a sound.
     func testUrgencySurvivesTheTrip() {
         WatchAlertPresenter.present(alert(level: .critical))
-        XCTAssertEqual(scheduler.pending.first?.content.interruptionLevel, .critical)
-        XCTAssertNotNil(scheduler.pending.first?.content.sound, "a critical alert makes a noise")
+        XCTAssertEqual(scheduler.pending.first?.content.interruptionLevel, .timeSensitive,
+                       "a critical pod alert is asked for as time-sensitive on the wrist")
+        XCTAssertNotNil(scheduler.pending.first?.content.sound, "a pod fault makes a noise")
 
         scheduler = RecordingWristAlertScheduler(); WristAlerts.scheduler = scheduler
         WatchAlertPresenter.present(alert("reservoirLow", level: .timeSensitive))

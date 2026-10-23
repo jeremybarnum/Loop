@@ -286,7 +286,7 @@ final class StockLoopSession {
                 self.setKeepalive(true, reason: "soak")
                 // Loop-Failure ladder (stock parity): every live cycle re-defers all four rungs.
                 LoopStallWatchdog.refresh()
-                SportLog.event("deadman", "ladder ARMED — 20/40m timeSensitive + 1/2h critical rungs [deadman]")
+                SportLog.event("deadman", "ladder ARMED — 20/40m + 1/2h rungs, all time-sensitive [deadman]")
                 // The glance page is the landing surface during a loan.
                 DispatchQueue.main.async { GlanceController.current?.becomeCurrentPage() }
                 // 5-min pulse independent of readings: the per-reading transfer goes silent

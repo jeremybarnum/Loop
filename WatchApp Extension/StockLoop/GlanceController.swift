@@ -98,6 +98,8 @@ struct GlanceUIState {
     /// confirm with this age line instead of the Start button.
     var seizeOfferAgeText: String? = nil
     var viaPhone: Bool = false
+    /// No loan, and nothing heard from the phone for the warning's interval (control row 3).
+    var notHearingFromPhone: Bool = false
     /// OPTION C: which source the direct-G7 LINK is currently proving, independent of which
     /// copy won the store's first-writer-wins dedup. "G7" = a direct read landed inside the
     /// display window; "phone" = only the relay did. Answers "is the watch standing alone?"
@@ -465,7 +467,7 @@ final class GlanceViewModel: ObservableObject {
         switch snap.phase {
         case .idle:
             var idle = Self.idleState(context: ExtensionDelegate.shared().loopManager.activeContext,
-                                      note: snap.lastIdleNote)
+                                      note: snap.lastIdleNote, phoneHeardAt: snap.lastHeardFromPhoneAt)
             // R40(b)/(d): the offer's age is the WHOLE staleness contract — shown, never
             // enforced. Formatted coarsely on purpose; "3d" reads, "76:12:04" does not.
             if let issued = snap.seizeOfferIssuedAt {
@@ -518,7 +520,8 @@ final class GlanceViewModel: ObservableObject {
             var idle = Self.idleState(context: ExtensionDelegate.shared().loopManager.activeContext,
                                       note: snap.lastIdleNote
                                         ?? NSLocalizedString("Records from the last session are waiting for your iPhone. You can still start.",
-                                                             comment: "Glance note while resting on a parked drain"))
+                                                             comment: "Glance note while resting on a parked drain"),
+                                      phoneHeardAt: snap.lastHeardFromPhoneAt)
             if let issued = snap.seizeOfferIssuedAt {
                 let f = DateComponentsFormatter()
                 f.maximumUnitCount = 1
@@ -559,6 +562,10 @@ final class GlanceViewModel: ObservableObject {
             } else if snap.endDidNotGoThrough {
                 // The same sentence as the notification, so opening the app agrees with it.
                 s.idleNote = PodLoanWatchController.endDidNotGoThroughText
+            } else if let at = snap.startNoteAt, let text = snap.startNoteText,
+                      Date().timeIntervalSince(at) < 90 {
+                // What the takeover book check booked (control row 2), for a minute and a half.
+                s.transientText = text
             }
             s.reunionPrompt = snap.reunionPromptVisible
             // A manual bolus spends most of its wall-clock waiting on the radio arbiter, with
@@ -634,11 +641,12 @@ final class GlanceViewModel: ObservableObject {
 
     // MARK: State builders (static + pure, so previews and tests can drive them)
 
-    static func idleState(context: WatchContext?, note: String? = nil) -> GlanceUIState {
+    static func idleState(context: WatchContext?, note: String? = nil, phoneHeardAt: Date? = nil, now: Date = Date()) -> GlanceUIState {
         var s = GlanceUIState()
         s.phase = .idle
         s.viaPhone = true
         s.bgColor = .dim
+        s.notHearingFromPhone = phoneHeardAt.map { now.timeIntervalSince($0) >= NotHearingFromPhoneAlert.interval } ?? false
         if let quantity = context?.glucose {
             s.bgText = String(format: "%.0f", quantity.doubleValue(for: .milligramsPerDeciliter))
             s.trendSymbol = context?.glucoseTrend?.symbol
@@ -1138,6 +1146,9 @@ struct GlanceView: View {
             } else if let eventual = model.state.eventualText {
                 (Text("eventually ").foregroundColor(.glanceDim) + Text(eventual).bold())
                     .font(.system(size: 13))
+            } else if model.state.phase == .idle, model.state.notHearingFromPhone {
+                Text(NSLocalizedString("Not hearing from iPhone", comment: "Glance: no loan, and no word from the phone for the warning's interval"))
+                    .font(.system(size: 12)).foregroundColor(.glanceWarn)
             } else if model.state.viaPhone, model.state.phase == .idle || model.state.phase == .starting {
                 Text("via iPhone").font(.system(size: 12)).foregroundColor(.glanceDim)
             }

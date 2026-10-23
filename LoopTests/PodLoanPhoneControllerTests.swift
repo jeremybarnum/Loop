@@ -3332,3 +3332,154 @@ extension PodLoanPhoneControllerTests {
         XCTAssertFalse(urgentNotices.contains("Insulin On Board May Be Overstated"), "got \(urgentNotices)")
     }
 }
+
+// MARK: - Timers to evidence (ruled 2026-10-23)
+//
+// The grant's lease is 60 s, and the phone asks before it takes the pod back (next-dev 69adf6d6,
+// control document transfer G). A relaunch in the middle of a transfer asks the watch and acts on
+// its answer or on silence after the question; it no longer returns the phone to owner after 120 s.
+extension PodLoanPhoneControllerTests {
+
+    private func diagCount(_ needle: String) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return diags.filter { $0.contains(needle) }.count
+    }
+
+    private func statusQueries() -> [StatusQuery] {
+        lock.lock(); defer { lock.unlock() }
+        return sent.compactMap { if case .statusQuery(let q) = $0 { return q } else { return nil } }
+    }
+
+    private func report(_ epoch: Int, holdsPod: Bool, knowsGrant: Bool? = true) throws -> [String: Any] {
+        try LoanMessage.statusReport(StatusReport(epoch: epoch, mode: .closedDirect, lastDirectGlucoseAge: nil,
+                                                  lastEventSeq: 0, podFault: nil, holdsPod: holdsPod,
+                                                  knowsGrant: knowsGrant)).transportDictionary()
+    }
+
+    /// Transfer G: the grant's lease is 60 s. At its end the phone asks once more; silence after
+    /// that question takes the pod back. The lease's end only decides when to ask.
+    func testTheGrantsLeaseIsSixtySecondsAndItsEndAsksBeforeTakingBack() throws {
+        let controller = makeController()
+        let ladder = ReclaimLadderRecorder()
+        ladder.install(on: controller)
+        let grant = try offerGrant(controller)
+        XCTAssertEqual(grant.expiresAt.timeIntervalSinceNow, 60, accuracy: 5, "the watch has 60 s to reach the pod")
+        waitUntil(timeout: 5, "lease armed") { ladder.armed.contains { $0.label == "grant-lease" } }
+        XCTAssertEqual(ladder.armed.first { $0.label == "grant-lease" }?.delay, 60)
+
+        let asked = statusQueries().count
+        controller.queue.sync { _ = ladder.fire("grant-lease") }
+        XCTAssertEqual(statusQueries().count, asked + 1, "the lease's end asks the watch")
+        XCTAssertEqual(statusQueries().last?.epoch, grant.epoch)
+        XCTAssertEqual(controller.state, .grantOffered, "asking is not taking")
+        XCTAssertEqual(ladder.armed.first { $0.label == "grant-lease-query" }?.delay, 15)
+
+        controller.queue.sync { _ = ladder.fire("grant-lease-query") }
+        waitForState(controller, .owner)
+        XCTAssertFalse(MockPumpManager.testConnectionReleased, "silence after the question: the phone takes the pod back")
+    }
+
+    /// Transfer G: the watch answers the lease-end question with the loan it holds (its
+    /// confirmation was lost): the takeover is complete, and the answer wait's end takes nothing.
+    func testAnAnswerToTheLeaseEndQueryThatTheWatchHoldsThePodCompletesTheTakeover() throws {
+        let controller = makeController()
+        let ladder = ReclaimLadderRecorder()
+        ladder.install(on: controller)
+        let grant = try offerGrant(controller)
+        waitUntil(timeout: 5, "lease armed") { ladder.armed.contains { $0.label == "grant-lease" } }
+        controller.queue.sync { _ = ladder.fire("grant-lease") }
+
+        controller.handleIncoming(userInfo: try report(grant.epoch, holdsPod: true))
+        waitForState(controller, .loaned)
+        controller.queue.sync { _ = ladder.fire("grant-lease-query") }
+        controller.queue.sync { }
+        XCTAssertEqual(controller.state, .loaned, "the watch holds the pod: nothing is taken")
+        XCTAssertTrue(MockPumpManager.testConnectionReleased)
+    }
+
+    /// A relaunch mid-take-back resumes the take-back on evidence: the revoke goes again with a
+    /// question, and the ladder runs its live budget (the relaunch lost the watch's last word,
+    /// which is not evidence that the watch is gone). Before, the phone sent nothing and forced
+    /// itself back to owner 120 s later.
+    func testARelaunchMidTakeBackResendsTheRevokeAndAsksInsteadOfWaitingOutAClock() throws {
+        let first = makeController(lastWatchContact: { Date().addingTimeInterval(-30) })
+        let grant = try establishLoan(first)
+        let ladder = ReclaimLadderRecorder()
+        ladder.install(on: first)              // the first launch's rungs never fire
+        first.reclaimNow()
+        waitUntil(timeout: 5, "take-back under way") { first.state == .reclaimPending && ladder.armed.count == 2 }
+        let revokesBefore = revokeCount()
+        let liveLaddersBefore = diagCount("reclaim ladder LIVE")
+
+        // Relaunch: a new controller from the persisted state, with no record of the watch's last word.
+        let relaunched = makeController()
+        waitUntil(timeout: 5, "the take-back resumed") { self.diagMatching("relaunched mid-take-back") != nil }
+        relaunched.queue.sync { }
+        XCTAssertEqual(revokeCount(), revokesBefore + 1, "the revoke goes again")
+        XCTAssertTrue(statusQueries().contains { $0.epoch == grant.epoch }, "and the watch is asked")
+        XCTAssertEqual(diagCount("reclaim ladder LIVE"), liveLaddersBefore + 1, "the live budget, not the dead branch's force-now")
+        XCTAssertEqual(diagCount("reclaim ladder DEAD"), 0)
+        XCTAssertEqual(relaunched.state, .reclaimPending, "nothing is taken before the watch has had its chance to answer")
+    }
+
+    /// A relaunch while reconciling asks the watch; silence after the question takes the pod back
+    /// with the records the phone has.
+    func testARelaunchWhileReconcilingTakesThePodBackOnSilenceAfterAQuestion() throws {
+        let saved = PodLoanPhoneController.relaunchAnswerWait
+        PodLoanPhoneController.relaunchAnswerWait = 0.5
+        defer { PodLoanPhoneController.relaunchAnswerWait = saved }
+        let grant = try parkInReconciling()
+
+        let relaunched = makeController()
+        waitUntil(timeout: 5, "asked") { self.diagMatching("relaunched while reconciling") != nil }
+        XCTAssertTrue(statusQueries().contains { $0.epoch == grant.epoch }, "the watch is asked")
+        waitForState(relaunched, .owner)
+        XCTAssertNotNil(diagMatching("the watch did not answer"), "taken on silence after the question, said so")
+    }
+
+    /// The watch answers that it holds nothing: nobody is looping, so the phone takes the pod back.
+    func testARelaunchWhileReconcilingTakesThePodBackWhenTheWatchHoldsNothing() throws {
+        let saved = PodLoanPhoneController.relaunchAnswerWait
+        PodLoanPhoneController.relaunchAnswerWait = 1
+        defer { PodLoanPhoneController.relaunchAnswerWait = saved }
+        let grant = try parkInReconciling()
+
+        let relaunched = makeController()
+        waitUntil(timeout: 5, "asked") { self.diagMatching("relaunched while reconciling") != nil }
+        relaunched.handleIncoming(userInfo: try report(grant.epoch, holdsPod: false))
+        waitForState(relaunched, .owner)
+        XCTAssertNotNil(diagMatching("the watch answered that it holds no pod"))
+    }
+
+    /// The watch answers that it holds this loan's pod: it is looping, and the phone stands aside.
+    func testARelaunchWhileReconcilingStandsAsideWhenTheWatchHoldsThePod() throws {
+        let saved = PodLoanPhoneController.relaunchAnswerWait
+        PodLoanPhoneController.relaunchAnswerWait = 1
+        defer { PodLoanPhoneController.relaunchAnswerWait = saved }
+        let grant = try parkInReconciling()
+
+        let relaunched = makeController()
+        waitUntil(timeout: 5, "asked") { self.diagMatching("relaunched while reconciling") != nil }
+        relaunched.handleIncoming(userInfo: try report(grant.epoch, holdsPod: true))
+        waitForState(relaunched, .loaned)
+        XCTAssertNotNil(diagMatching("it is looping; the phone stands aside"))
+        XCTAssertEqual(pauseCalls.last, true, "dosing stays held: the watch has the pod")
+    }
+
+    /// A loan whose final offer is mid-commit: `.reconciling`, persisted, as a relaunch finds it.
+    private func parkInReconciling() throws -> LoanGrant {
+        let controller = makeController()
+        let grant = try establishLoan(controller)
+        holdPumpEventWrites = true
+        let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                                  events: [makeEvent(seq: 1, units: 0.5, at: Date().addingTimeInterval(-60))],
+                                  tombstones: [], recovered: false, released: true)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        waitUntil(timeout: 5, "commit parked") {
+            self.lock.lock(); defer { self.lock.unlock() }; return self.heldPumpEventWrite != nil
+        }
+        XCTAssertEqual(controller.state, .reconciling, "precondition: the hand-back is mid-commit")
+        holdPumpEventWrites = false
+        return grant
+    }
+}

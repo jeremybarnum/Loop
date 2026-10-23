@@ -23,24 +23,26 @@ enum LoopStallWatchdog {
 
     // ─── TUNABLES — safe to change for your own build ────────────────────────
 
-    /// STOCK PARITY (ruling 2026-08-24): the wrist runs the phone's exact ladder —
-    /// 20/40 minutes time-sensitive, 1/2 hours critical, stock's words — instead of a single
-    /// custom 15-minute alert with bespoke copy. Same rungs, same escalation, both devices;
-    /// the mirroring dedupe is ownership, not cleverness: the PHONE's ladder is suppressed for
-    /// the whole loan (AlertManager's loan gate), so during a loan only this one speaks, and
+    /// STOCK PARITY (ruling 2026-08-24): the wrist runs the phone's ladder — 20 and 40 minutes,
+    /// 1 and 2 hours, stock's words — instead of a single custom 15-minute alert with bespoke
+    /// copy. The mirroring dedupe is ownership, not cleverness: the PHONE's ladder is suppressed
+    /// for the whole loan (AlertManager's loan gate), so during a loan only this one speaks, and
     /// outside a loan this one is disarmed, so only the phone's does.
+    ///
+    /// Every rung is time-sensitive (control document, section 4: anything about dosing is
+    /// time-sensitive, nothing is critical). Stock's 1 h and 2 h rungs are critical on the phone;
+    /// this build has no Critical Alerts entitlement, so watchOS already delivered those two as
+    /// time-sensitive, and asking for that level changes nothing the looper feels.
     ///
     /// The rungs are pre-scheduled from OUTSIDE the app (UNUserNotificationCenter), so a
     /// suspended or dead watch app still alarms — the dead-man property is unchanged.
-    static let rungs: [(interval: TimeInterval, isCritical: Bool)] = [
-        (20 * 60, false), (40 * 60, false), (60 * 60, true), (120 * 60, true),
-    ]
+    static let rungs: [TimeInterval] = [20 * 60, 40 * 60, 60 * 60, 120 * 60]
 
     /// The first rung, for tests and for anything that reasons about "the" deadline.
-    static let interval: TimeInterval = rungs[0].interval
+    static let interval: TimeInterval = rungs[0]
 
     private static let identifier = "com.loopkit.Loop.watch.loopStallWatchdog"
-    private static var rungIdentifiers: [String] { rungs.map { "\(identifier).\(Int($0.interval))" } }
+    private static var rungIdentifiers: [String] { rungs.map { "\(identifier).\(Int($0))" } }
 
     /// Arm the ladder or push every rung forward. Adding requests with the same identifiers
     /// REPLACES the pending ones, so calling this on every live cycle re-defers the whole ladder.
@@ -55,14 +57,12 @@ enum LoopStallWatchdog {
             // Names the device: the phone's own ladder can reach the wrist too (2026-10-21).
             content.title = NSLocalizedString("Loop Failure (Watch)", comment: "The notification title for a loop failure on the watch")
             content.body = String(format: NSLocalizedString("Loop has not completed successfully in %@", comment: "The notification alert describing a long-lasting loop failure. The substitution parameter is the time interval since the last loop"),
-                                  formatter.string(from: rung.interval)?.localizedLowercase ?? "\(Int(rung.interval / 60)) minutes")
-            // Critical rungs request .critical; without the Critical Alerts entitlement
-            // watchOS silently downgrades to time-sensitive, which is the acceptable floor.
-            content.interruptionLevel = rung.isCritical ? .critical : .timeSensitive
-            content.sound = rung.isCritical ? .defaultCritical : .default
+                                  formatter.string(from: rung)?.localizedLowercase ?? "\(Int(rung / 60)) minutes")
+            content.interruptionLevel = .timeSensitive
+            content.sound = .default
             content.threadIdentifier = identifier
-            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: rung.interval, repeats: false)
-            center.add(UNNotificationRequest(identifier: "\(identifier).\(Int(rung.interval))",
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: rung, repeats: false)
+            center.add(UNNotificationRequest(identifier: "\(identifier).\(Int(rung))",
                                              content: content, trigger: trigger))
         }
     }
@@ -81,6 +81,37 @@ enum LoopStallWatchdog {
 // watchdog), so the ladder above reports it on the same rungs — the separate 20-minute
 // repeating alert had become a guaranteed duplicate voice for the same stall. The party
 // finding it answered (a 2.5-hour silent blackout) remains covered, one octave lower.
+
+/// With no loan running, fires if the watch hears nothing from the phone (control row 3; ported
+/// from next-dev 1406bc8e with the reviewed words of 5c99fd7e). Every word from the phone pushes
+/// it out (`PodLoanWatchController.notePhoneHeard`); pre-scheduled, so it fires even if the watch
+/// app is not running. Nothing takes the pod: the looper is told, and Start is one tap away.
+enum NotHearingFromPhoneAlert {
+    /// After the phone's own pre-scheduled Loop Failure (20 min), which reaches the wrist when the
+    /// phone is near or through a cellular watch's relay; the watch's is the backup for a dead
+    /// phone or a watch with no route to it.
+    static let interval: TimeInterval = 25 * 60
+
+    private static let identifier = "sportmode.notHearingFromPhone"
+
+    static func arm(after interval: TimeInterval = NotHearingFromPhoneAlert.interval) {
+        let center = WristAlerts.scheduler
+        let content = UNMutableNotificationContent()
+        content.title = NSLocalizedString("Not Hearing From iPhone", comment: "Watch alert title: no word from the phone and no loan running")
+        content.body = NSLocalizedString("Your iPhone is probably not looping (off or out of range). Sport Mode on the watch is available to take over.", comment: "Watch alert body: no word from the phone and no loan running")
+        content.interruptionLevel = .timeSensitive
+        content.sound = .default
+        content.threadIdentifier = identifier
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)
+        center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
+    }
+
+    static func disarm() {
+        let center = WristAlerts.scheduler
+        center.removePendingRequests(withIdentifiers: [identifier])
+        center.removeDeliveredRequests(withIdentifiers: [identifier])
+    }
+}
 
 enum HandbackStuckAlert {
 

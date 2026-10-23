@@ -72,21 +72,108 @@ final class HandbackSafetyTests: XCTestCase {
         }
     }
 
-    // MARK: 1 — never queued, fails at once
+    // MARK: 1 — never queued; End asks before it refuses (control row 8, ruled 2026-10-23)
 
-    func testLiveHandbackWithPhoneUnreachableFailsFastAndKeepsTheLoan() {
+    /// Captures every timer the controller arms, so a test fires exactly the one it means.
+    private func captureTimers(_ c: PodLoanWatchController) -> () -> [(label: String, delay: TimeInterval, work: DispatchWorkItem)] {
+        var timers: [(label: String, delay: TimeInterval, work: DispatchWorkItem)] = []
+        let lock = NSLock()
+        c.scheduler = { delay, label, work in lock.lock(); timers.append((label, delay, work)); lock.unlock() }
+        return { lock.lock(); defer { lock.unlock() }; return timers }
+    }
+
+    /// The phone truly away: the link reads unreachable at the tap and for the whole answer wait.
+    /// Nothing is queued, and End is refused only when the wait ends without an answer; the loan
+    /// continues.
+    func testLiveHandbackWithPhoneUnreachableIsRefusedAfterTheAnswerWaitAndKeepsTheLoan() {
         let c = makeLiveLoan()
         XCTAssertTrue(c.debugSnapshot().hasPumpManager, "precondition: a live loan holding a pump manager")
+        let timers = captureTimers(c)
         c.isPhoneReachable = { false }
         var sent: [[String: Any]] = []
         c.send = { sent.append($0) }
 
         c.beginHandback()
-        let snap = c.debugSnapshot()
+        var snap = c.debugSnapshot()
+        XCTAssertTrue(snap.handbackPending, "one unreachable reading at the tap is not a verdict: End asks first")
+        XCTAssertNil(snap.lastIdleNote)
+        XCTAssertEqual(timers().first { $0.label == "handback-answer" }?.delay, 10, "the on-screen query wait")
+        XCTAssertTrue(offers(in: sent).isEmpty, "a live offer is never queued to an unreachable phone")
+
+        // Still unreachable a second later: read again, nothing sent.
+        c.onQueueForTesting { timers().last { $0.label == "handback-recheck" }?.work.perform() }
+        XCTAssertTrue(offers(in: sent).isEmpty)
+        XCTAssertTrue(c.debugSnapshot().handbackPending)
+
+        // The wait ends with no answer: End is refused, and the loan continues.
+        c.onQueueForTesting { timers().last { $0.label == "handback-answer" }?.work.perform() }
+        snap = c.debugSnapshot()
         XCTAssertEqual(snap.phase, .active, "the loan continues")
         XCTAssertTrue(snap.hasPumpManager, "the watch still holds the pod")
         XCTAssertFalse(snap.handbackPending, "End is over — tap again when the phone is back")
+        XCTAssertTrue(snap.endDidNotGoThrough, "and the screen says so")
         XCTAssertTrue(offers(in: sent).isEmpty, "no offer left the watch — nothing queued to land later")
+    }
+
+    /// The flag lies for a moment (the phone is there): read again a second later, the offer goes,
+    /// and the phone's acknowledgement inside the wait means End is not refused.
+    func testAnUnreachableReadingAtTheTapIsReadAgainAndAnAnswerInsideTheWaitKeepsTheEnd() throws {
+        let c = makeLiveLoan()
+        let timers = captureTimers(c)
+        var reachable = false
+        c.isPhoneReachable = { reachable }
+        var sent: [[String: Any]] = []
+        c.send = { sent.append($0) }
+        // One record in the journal, so an acknowledgement that has not committed it yet leaves
+        // the drain open (an empty journal would finalize on the first ack).
+        c.loanDidRecordCarbs(NewCarbEntry(quantity: HKQuantity(unit: .gram(), doubleValue: 20), startDate: Date(),
+                                          foodType: nil, absorptionTime: .hours(3)))
+        _ = c.debugSnapshot()
+
+        c.beginHandback()
+        _ = c.debugSnapshot()
+        XCTAssertTrue(offers(in: sent).isEmpty)
+
+        reachable = true
+        c.onQueueForTesting { timers().last { $0.label == "handback-recheck" }?.work.perform() }
+        XCTAssertEqual(offers(in: sent).count, 1, "reachable again inside the wait: the offer goes")
+        XCTAssertTrue(offers(in: sent)[0].urgentOnly, "still never queued")
+
+        // The phone acknowledges the interim offer (records not all committed yet: cursor 0).
+        c.handleIncoming(userInfo: try LoanMessage.handbackAck(HandbackAck(epoch: 7, committedCursor: 0)).transportDictionary(),
+                         channel: .urgent)
+        _ = c.debugSnapshot()
+        c.onQueueForTesting { timers().last { $0.label == "handback-answer" }?.work.perform() }
+        let snap = c.debugSnapshot()
+        XCTAssertTrue(snap.handbackPending, "the phone answered: the End goes on")
+        XCTAssertFalse(snap.endDidNotGoThrough)
+    }
+
+    /// Once the exchange is under way, a resend that finds the phone unreachable sends nothing and
+    /// waits for the next; the hand-back holds for its budget (next-dev 86674900).
+    func testAResendsUnreachableReadingDoesNotEndTheHandback() {
+        let c = makeLiveLoan()
+        let timers = captureTimers(c)
+        var reachable = true
+        c.isPhoneReachable = { reachable }
+        var sent: [[String: Any]] = []
+        c.send = { sent.append($0) }
+        c.beginHandback()
+        _ = c.debugSnapshot()
+        XCTAssertEqual(offers(in: sent).count, 1, "the live offer went out")
+
+        reachable = false
+        c.onQueueForTesting { timers().last { $0.label == "handback-resend" }?.work.perform() }
+        var snap = c.debugSnapshot()
+        XCTAssertEqual(snap.phase, .active)
+        XCTAssertTrue(snap.handbackPending, "one unreachable reading is not a verdict: the hand-back holds")
+        XCTAssertFalse(snap.endDidNotGoThrough)
+        XCTAssertEqual(offers(in: sent).count, 1, "nothing goes to an unreachable phone")
+
+        reachable = true
+        c.onQueueForTesting { timers().last { $0.label == "handback-resend" }?.work.perform() }
+        snap = c.debugSnapshot()
+        XCTAssertEqual(offers(in: sent).count, 2, "the next resend sends again")
     }
 
     func testALiveOfferIsMarkedUrgentOnlyAndADrainIsNot() {

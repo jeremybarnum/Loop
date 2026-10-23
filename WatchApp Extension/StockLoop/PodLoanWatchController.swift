@@ -235,6 +235,8 @@ final class PodLoanWatchController {
     private(set) var phase: Phase {
         didSet {
             defaults.set(phase.rawValue, forKey: Keys.phase)
+            // A loan runs: the watch's own stall ladder covers it, not the silent-phone warning.
+            if phase == .takingOver || phase == .active { NotHearingFromPhoneAlert.disarm() }
             if phase == .recoveredDrain || phase == .revoked { owesFinalOffer = true }
             if phase != .active { endDidNotGoThrough = false }
             loanActiveMirrorLock.lock()
@@ -311,6 +313,13 @@ final class PodLoanWatchController {
             }
         }
     }
+    /// What the grant's COPY knew of the pod's total (units, when read), and the dose records it
+    /// came with: the baseline for the takeover book check (control row 2). Consumed at ACTIVE.
+    private var takeoverCopyTotal: (units: Double, asOf: Date)?
+    private var takeoverCopyRecords: [LoanDoseRecord] = []
+    /// A note for the Sport Mode page after a start, shown for 90 s: what the takeover book check
+    /// booked. Queue-confined.
+    private var startNote: (at: Date, text: String)?
     /// When the current Start attempt began (request sent) — drives the glance
     /// progress bar. Meaningful only while phase is requested/takingOver.
     private var attemptStartedAt: Date?
@@ -344,6 +353,9 @@ final class PodLoanWatchController {
     /// Hand-back offer resend counter (reset when a drain begins) — makes an
     /// unreachable-phone wait self-documenting in the log.
     private var handbackResendCount = 0
+    /// When the phone last acknowledged a hand-back offer: the answer to the End's query
+    /// (control row 8). Queue-confined.
+    private var handbackAckedAt: Date?
     /// A hand-back has been REQUESTED but the watch is still
     /// in control — phase stays .active, dosing and boluses continue, the journal
     /// drains via interim offers (released=false), and the user can cancel. Only when
@@ -502,6 +514,22 @@ final class PodLoanWatchController {
 
     func handleIncoming(userInfo: [String: Any], channel: LoanTransportChannel) {
         queue.async { self.handleIncomingOnQueue(userInfo: userInfo, channel: channel) }
+        notePhoneHeard()
+    }
+
+    /// When the phone was last heard from; the Sport Mode page says when it has gone quiet.
+    /// Queue-confined.
+    private var lastHeardFromPhoneAt: Date?
+
+    /// Any word from the phone (its loan messages, or its status for the stock pages). With no
+    /// loan running (control row 3, next-dev 1406bc8e): the warning for a silent phone is pushed
+    /// out to 25 minutes from now. Nothing takes the pod.
+    func notePhoneHeard() {
+        queue.async {
+            self.lastHeardFromPhoneAt = self.now()
+            guard self.phase == .idle || self.phase == .recoveredDrain else { return }
+            NotHearingFromPhoneAlert.arm()
+        }
     }
 
     private func handleIncomingOnQueue(userInfo: [String: Any], channel: LoanTransportChannel) {
@@ -615,7 +643,7 @@ final class PodLoanWatchController {
     private var lastRequestBuild: String?
     /// True only inside a confirmed seize's activation, to let handleGrant's lease and
     /// staleness guards stand aside for a credential that has neither (a dormant grant has
-    /// no 5-minute lease, and its epoch is provisional and forced fresh at activation).
+    /// no lease, and its epoch is provisional and forced fresh at activation).
     private var seizeActivationInFlight = false
 
     /// The reunion token of a seize whose activation is in flight but not yet proven. It is
@@ -635,14 +663,14 @@ final class PodLoanWatchController {
         pendingSeizeToken != nil || defaults.string(forKey: DormantKeys.activeToken) != nil
     }
 
-    /// The takeover-liveness budget a seize activation mints for itself — the same 5 minutes
-    /// a live grant gets from the phone. The DORMANT credential's own expiresAt is issuedAt
-    /// by contract ("meaningless dormant"); forgetting to re-stamp it here is what killed
-    /// the first field seize at ladder read 1 (2026-08-30, "grant lease expired
-    /// mid-takeover" 900 ms after the confirm). The lease bounds the HANDSHAKE, not the
+    /// The takeover-liveness budget a seize activation mints for itself — the same 60 seconds
+    /// a live grant gets from the phone (next-dev 69adf6d6; was 5 minutes). The DORMANT
+    /// credential's own expiresAt is issuedAt by contract ("meaningless dormant"); forgetting
+    /// to re-stamp it here is what killed the first field seize at ladder read 1 (2026-08-30,
+    /// "grant lease expired mid-takeover" 900 ms after the confirm). The lease bounds the HANDSHAKE, not the
     /// credential — R40(d) keeps credential age uncapped and disclosed, and the handshake
     /// starts at the confirm.
-    static let seizeActivationLease: TimeInterval = 5 * 60
+    static let seizeActivationLease: TimeInterval = 60
 
     /// R40(b): the user asked, the phone did not answer, a credential exists — OFFER the
     /// offline path (never auto-take it). Shows the age per R40(d); a deliberate confirm
@@ -1089,7 +1117,7 @@ final class PodLoanWatchController {
             return
         }
         // SPLIT-BRAIN GUARD (see handleRevoke): the existing expiry check cannot catch this —
-        // the lease is 5 min against a 25s request timeout — and the stale-epoch check above is
+        // the lease is 60 s against a 25s request timeout — and the stale-epoch check above is
         // inert because a timed-out request leaves `epoch` nil. Fails safe: the phone keeps the
         // pod and the user taps Start again.
         if let revoked = lastRevokedEpoch, grant.epoch <= revoked {
@@ -1284,6 +1312,16 @@ final class PodLoanWatchController {
             return
         }
 
+        // What the COPY knew of the pod's total, before this watch has read anything: the
+        // baseline for "did the pod deliver insulin this book cannot explain?" at takeover.
+        if let units = manager.podLoanInsulinDelivered, let asOf = manager.podLoanInsulinDeliveredAt {
+            takeoverCopyTotal = (units, asOf)
+        } else {
+            takeoverCopyTotal = nil
+        }
+        takeoverCopyRecords = grant.doseHistory
+        startNote = nil
+
         manager.pumpManagerDelegate = self
         manager.delegateQueue = queue
         pumpManager = manager
@@ -1443,7 +1481,7 @@ final class PodLoanWatchController {
                     SportLog.event("loan", "TAKEOVER SUPERSEDED — epoch \(grant.epoch) abandoned mid-ladder (now phase \(self.phase.rawValue), epoch \(self.epoch.map(String.init) ?? "nil"))")
                     return
                 }
-                // CRITICAL: the grant's ~5-min lease is validated
+                // CRITICAL: the grant's 60 s lease is validated
                 // once at intake, but this ladder can run FAR past its nominal ~40s
                 // when the app is suspended mid-ladder — frozen queue timers draining
                 // late on wake have stretched one ladder to 23 minutes.
@@ -1485,6 +1523,9 @@ final class PodLoanWatchController {
                     self.revokeCapturedDeliveredAt = nil
                     self.deliveredAtTakeover = delivered
                     self.lastPodTotal = (delivered, manager.podLoanInsulinDeliveredAt)
+                    // Before the first cycle: the ledger write is enqueued behind the grant seed on
+                    // the loop's serial queue, and the cycle below is enqueued after it.
+                    self.bookInsulinTheCopyCannotExplain(podTotal: delivered, epoch: grant.epoch)
                     self.phase = .active
                     // R40 reunion identity: the seize is PROVEN only now — persist its token
                     // so the loan's offers echo it and the phone can retro-acknowledge. Every
@@ -2303,7 +2344,46 @@ final class PodLoanWatchController {
                 return
             }
             SportLog.event("loan", "HAND-BACK requested — draining \(self.journal.unackedEvents().count) events; still in control (WS1)")
-            self.sendHandbackOffer(freshened: false, recovered: false)
+            // Rows 8 and 21: the offer is the query, and silence after the wait is the answer that
+            // refuses the End. The link's reachability flag is not a verdict: it flaps while either
+            // app changes state, and says only whether the phone can take a live message this
+            // second (next-dev 86674900).
+            let tappedAt = self.now()
+            self.handbackAckedAt = nil
+            let sent = self.sendHandbackOffer(freshened: false, recovered: false)
+            self.awaitHandbackAnswer(tappedAt: tappedAt, offerSent: sent)
+        }
+    }
+
+    /// How long End waits for the phone's acknowledgement before it is refused (control row 8:
+    /// the looper waits on screen, so the short query wait).
+    static let handbackAnswerWait: TimeInterval = 10
+    /// An offer the link could not carry at the tap is tried again this often until the wait ends.
+    static let handbackUnreachableRecheck: TimeInterval = 1
+
+    /// Row 8: End is refused only when the phone has not acknowledged the offer by the end of the
+    /// answer wait. While the link reads unreachable the live offer is not sent (it is never
+    /// queued), and the reading is taken again each second, so a phone that is there gets the
+    /// offer within the wait. MUST run on `queue`.
+    private func awaitHandbackAnswer(tappedAt: Date, offerSent: Bool) {
+        func stillWaiting() -> Bool {
+            phase == .active && handbackRequested && handbackAckedAt.map { $0 >= tappedAt } != true
+        }
+        func recheck() {
+            schedule(after: Self.handbackUnreachableRecheck, label: "handback-recheck") { [weak self] in
+                guard let self = self, stillWaiting() else { return }
+                if self.isPhoneReachable() {
+                    SportLog.event("loan", "hand-back: iPhone reachable again inside the answer wait — offer sent")
+                    self.sendHandbackOffer(freshened: false, recovered: false)
+                } else if self.now().timeIntervalSince(tappedAt) + Self.handbackUnreachableRecheck < Self.handbackAnswerWait {
+                    recheck()
+                }
+            }
+        }
+        if !offerSent { recheck() }
+        schedule(after: Self.handbackAnswerWait, label: "handback-answer") { [weak self] in
+            guard let self = self, stillWaiting() else { return }
+            self.handbackTimedOut(unreachable: true)
         }
     }
 
@@ -2338,7 +2418,7 @@ final class PodLoanWatchController {
     private func handbackTimedOut(unreachable: Bool = false, refusal: String? = nil) {
         let why: String
         if let refusal { why = "REFUSED by the phone — \(refusal)" }
-        else if unreachable { why = "not possible — iPhone not reachable, no offer sent" }
+        else if unreachable { why = "not possible — iPhone did not answer the offer" }
         else { why = "timed out (\(Int(HandbackStuckAlert.interval))s) — iPhone never acked" }
         resendWorkItem?.cancel()
         handbackDeadline = nil
@@ -2391,7 +2471,8 @@ final class PodLoanWatchController {
             if let refusal {
                 body = refusal
             } else if unreachable {
-                body = "Your iPhone isn't reachable, so Sport Mode is still running on your watch. Tap End again when the iPhone is nearby."
+                // Row 8: the offer went unanswered for the whole wait (next-dev's reviewed words).
+                body = NSLocalizedString("iPhone didn't answer, so the watch is still looping. To stop automatic dosing, open the loop on the watch.", comment: "Watch alert body: End refused, the phone did not answer the hand-back offer")
             } else if wedge == .oneWay {
                 body = "End didn't go through — Sport Mode is still running. Your iPhone is reachable but didn't confirm: reopen Loop on both devices, then tap End again."
             } else {
@@ -2513,8 +2594,10 @@ final class PodLoanWatchController {
         }
     }
 
-    private func sendHandbackOffer(freshened: Bool, recovered: Bool) {
-        guard let epoch = epoch ?? journal.activeEpoch else { return }
+    /// Returns whether the offer went out (a live offer is not sent to an unreachable phone).
+    @discardableResult
+    private func sendHandbackOffer(freshened: Bool, recovered: Bool) -> Bool {
+        guard let epoch = epoch ?? journal.activeEpoch else { return false }
         var odometer: LoanOdometerSnapshot?
         if let start = deliveredAtTakeover,
            let latest = pumpManager?.podLoanInsulinDelivered ?? revokeCapturedDelivered ?? lastPodTotal?.units {
@@ -2581,27 +2664,30 @@ final class PodLoanWatchController {
         // signal exists, it was just never surfaced. Log transitions here; the glance note is
         // driven off DebugSnapshot.phoneReachable.
         //
-        // A LIVE offer (this watch still holds a loan it could resume) is NEVER queued, and End
-        // fails at once when the phone is unreachable (ported from next-dev, 2026-09-20). The
-        // old rule here — "do NOT abort on unreachable, the queued offer lands the moment the
-        // phone returns" — is exactly what produced two controllers on 2026-09-18: the hand-back
-        // timed out, the loan resumed, and the queued offers landed an hour later. Drains
-        // (revoked / recovered) keep the queued path: nothing live to conflict with, and their
-        // records must land.
+        // A LIVE offer (this watch still holds a loan it could resume) is NEVER queued (ported
+        // from next-dev, 2026-09-20): on 2026-09-18 the hand-back timed out, the loan resumed, and
+        // the queued offers landed an hour later. Drains (revoked / recovered) keep the queued
+        // path: nothing live to conflict with, and their records must land.
+        //
+        // One unreachable reading is not a verdict (next-dev 86674900, control row 8): the link
+        // flaps while either app changes state. A live offer that finds the phone unreachable is
+        // not sent and waits for the next attempt; the End is refused only when the phone has not
+        // answered within the answer wait (`awaitHandbackAnswer`), and once under way the
+        // hand-back holds for its budget.
         let live = !recovered && phase != .revoked && phase != .recoveredDrain
         let reachableNow = isPhoneReachable()
         if !reachableNow { handbackSawUnreachable = true }
-        if live, !reachableNow {
-            handbackTimedOut(unreachable: true)   // no offer leaves the watch
-            return
-        }
         if lastHandbackReachable != reachableNow {
             SportLog.event("loan", reachableNow
                 ? "hand-back: iPhone reachable — offer should ack shortly"
-                : "drain: iPhone UNREACHABLE — offer queued, will land when it returns")
+                : (live ? "hand-back: iPhone unreachable — the live offer waits for the next attempt"
+                        : "drain: iPhone UNREACHABLE — offer queued, will land when it returns"))
             lastHandbackReachable = reachableNow
         }
-        sendMessage(.handbackOffer(offer), urgentOnly: live)
+        let sent = !live || reachableNow
+        if sent {
+            sendMessage(.handbackOffer(offer), urgentOnly: live)
+        }
 
         // Resend until ack (rows 9/10): same event IDs every retry by construction.
         resendWorkItem?.cancel()
@@ -2622,6 +2708,7 @@ final class PodLoanWatchController {
         }
         resendWorkItem = work
         schedule(after: 15, label: "handback-resend", execute: work)
+        return sent
     }
 
     private func handleAck(_ ack: HandbackAck) {
@@ -2632,6 +2719,8 @@ final class PodLoanWatchController {
             SportLog.event("loan", "ack IGNORED ev=\(ack.epoch) — ours ev=\(epoch.map(String.init) ?? "nil") journal ev=\(journal.activeEpoch.map(String.init) ?? "nil"); stale redelivery or epoch mismatch")
             return
         }
+        // The phone answered the offer: the End is not refused (control row 8).
+        handbackAckedAt = now()
         // The phone acks MAX-seq, but withholding (in-flight /
         // chase-pending events) creates seq GAPS a max-seq cursor can't represent —
         // an ack covering a later carb would skip a withheld command forever. The cap
@@ -2874,6 +2963,12 @@ final class PodLoanWatchController {
         /// Resting: the current pod is known and this watch holds no handle for it, so the next
         /// Start must find the pod with the screen on.
         var podFirstContactExpected: Bool = false
+        /// When the phone was last heard from (control row 3: the idle page says when it has
+        /// gone quiet).
+        var lastHeardFromPhoneAt: Date? = nil
+        /// What the takeover book check booked, for the Sport Mode page (control row 2).
+        var startNoteAt: Date? = nil
+        var startNoteText: String? = nil
     }
 
     /// True while this watch owns the pod (phase .active) — the carb/bolus flow
@@ -2964,7 +3059,10 @@ final class PodLoanWatchController {
                 takeoverPodReached: phase == .takingOver && takeoverPodReached,
                 podFirstContactExpected: (phase == .idle || phase == .recoveredDrain)
                     && Self.firstContactExpected(podAddress: currentPodAddress(),
-                                                 hasSavedHandle: OmniPumpManager.podLoanHasSavedHandle(forPodAddress:)))
+                                                 hasSavedHandle: OmniPumpManager.podLoanHasSavedHandle(forPodAddress:)),
+                lastHeardFromPhoneAt: lastHeardFromPhoneAt,
+                startNoteAt: startNote?.at,
+                startNoteText: startNote?.text)
     }
 
     /// The current pod's address: recorded from every dormant grant and grant; read once from
@@ -3033,6 +3131,77 @@ final class PodLoanWatchController {
     // phone's escape hatch (reclaimNow), the hand-back flow, and an app relaunch.
     // In git at the commit that removed it, if a genuine wedge ever needs it back.
 
+    // MARK: - Insulin the copy cannot explain (control row 2; next-dev d0a1280f, fc4a5190)
+
+    /// Same band as the phone's checks.
+    static let unexplainedInsulinBand = 0.20
+
+    /// The pod is the only shared truth about insulin. The copy this watch starts from is seconds
+    /// old on an ordinary Start and can be half an hour old, or more, on an offline one (the
+    /// standing copy is refreshed every 30 minutes), and anything the phone delivered after it was
+    /// made, a meal bolus above all, is in nobody's book here: the watch would see glucose rising,
+    /// no insulin on board, and dose on top of it. The pod's total says how much; nothing says when.
+    ///
+    /// Expected delivery between the copy's pod reading and now is what the copy's own records
+    /// explain: the phone's arithmetic (LoanReconciler) for temps, suspends and the schedule, and
+    /// for each bolus the share of its delivery that falls inside the window. That share matters:
+    /// a bolus still delivering when the copy was made has part of itself on each side of that
+    /// reading, and its record starts BEFORE the reading, so without the proration the watch would
+    /// book, a second time, a bolus the copy already knows. Returns the surplus beyond the band, or 0.
+    static func insulinTheCopyCannotExplain(copyTotal: Double, copyAt: Date, podTotal: Double, now: Date,
+                                            records: [LoanDoseRecord], schedule: BasalRateSchedule?) -> Double {
+        guard now > copyAt, podTotal >= copyTotal else { return 0 }
+        let rateEvents = records.filter { $0.kind != .bolus }.enumerated().map {
+            LoanEvent(id: UUID(), seq: $0.offset + 1, provenance: .confirmed, record: $0.element, loggedAt: now)
+        }
+        var expected = LoanReconciler.expectedInsulin(events: rateEvents, schedule: schedule, from: copyAt, to: now)
+        for bolus in records where bolus.kind == .bolus {
+            guard let amount = bolus.amount, amount > 0 else { continue }
+            let end = bolus.endDate ?? bolus.startDate
+            if end > bolus.startDate {
+                let overlap = min(end, now).timeIntervalSince(max(bolus.startDate, copyAt))
+                if overlap > 0 { expected += amount * overlap / end.timeIntervalSince(bolus.startDate) }
+            } else if bolus.startDate >= copyAt, bolus.startDate <= now {
+                expected += amount
+            }
+        }
+        let unexplained = ((podTotal - copyTotal - expected) * 1000).rounded() / 1000
+        return unexplained > unexplainedInsulinBand ? unexplained : 0
+    }
+
+    /// Booked as a bolus delivered NOW, the latest it could have been, which overstates insulin on
+    /// board and under-doses: the phone's rule, mirrored. It does not open the loop: the looper
+    /// has just asked this watch to dose, and a book that errs cautious is what makes that safe.
+    /// Into this loan's insulin book only, NOT the journal: the phone has the real records, and a
+    /// copy handed back would count it twice there. The Sport Mode page says how much.
+    /// MUST run on `queue`.
+    private func bookInsulinTheCopyCannotExplain(podTotal: Double, epoch: Int) {
+        defer { takeoverCopyTotal = nil; takeoverCopyRecords = [] }
+        guard let copy = takeoverCopyTotal else {
+            SportLog.event("loan", "takeover book check SKIPPED — the copy carried no pod total to compare against")
+            return
+        }
+        let at = self.now()
+        let unexplained = Self.insulinTheCopyCannotExplain(copyTotal: copy.units, copyAt: copy.asOf, podTotal: podTotal, now: at,
+                                                           records: takeoverCopyRecords,
+                                                           schedule: loopManager.settings.basalRateSchedule)
+        let age = at.timeIntervalSince(copy.asOf) / 60
+        guard unexplained > 0 else {
+            SportLog.event("loan", String(format: "takeover book check CLEAN — pod total %.2f → %.2f U over %.1f min is explained by the copy's records and the schedule",
+                                          copy.units, podTotal, age))
+            return
+        }
+        let entry = DoseEntry(type: .bolus, startDate: at, endDate: at, value: unexplained, unit: .units,
+                              deliveredUnits: unexplained,
+                              syncIdentifier: "PODLOAN-WATCHGAP-e\(epoch)",
+                              insulinType: pumpManager?.status.insulinType)
+        loopManager.ledgerRecordEnact(entry)
+        SportLog.event("loan", String(format: "** takeover book check: pod total %.2f → %.2f U over %.1f min; %.2f U the copy cannot explain — BOOKED as a bolus now (insulin on board errs high, dosing errs low)%@ **",
+                                      copy.units, podTotal, age, unexplained, seizeMarkerActive ? " [seize]" : ""))
+        startNote = (at, String(format: NSLocalizedString("%.2f U the watch had no record of — counted as insulin on board", comment: "Glance: unexplained insulin booked (1: units)"), unexplained))
+        notifyUI()
+    }
+
     // MARK: - Internals
 
     /// `urgentOnly`: the transport must never QUEUE this message. A live hand-back offer that
@@ -3064,6 +3233,8 @@ final class PodLoanWatchController {
     }
     /// TEST SEAM: fire the hand-back budget's expiry without waiting two minutes.
     func expireHandbackForTesting() { queue.sync { handbackTimedOut() } }
+    /// TEST SEAM: run a captured timer on the controller's queue, where it runs in production.
+    func onQueueForTesting(_ body: () -> Void) { queue.sync(execute: body) }
     func ingestGrantCarbsForTesting(_ grant: LoanGrant) { queue.sync { ingestGrantCarbs(grant) } }
     /// TEST SEAM: the final (released) stage, as finalizeHandback leaves it.
     func enterFinalStageForTesting() { queue.sync { handbackRequested = false; phase = .handingBack; finalOfferSent = true } }
