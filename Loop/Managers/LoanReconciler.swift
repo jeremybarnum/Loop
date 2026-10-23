@@ -319,6 +319,50 @@ enum LoanReconciler {
     /// which only ever adds IOB).
     static func expectedInsulin(events: [LoanEvent], schedule: BasalRateSchedule?, from start: Date, to end: Date,
                                 includingBolusesAtEnd: Bool = true) -> Double {
+        var boluses: [(date: Date, units: Double)] = []
+        var rates: [(start: Date, end: Date, rate: Double)] = []
+        for event in events {
+            switch event.record.kind {
+            case .bolus:
+                boluses.append((event.record.startDate, event.record.amount ?? 0))
+            case .tempBasal, .suspend, .boundaryTruncation:
+                guard let rate = event.record.unitsPerHour, let segEnd = event.record.endDate else { continue }
+                rates.append((event.record.startDate, segEnd, rate))
+            default:
+                break
+            }
+        }
+        return expectedInsulin(boluses: boluses, rates: rates, schedule: schedule, from: start, to: end,
+                               includingBolusesAtEnd: includingBolusesAtEnd)
+    }
+
+    /// The same expectation over the phone's own dose store, for the insulin ledger's windows that
+    /// the phone held: boluses add, temp basals and suspends override the schedule for their spans,
+    /// the schedule fills the rest. Scheduled-basal entries are left to the schedule, which they mirror.
+    static func expectedInsulin(doses: [DoseEntry], schedule: BasalRateSchedule?, from start: Date, to end: Date,
+                                includingBolusesAtEnd: Bool = true) -> Double {
+        var boluses: [(date: Date, units: Double)] = []
+        var rates: [(start: Date, end: Date, rate: Double)] = []
+        for dose in doses {
+            switch dose.type {
+            case .bolus:
+                boluses.append((dose.startDate, dose.deliveredUnits ?? dose.programmedUnits))
+            case .tempBasal:
+                rates.append((dose.startDate, dose.endDate, dose.unitsPerHour))
+            case .suspend:
+                rates.append((dose.startDate, dose.endDate, 0))
+            case .basal, .resume:
+                break
+            }
+        }
+        return expectedInsulin(boluses: boluses, rates: rates, schedule: schedule, from: start, to: end,
+                               includingBolusesAtEnd: includingBolusesAtEnd)
+    }
+
+    private static func expectedInsulin(boluses: [(date: Date, units: Double)],
+                                        rates: [(start: Date, end: Date, rate: Double)],
+                                        schedule: BasalRateSchedule?, from start: Date, to end: Date,
+                                        includingBolusesAtEnd: Bool) -> Double {
         guard end > start else { return 0 }
 
         var total: Double = 0
@@ -336,44 +380,36 @@ enum LoanReconciler {
         //    windows would double-count.
         //  - FINAL endpoint (default): a bolus stamped exactly at hand-back is part of the
         //    loan — dropping it would inflate the positive residual and mint a false open.
-        for event in events where event.record.kind == .bolus {
-            guard event.record.startDate >= start else { continue }
-            guard includingBolusesAtEnd ? event.record.startDate <= end
-                                        : event.record.startDate < end else { continue }
-            total += event.record.amount ?? 0
+        for bolus in boluses {
+            guard bolus.date >= start else { continue }
+            guard includingBolusesAtEnd ? bolus.date <= end : bolus.date < end else { continue }
+            total += bolus.units
         }
 
         // Rate segments: journaled temp/suspend windows. Resolved UNCLIPPED first, clipped
         // to the audit window second — the order is load-bearing, see below.
         struct Segment { let start: Date; let end: Date; let rate: Double }
         var segments: [Segment] = []
-        for event in events {
-            switch event.record.kind {
-            case .tempBasal, .suspend, .boundaryTruncation:
-                guard let rate = event.record.unitsPerHour,
-                      let segEnd = event.record.endDate else { continue }
-                // A ZERO-DURATION record is a CANCEL (the pod command "temp 0.00 × 0 min"),
-                // and it must enter resolution as a terminator even though it spans nothing —
-                // dropping it left the cancelled temp standing in the books for its full
-                // programmed window. Field 2026-09-01 (Caitlin's first breakfast loan): the
-                // bolus flow's 2.50 U/hr bracket temp was cancelled after 3 s, the zero-length
-                // record was discarded, and the phantom ran 9.6 min until the next real temp —
-                // a locked −0.25 residual and a false "IOB May Be Overstated" warning.
-                //
-                // Field 2026-09-05 (his overnight loan e298, R32 opened the loop): the SAME
-                // bug at the checkpoint boundary. A cancel is journaled at 02:51:44.6 and the
-                // checkpoint's odometer read one second later, so the next window starts at
-                // 02:51:45.8. Clipping the cancel to that window BEFORE resolving gave it
-                // end < start and the guard dropped it; the zero temp it cancelled then stood
-                // until its programmed end, 0.05 U expected against the 0.30 U the pod
-                // correctly metered on schedule, a +0.25 residual carried to hand-back and a
-                // false OPEN LOOP. So: resolve on the records' own spans (a cancel terminates
-                // its temp wherever the window falls), and clip only what survives.
-                guard segEnd >= event.record.startDate else { continue }
-                segments.append(Segment(start: event.record.startDate, end: segEnd, rate: rate))
-            default:
-                break
-            }
+        for span in rates {
+            // A ZERO-DURATION record is a CANCEL (the pod command "temp 0.00 × 0 min"),
+            // and it must enter resolution as a terminator even though it spans nothing —
+            // dropping it left the cancelled temp standing in the books for its full
+            // programmed window. Field 2026-09-01 (Caitlin's first breakfast loan): the
+            // bolus flow's 2.50 U/hr bracket temp was cancelled after 3 s, the zero-length
+            // record was discarded, and the phantom ran 9.6 min until the next real temp —
+            // a locked −0.25 residual and a false "IOB May Be Overstated" warning.
+            //
+            // Field 2026-09-05 (his overnight loan e298, R32 opened the loop): the SAME
+            // bug at the checkpoint boundary. A cancel is journaled at 02:51:44.6 and the
+            // checkpoint's odometer read one second later, so the next window starts at
+            // 02:51:45.8. Clipping the cancel to that window BEFORE resolving gave it
+            // end < start and the guard dropped it; the zero temp it cancelled then stood
+            // until its programmed end, 0.05 U expected against the 0.30 U the pod
+            // correctly metered on schedule, a +0.25 residual carried to hand-back and a
+            // false OPEN LOOP. So: resolve on the records' own spans (a cancel terminates
+            // its temp wherever the window falls), and clip only what survives.
+            guard span.end >= span.start else { continue }
+            segments.append(Segment(start: span.start, end: span.end, rate: span.rate))
         }
         // Later journal entries supersede earlier ones for overlapping spans (the pod
         // runs one program at a time); walk in start order, truncating predecessors.
@@ -448,18 +484,17 @@ enum LoanReconciler {
     /// this file must not import the pump driver.
     private static let podPulseSize: Double = 0.05
 
+    /// Rate × time, not whole pulses: the pod runs its schedule on an ongoing pulse grid whose phase the
+    /// records don't carry, so a stretch of schedule delivers the floor or one pulse more. Flooring it
+    /// under-counted by about half a pulse per stretch and per schedule item, which drifted long loans to
+    /// +0.25/+0.30 U and false verdicts (next-dev field 2026-10-05/06); rate × time is unbiased (Monte Carlo
+    /// 2026-10-08: mean 0.000 U, p95 within 0.15 U at 6 h). Temps stay floored: each starts its own clock.
     private static func scheduleInsulin(_ schedule: BasalRateSchedule, from: Date, to: Date) -> Double {
-        // Same pulse model per schedule segment. A schedule-covered gap is the pod running its
-        // stored basal program, which is pulsed identically — but note the pod does NOT restart
-        // its pulse clock at our segment boundaries here (it is one continuous program), so this
-        // slightly over-penalises a gap split across schedule items. Immaterial for a flat
-        // schedule, and conservative in the direction that matters: it can only make `expected`
-        // smaller, i.e. make delivery look MORE complete rather than less.
         return schedule.between(start: from, end: to).reduce(0) { partial, item in
             let s = max(item.startDate, from)
             let e = min(item.endDate, to)
             guard e > s else { return partial }
-            return partial + pulsedInsulin(rate: item.value, seconds: e.timeIntervalSince(s))
+            return partial + item.value * e.timeIntervalSince(s) / 3600
         }
     }
 }

@@ -292,7 +292,6 @@ final class LoanTwoSidedContractTests: XCTestCase {
             issueNotice: { _, _ in },
             isConnectionReady: { true },
             cancelTempBasalAfterPodReturn: { completion in completion(nil) },
-            openLoopForUncertainReconciliation: { },
             backfillDoses: { [weak self] doses, completion in
                 guard let self = self else { completion(nil); return }
                 self.lock.lock()

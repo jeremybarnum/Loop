@@ -175,14 +175,6 @@ final class PodLoanPhoneController {
         /// LoopDataManager.cancelTempBasalAfterPodReturn. Default no-op keeps the state-machine
         /// tests constructing unchanged.
         var cancelTempBasalAfterPodReturn: (@escaping (Error?) -> Void) -> Void = { $0(nil) }
-        /// The pod's odometer disagrees with our books by more than noise —
-        /// stop automatic dosing and LEAVE it stopped until the user decides otherwise.
-        ///
-        /// Deliberately NOT `setAutomaticDosingPaused(true)`. That call pairs with a matching
-        /// `(false)` at the next loan's end, which would silently re-close the loop this just
-        /// opened — the implementation must also clear the pre-loan capture so no later restore
-        /// can undo this. Default no-op keeps the state-machine tests constructing unchanged.
-        var openLoopForUncertainReconciliation: () -> Void = {}
         /// Escalated surfacing for the dead-watch reclaim — time-sensitive interruption and
         /// a foreground banner, where `issueNotice` is a quiet list entry. The watch is dead, so
         /// the phone is the only device that can get the user's attention.
@@ -249,12 +241,6 @@ final class PodLoanPhoneController {
         var listenForPodAdverts: (_ epoch: Int) -> Void = { _ in }
         var stopListeningForPodAdverts: (_ epoch: Int, _ reason: String) -> Void = { _, _ in }
     }
-
-    /// Code-level configuration: when a force-reclaim's odometer audit finds insulin the
-    /// records cannot explain, book that gap as a bolus timestamped AT RECLAIM — zero decay, so
-    /// IOB over-counts rather than under-counts until the truth arrives. `false` still opens the
-    /// loop and alerts; it only skips the booking.
-    static let bookUnattributedInsulinOnForceReclaim = true
 
     private let log = OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanPhoneController")
     /// Internal (not private) so tests can wait on it: a helper that reads before the queue has
@@ -626,25 +612,27 @@ final class PodLoanPhoneController {
             self.reclaimStartedAt = nil            // ceiling reached — stop settling
             self.reclaimDisplayAnchor = nil
             self.deps.endReclaimBackgroundTask()
-            // An audit that never got its round-trip is an UNVERIFIED session, whichever way the
-            // pod came back: a forced take-back, or one the watch answered. It never stays
-            // pending — run later, against a pod reading that includes this phone's own basal
-            // since, it would book that basal as insulin the watch's records don't explain
-            // (simulator P10, 2026-10-21: a false +0.25 U OPEN LOOP at the next loan), or the
-            // next loan's audit would replace it unread (P17). Unverified opens; it never
-            // quietly resumes.
+            // An audit that never got its round-trip never turns the loop off (ruled 2026-10-22, one
+            // ledger), and its check is not lost: it runs when the pod next answers. Judged against
+            // this phone's dose store, the phone's own basal since then is explained rather than
+            // booked (simulator P10's false +0.25 U was a late check against the watch's records alone).
             if let pending = self.pendingHandbackAudit {
-                self.pendingHandbackAudit = nil
-                let rung = pending.flavor == .forceReclaim ? "R37" : "R33"
-                self.handbackDiag(pending.epoch, "** \(rung): audit NEVER RAN (\(pending.flavor.rawValue)) — pod unreachable through the settle window. Session UNVERIFIED, loop OPENS **")
-                self.deps.setAutomaticDosingPaused(false)
-                self.deps.openLoopForUncertainReconciliation()
-                self.armOpenLoopReminder()
-                // One text for all three unverified outcomes (see Self.sessionUnverifiedBody):
-                // pod never answered, answered without a total, or no baseline to compare
-                // against. The difference is internal cause; the user's situation and the one
-                // thing they can do about it are identical in all three.
-                self.deps.issueUrgentNotice("Watch Session Unverified", Self.sessionUnverifiedBody)
+                switch pending.flavor {
+                case .forceReclaim:
+                    // The watch's records are missing: the check stays owed and dosing stays held.
+                    // A phone that cannot reach the pod cannot dose it; the pod's next report
+                    // reopens the settle (checkOwnPumpTotal), so the verdict lands before a dose.
+                    self.handbackDiag(pending.epoch, "R37: audit still OWED — pod unreachable through the settle window; it runs when the pod next answers, dosing held until then")
+                case .handback:
+                    // The watch's records are committed: the phone's next pod reading judges the
+                    // loan's window against its dose store, like any window the phone holds.
+                    self.pendingHandbackAudit = nil
+                    self.ownReading = OwnReading(units: pending.deliveredAtStart,
+                                                 at: pending.windowStart ?? self.loanStartedAt ?? self.deps.now(),
+                                                 owed: true)
+                    self.handbackDiag(pending.epoch, "R33: audit not run in the settle window — the phone's next pod reading checks the loan's window against its records")
+                    self.deps.setAutomaticDosingPaused(false)
+                }
             }
             self.deps.ownershipDidChange()         // final re-render that clears the tile
         }
@@ -828,6 +816,9 @@ final class PodLoanPhoneController {
             // and this machinery can go; if it is a temp's worth, every earlier residual we
             // puzzled over was measuring the wrong interval.
             let drift = pending.watchLatest.map { latest - $0 }
+            // The verdict reading closes the loan's window and opens this phone's.
+            let readingAt = deps.pumpManager()?.lastSync ?? deps.now()
+            ownReading = OwnReading(units: latest, at: readingAt, owed: false)
             handbackDiag(pending.epoch, String(format:
                 "reconcile[%@]: delivered=%.3f expected=%.3f residual=%+.3f (tol 0.05) · loan total %@ resid %@ · %d checkpoint(s) · loanMin=%.0f cycles=%d · odometer read by PHONE +%.0fs after reclaim · vs watch endpoint %@ (watch fresh=%@)",
                 pending.flavor == .forceReclaim ? "FORCE-RECLAIM" : "AUTHORITATIVE",
@@ -864,16 +855,15 @@ final class PodLoanPhoneController {
                              epoch: pending.epoch)
                 applyReconciliationVerdict(residual: residual, epoch: pending.epoch)
             case .forceReclaim:
-                applyForceReclaimVerdict(residual: residual, epoch: pending.epoch)
+                let windowStart = pending.windowStart ?? loanStartedAt ?? readingAt
+                applyForceReclaimVerdict(residual: residual, epoch: pending.epoch,
+                                         window: DateInterval(start: min(windowStart, readingAt), end: readingAt))
             }
         } else if pending.flavor == .forceReclaim {
-            // A verified round-trip that reports no odometer cannot verify the session.
-            // Unverified is not clean — open, loudly.
-            handbackDiag(pending.epoch, "** R37: reclaim round-trip landed but no odometer — session UNVERIFIED, loop OPENS **")
+            // A pump that gives no delivered total: nothing to check against. Keep looping, and say so.
+            handbackDiag(pending.epoch, "** R37: reclaim round-trip landed but no odometer — session UNVERIFIED; still looping **")
             deps.setAutomaticDosingPaused(false)
-            deps.openLoopForUncertainReconciliation()
-            armOpenLoopReminder()
-            deps.issueUrgentNotice("Watch Session Unverified", Self.sessionUnverifiedBody)
+            deps.issueUrgentNotice(Self.sessionUnverifiedTitle, Self.sessionUnverifiedBody)
         } else {
             handbackDiag(pending.epoch, "reconcile[AUTHORITATIVE]: pod reachable but reported no odometer — keeping the provisional line")
         }
@@ -908,7 +898,10 @@ final class PodLoanPhoneController {
     /// in false trips against the measured distribution, while catching a real over-delivery six
     /// pulses sooner. Four pulses (0.20 U) is still well clear of quantization, which
     /// tops out around half a pulse per temp replacement.
-    private static let openLoopPositiveResidual: Double = 0.20
+    ///
+    /// Beyond it the difference is reported, and booked as an estimate when the records that would
+    /// explain it are missing. It never turns the loop off (ruled 2026-10-22, from next-dev 6fa0ccf9).
+    static let unexplainedInsulinBand: Double = 0.20
 
     /// A negative residual — the pod delivered LESS than our books say — beyond this warns, and
     /// only warns (see the sign asymmetry on `applyReconciliationVerdict`). Also 0.20 U.
@@ -923,9 +916,11 @@ final class PodLoanPhoneController {
     /// Sign-aware. The two directions are not the same failure and do not deserve the
     /// same response:
     ///
-    /// POSITIVE (pod delivered more than recorded) — there is insulin in the body that the
-    /// algorithm cannot see. Closed loop will dose on top of it. That is stacking, and the remedy
-    /// is to stop the machine: go open, tell the user loudly, let them look and dose by hand.
+    /// POSITIVE (pod delivered more than recorded) — on a hand-back the watch's records are
+    /// complete, so the difference is unexplained rather than missing: it is reported, nothing is
+    /// booked, and the loop keeps running. Turning the loop off would remove its ability to cut
+    /// basal, and change a user setting, to guard a risk that counting the insulin covers wherever
+    /// the insulin can be counted (ruled 2026-10-22, one ledger, from next-dev 6fa0ccf9).
     ///
     /// NEGATIVE (pod delivered less than recorded) — the books carry phantom IOB. The algorithm
     /// believes there is more insulin working than there is, so it doses LESS: the error is
@@ -936,17 +931,12 @@ final class PodLoanPhoneController {
     ///
     /// Warned once per event, never once per retry (alarm fatigue).
     private func applyReconciliationVerdict(residual: Double, epoch: Int) {
-        if residual > Self.openLoopPositiveResidual {
+        if residual > Self.unexplainedInsulinBand {
             handbackDiag(epoch, String(format:
-                "** R32 OPEN LOOP — residual %+.3f U exceeds +%.2f: the pod delivered insulin our records do not contain. Automatic dosing STOPPED. **",
-                residual, Self.openLoopPositiveResidual))
-            deps.openLoopForUncertainReconciliation()
-            armOpenLoopReminder()
-            // URGENT on either flavor: an alert that stops automatic dosing must never be a
-            // quiet list entry. The one alert left on the plain channel is the negative warn
-            // below, which keeps looping — caution, not action (alarm fatigue).
-            deps.issueUrgentNotice("Loop Open — Unexplained Insulin",
-                             String(format: "The pod delivered %.2f U more than the watch session's records account for. Automatic dosing is off until you turn it back on. Check your insulin on board before dosing.", residual))
+                "** R32 WARN — residual %+.3f U exceeds +%.2f: the pod delivered insulin the watch's complete records do not contain. Nothing booked; still looping. **",
+                residual, Self.unexplainedInsulinBand))
+            deps.issueUrgentNotice("Unexplained Insulin",
+                             String(format: "Unexpected: the pod delivered %.2f U more than the watch recorded. It isn't counted in insulin on board. Consider reporting it with a Loop Report.", residual))
         } else if residual < -Self.warnNegativeResidual {
             handbackDiag(epoch, String(format:
                 "** R32 WARN — residual %+.3f U beyond -%.2f: records claim more delivery than the pod made (phantom IOB). Still looping — this direction under-doses and decays out. **",
@@ -968,32 +958,17 @@ final class PodLoanPhoneController {
 
     /// The force-reclaim verdict. Same bounds and sign asymmetry as the verdict above — a dead
     /// watch is the limiting case of incomplete books, not a different protocol — but the RESPONSE
-    /// escalates, because the counterparty that would normally explain a residual is dead, and
-    /// because dosing has been held since the reclaim waiting on exactly this answer.
-    private func applyForceReclaimVerdict(residual: Double, epoch: Int) {
-        deps.setAutomaticDosingPaused(false)   // the latch's job is done; dosingEnabled carries any verdict
-        if residual > Self.openLoopPositiveResidual {
+    /// differs: the watch's records are missing, so what they would have explained is booked as an
+    /// estimate named by the window, and the loop keeps running on it. Dosing has been held since the
+    /// reclaim waiting on exactly this answer.
+    private func applyForceReclaimVerdict(residual: Double, epoch: Int, window: DateInterval) {
+        deps.setAutomaticDosingPaused(false)   // the latch's job is done
+        if residual > Self.unexplainedInsulinBand {
             handbackDiag(epoch, String(format:
-                "** R37 OPEN LOOP — force-reclaim residual %+.3f U exceeds +%.2f: the pod delivered insulin the records cannot explain (watch died mid-session?). Automatic dosing STOPPED. **",
-                residual, Self.openLoopPositiveResidual))
-            deps.openLoopForUncertainReconciliation()
-            armOpenLoopReminder()
-            // Written to survive a BANNER, which is where this is actually read. The previous
-            // wording ran past four lines and truncated mid-sentence on the field screenshot
-            // (2026-08-14), cutting off at "its real records w" — so the reader lost the one
-            // clause that says the situation resolves itself. Order is deliberate: the number
-            // and the dosing state first, because those are what a truncated banner must still
-            // carry, then the reassurance. The ~2 min figure is the measured lag from the watch
-            // reconnecting to its records landing and the estimate retiring.
-            var body = String(format:
-                "%.2f U on the pod isn't in the watch's records, so automatic dosing is OFF.", residual)
-            if Self.bookUnattributedInsulinOnForceReclaim {
-                bookGapDose(units: residual, epoch: epoch)
-                body += " It's booked as a bolus to keep IOB conservative; the watch's real records replace it about 2 min after the phone sees the watch again."
-            } else {
-                body += " Check your insulin on board before dosing."
-            }
-            deps.issueUrgentNotice("Loop Open — Unverified Insulin", body)
+                "** R37 WARN — force-reclaim residual %+.3f U exceeds +%.2f: the pod delivered insulin the records cannot explain (watch died mid-session?). Booked as an estimate; still looping. **",
+                residual, Self.unexplainedInsulinBand))
+            bookEstimate(units: residual, window: window, epoch: epoch,
+                         notice: String(format: "%.2f U booked as a bolus because the watch's records haven't arrived. Its records replace this when the watch is back.", residual))
         } else if residual < -Self.warnNegativeResidual {
             // Same asymmetry as the verdict above: phantom IOB under-doses and decays out, so opening
             // the loop would worsen the actual failure. Warn — but urgently, since a dead-watch
@@ -1010,102 +985,282 @@ final class PodLoanPhoneController {
                              String(format: "After the watch session ended abruptly, records account for %.2f U more than the pod delivered. Automatic dosing resumes; expect it to run cautious until this clears.", -residual))
         } else {
             handbackDiag(epoch, String(format:
-                "R37 audit CLEAN — residual %+.3f U within ±%.2f; automatic dosing resumes", residual, Self.openLoopPositiveResidual))
+                "R37 audit CLEAN — residual %+.3f U within ±%.2f; automatic dosing resumes", residual, Self.unexplainedInsulinBand))
         }
     }
 
-    /// The placeholder for insulin the odometer proved but no record explains. Timestamped
-    /// NOW (the reclaim) — zero decay, maximum IOB, the conservative direction — and manually
-    /// entered with a deterministic syncIdentifier so the watch's return can retire it.
-    private func bookGapDose(units: Double, epoch: Int) {
+    // MARK: - The insulin ledger (ported from next-dev, 2026-10-22)
+    //
+    // One reading of the pod's total opens each window. The device that held the pod explains the
+    // window with its records and the schedule: the watch's loan windows are judged by the audits
+    // above; every window this phone holds is judged at its next reading, against its own dose store,
+    // inside the pump's report, so the loop cycle that reading feeds already counts the verdict.
+    // Insulin the records cannot explain is booked once, as an estimate named by its window, and
+    // retired by records that later cover that window, whichever loan they come from. The loop is
+    // never turned off for it. This closes the offline-start reunion (control rows 17 and 18): a
+    // phone that was never told about a loan the watch started without it sees the pod's extra
+    // insulin at its first reading, books it, and asks the watch.
+
+    /// The pod's total at the reading that opened this phone's window. `owed` marks a loan window
+    /// whose verdict was not reached: it is judged at the next reading whatever the phone's set-up.
+    private struct OwnReading {
+        let units: Double
+        let at: Date
+        let owed: Bool
+    }
+
+    private var ownReading: OwnReading? {
+        get {
+            guard let d = UserDefaults.standard.dictionary(forKey: Keys.ownReading),
+                  let units = d["units"] as? Double, let at = d["at"] as? Date else { return nil }
+            return OwnReading(units: units, at: at, owed: d["owed"] as? Bool ?? false)
+        }
+        set {
+            if let r = newValue {
+                UserDefaults.standard.set(["units": r.units, "at": r.at, "owed": r.owed], forKey: Keys.ownReading)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Keys.ownReading)
+            }
+        }
+    }
+
+    /// Every estimate's sync identifier starts with this; no window's records include one, since an
+    /// estimate stands for insulin given before it was booked.
+    static let estimateSyncPrefix = "PODLOAN-ODOGAP"
+
+    static func isEstimate(_ dose: DoseEntry) -> Bool {
+        dose.syncIdentifier?.hasPrefix(estimateSyncPrefix) ?? false
+    }
+
+    static let estimatedTitle = "Insulin Estimated After Sport Mode"
+
+    private struct Estimate {
+        let sync: String
+        let units: Double
+        let bookedAt: Date
+        let window: DateInterval
+        var deleteFailed: Bool
+    }
+
+    private var estimates: [Estimate] {
+        get {
+            let saved = UserDefaults.standard.array(forKey: Keys.estimates) as? [[String: Any]] ?? []
+            return saved.compactMap { d in
+                guard let sync = d["sync"] as? String, let units = d["units"] as? Double,
+                      let bookedAt = d["bookedAt"] as? Date,
+                      let start = d["windowStart"] as? Date, let end = d["windowEnd"] as? Date else { return nil }
+                return Estimate(sync: sync, units: units, bookedAt: bookedAt,
+                                window: DateInterval(start: min(start, end), end: max(start, end)),
+                                deleteFailed: d["deleteFailed"] as? Bool ?? false)
+            }
+        }
+        set {
+            UserDefaults.standard.set(newValue.map { e -> [String: Any] in
+                ["sync": e.sync, "units": e.units, "bookedAt": e.bookedAt,
+                 "windowStart": e.window.start, "windowEnd": e.window.end, "deleteFailed": e.deleteFailed]
+            }, forKey: Keys.estimates)
+        }
+    }
+
+    /// Past insulin's action time an estimate no longer counts in insulin on board, so it leaves the
+    /// list; its dose stays in the books.
+    private func isAged(_ estimate: Estimate, now: Date) -> Bool {
+        now.timeIntervalSince(estimate.bookedAt) >= .hours(6)
+    }
+
+    /// Books an estimate as a manual bolus now: zero decay, the conservative direction, with an
+    /// identity the covering records retire. `completion` fires once the store has answered.
+    private func bookEstimate(units: Double, window: DateInterval, epoch: Int, notice: String,
+                              completion: @escaping () -> Void = {}) {
         let now = deps.now()
-        let sync = Self.gapSyncIdentifier(epoch: epoch)
+        let sync = "\(Self.estimateSyncPrefix)-e\(epoch)-\(Int(now.timeIntervalSince1970))"
         let entry = DoseEntry(type: .bolus, startDate: now, endDate: now,
                               value: units, unit: .units, deliveredUnits: units,
                               syncIdentifier: sync, manuallyEntered: true)
+        deps.issueUrgentNotice(Self.estimatedTitle, notice)
         deps.bookGapDose(entry) { [weak self] ok in
-            guard let self = self else { return }
+            guard let self = self else { return completion() }
             self.queue.async {
-                if ok {
-                    UserDefaults.standard.set(["epoch": epoch, "units": units,
-                                               "bookedAt": now.timeIntervalSince1970],
-                                              forKey: Keys.gapBooking)
-                    // The booking is now the standing condition, so this is where the standing
-                    // reminder belongs — not at the four "dosing is paused" sites the old one
-                    // used, none of which imply a placeholder exists.
-                    self.armPlaceholderReminders(units: units, bookedAt: now)
-                    self.handbackDiag(epoch, String(format: "R37 gap BOOKED — %.2f U bolus @ reclaim (sync %@); retired if the watch returns", units, sync))
-                } else {
-                    self.handbackDiag(epoch, String(format: "** R37 gap booking FAILED to save — %.2f U is NOT in the books. Loop is open; dose by hand with that in mind. **", units))
+                defer { completion() }
+                guard ok else {
+                    self.handbackDiag(epoch, String(format: "** estimate booking FAILED to save — %.2f U is NOT in the books **", units))
+                    return
+                }
+                self.estimates = self.estimates.filter { !self.isAged($0, now: now) }
+                    + [Estimate(sync: sync, units: units, bookedAt: now, window: window, deleteFailed: false)]
+                self.armPlaceholderReminders(units: units, bookedAt: now)
+                let iso = ISO8601DateFormatter()
+                self.handbackDiag(epoch, String(format: "estimate BOOKED — %.2f U bolus now (sync %@) for the window %@ to %@; retired by records covering it",
+                                                units, sync, iso.string(from: window.start), iso.string(from: window.end)))
+            }
+        }
+    }
+
+    /// Called from the pump's report of a reading, after its events are stored and before the report
+    /// completes, so the cycle the reading feeds sees anything booked here. While this phone holds
+    /// the pod, each reading closes the open window against the phone's own dose store. It acts on
+    /// a phone a watch could start without (an offline-start credential exists), or on a loan window
+    /// left owed; elsewhere it only logs. `completion` fires exactly once, at the latest after 10 s:
+    /// the pod session waits on it.
+    func checkOwnPumpTotal(completion: @escaping () -> Void) {
+        let lock = NSLock()
+        var finished = false
+        let finish: () -> Void = {
+            lock.lock()
+            let first = !finished
+            finished = true
+            lock.unlock()
+            if first { completion() }
+        }
+        queue.asyncAfter(deadline: .now() + 10) { finish() }
+        queue.async {
+            guard self.state == .owner, !self.yieldingToInferredLoan,
+                  let pump = self.deps.pumpManager(),
+                  let lendable = pump as? PumpConnectionLendable, !lendable.isConnectionReleased,
+                  let units = lendable.lentDeviceInsulinDelivered, let at = pump.lastSync else { return finish() }
+            // A forced take-back's check left owed: the pod answering is the moment to run it.
+            if let pending = self.pendingHandbackAudit {
+                if pending.flavor == .forceReclaim, self.reclaimStartedAt == nil {
+                    self.handbackDiag(pending.epoch, "R37 audit owed and the pod answered — reading it now")
+                    self.beginReclaimSettleWindow()
+                }
+                return finish()
+            }
+            guard let last = self.ownReading else {
+                self.ownReading = OwnReading(units: units, at: at, owed: false)
+                return finish()
+            }
+            guard at > last.at else { return finish() }
+            // A lower total is a different pod: start again from it.
+            guard units >= last.units else {
+                self.ownReading = OwnReading(units: units, at: at, owed: false)
+                return finish()
+            }
+            guard let schedule = self.deps.settings().basalRateSchedule else { return finish() }
+            let acts = last.owed || UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) != nil
+            self.deps.doseHistory(last.at.addingTimeInterval(-.hours(1))) { doses in
+                self.queue.async {
+                    let own = doses.filter { !Self.isEstimate($0) }
+                    // A bolus counts whole at its start, so a reading taken while one is still being
+                    // delivered would read short. Keep the window open until it has finished.
+                    if own.contains(where: { $0.type == .bolus && $0.startDate <= at && $0.endDate > at }) {
+                        PhoneLog.event("loan", "[odometer] (own) a bolus is still being delivered — window kept open")
+                        return finish()
+                    }
+                    let expected = LoanReconciler.expectedInsulin(doses: own, schedule: schedule,
+                                                                  from: last.at, to: at, includingBolusesAtEnd: false)
+                    let residual = (((units - last.units) - expected) * 1000).rounded() / 1000
+                    PhoneLog.event("loan", String(format: "[odometer] (own%@) %.1f min: pump total %.2f → %.2f, expected %.3f, residual %+.3f",
+                                                  last.owed ? ", owed loan window" : "", at.timeIntervalSince(last.at) / 60,
+                                                  last.units, units, expected, residual))
+                    self.ownReading = OwnReading(units: units, at: at, owed: false)
+                    guard acts else { return finish() }
+                    let window = DateInterval(start: last.at, end: at)
+                    if residual > Self.unexplainedInsulinBand {
+                        self.handbackDiag(self.epoch, String(format:
+                            "** WARN — over the last %.0f min: %+.3f U the phone's records cannot explain (Sport Mode started away from the phone?). Booked; still looping; asking the watch. **",
+                            window.duration / 60, residual))
+                        // A watch still looping answers that it holds the pod, and the phone stands
+                        // aside (control row 17); silence leaves the pod here with the estimate (row 18).
+                        self.sendMessage(.statusQuery(StatusQuery(epoch: self.epoch)))
+                        self.bookEstimate(units: residual, window: window, epoch: self.epoch,
+                                          notice: String(format: "%.2f U booked as a bolus: insulin the iPhone didn't record, probably from Sport Mode started on the watch. The watch's records replace it when it's back.", residual),
+                                          completion: finish)
+                    } else if residual < -Self.warnNegativeResidual {
+                        self.handbackDiag(self.epoch, String(format:
+                            "** WARN — over the last %.0f min: records claim %.3f U more than the pod delivered. Still looping. **",
+                            window.duration / 60, -residual))
+                        self.deps.issueUrgentNotice("Insulin On Board May Be Overstated",
+                                                    String(format: "Insulin on board may be %.2f U high until the watch's records arrive. Loop will dose cautiously meanwhile.", -residual))
+                        finish()
+                    } else {
+                        finish()
+                    }
                 }
             }
         }
     }
 
-    private static func gapSyncIdentifier(epoch: Int) -> String { "PODLOAN-ODOGAP-e\(epoch)" }
-
-    /// Retry a gap delete that failed on a previous launch. `retireGapBookingIfExplained`
+    /// Retry an estimate delete that failed on a previous launch. `retireEstimates`
     /// only runs from inside an offer's write completion, and the hand-back ack that stops the
     /// watch's 15 s resend loop goes out BEFORE that retire attempt — so a delete that fails on
     /// its one shot can outlive the offer that would have retried it, with no other trigger left
     /// to fire. This is that other trigger: called once from `init`, it retries against whatever
     /// is persisted, independent of any offer or epoch match, because by the time this runs the
     /// watch may never send another one.
-    private func retryPersistedGapDeleteIfAny() {
-        guard let gap = UserDefaults.standard.dictionary(forKey: Keys.gapBooking),
-              let gapEpoch = gap["epoch"] as? Int, let booked = gap["units"] as? Double else { return }
-        // RULED 2026-08-15: the placeholder STAYS unless the watch's real records actually
-        // arrived. Previously this guard asked only "is a booking persisted", which cannot tell
-        // "the delete failed after real records committed" (retry it — the point of this
-        // function) from "nothing ever explained this insulin" (the booking is still TRUE). The
-        // key is written at booking and cleared only on a successful delete, so the second case
-        // is the normal persisted state — and every launch was silently deleting a conservative
-        // IOB booking that nothing had replaced, while the user had been told it was there to
-        // keep IOB safe. Losing the watch for good is exactly when that margin matters most.
-        //
-        // The flag is set only in retireGapBookingIfExplained's failure branch, i.e. only after
-        // real records committed. An un-flagged booking now stands until either the watch comes
-        // back or the dose decays out of the DIA window on its own.
-        guard gap["deleteFailedAfterRecords"] as? Bool == true else {
-            handbackDiag(gapEpoch, String(format: "R37 gap placeholder STANDS — %.2f U still unexplained; the watch never returned, so the booking is left in place", booked))
-            return
+    ///
+    /// RULED 2026-08-15, kept: an estimate STANDS unless records actually arrived. Only one whose
+    /// delete failed after its covering records committed is retried; the rest stay until records
+    /// cover them or they age out of insulin's action time. A booking saved by the build before the
+    /// list (the single `gapBooking`) is carried into the list once, its window taken as the six
+    /// hours before it was booked, so any records from that loan still retire it.
+    private func settleEstimatesAtLaunch() {
+        let now = deps.now()
+        if let gap = UserDefaults.standard.dictionary(forKey: Keys.gapBooking),
+           let gapEpoch = gap["epoch"] as? Int, let booked = gap["units"] as? Double,
+           let bookedAt = (gap["bookedAt"] as? TimeInterval).map(Date.init(timeIntervalSince1970:)) {
+            estimates += [Estimate(sync: "\(Self.estimateSyncPrefix)-e\(gapEpoch)", units: booked, bookedAt: bookedAt,
+                                   window: DateInterval(start: bookedAt.addingTimeInterval(-.hours(6)), end: bookedAt),
+                                   deleteFailed: gap["deleteFailedAfterRecords"] as? Bool == true)]
+            UserDefaults.standard.removeObject(forKey: Keys.gapBooking)
         }
-        let sync = Self.gapSyncIdentifier(epoch: gapEpoch)
-        handbackDiag(gapEpoch, String(format: "R37 gap DELETE retrying at launch — %.2f U placeholder (sync %@) was unretired last session", booked, sync))
-        deps.deleteGapDose(sync) { [weak self] ok in
-            guard let self = self else { return }
-            self.queue.async {
-                if ok {
-                    UserDefaults.standard.removeObject(forKey: Keys.gapBooking)
-                    // A2: a delete is an insulin-history rewrite like any other — the placeholder
-                    // was booked AT the reclaim, which by the time this launch-retry runs is well
-                    // behind the frontier. Without the prune the counteraction memo keeps the
-                    // deleted units baked into its bins.
-                    if let bookedAt = (gap["bookedAt"] as? TimeInterval).map(Date.init(timeIntervalSince1970:)) {
-                        self.deps.insulinHistoryRewritten(bookedAt)
+        if estimates.contains(where: { isAged($0, now: now) }) {
+            estimates = estimates.filter { !isAged($0, now: now) }
+            rearmPlaceholderReminders()
+        }
+        for estimate in estimates {
+            guard estimate.deleteFailed else {
+                handbackDiag(epoch, String(format: "estimate STANDS — %.2f U (sync %@) still unexplained; the records that would retire it have not arrived", estimate.units, estimate.sync))
+                continue
+            }
+            handbackDiag(epoch, String(format: "estimate DELETE retrying at launch — %.2f U (sync %@) was unretired last session", estimate.units, estimate.sync))
+            deps.deleteGapDose(estimate.sync) { [weak self] ok in
+                guard let self = self else { return }
+                self.queue.async {
+                    if ok {
+                        self.estimates = self.estimates.filter { $0.sync != estimate.sync }
+                        // A2: a delete is an insulin-history rewrite like any other; without the
+                        // prune the counteraction memo keeps the deleted units baked into its bins.
+                        self.deps.insulinHistoryRewritten(estimate.bookedAt)
+                        self.rearmPlaceholderReminders()
+                        self.handbackDiag(self.epoch, String(format: "estimate RETIRED on launch retry — %.2f U cleared", estimate.units))
+                    } else {
+                        self.handbackDiag(self.epoch, String(format: "** estimate DELETE FAILED AGAIN at launch — %.2f U still stands; will retry next launch or at the next covering records **", estimate.units))
                     }
-                    self.cancelPlaceholderReminders()
-                    self.handbackDiag(gapEpoch, String(format: "R37 gap RETIRED on launch retry — %.2f U placeholder cleared", booked))
-                } else {
-                    self.handbackDiag(gapEpoch, String(format: "** R37 gap DELETE FAILED AGAIN at launch — %.2f U placeholder still stands; will retry next launch or the next matching offer **", booked))
                 }
             }
         }
     }
 
-    /// The watch came back. Its offer just committed the REAL records behind the gap, so
-    /// the placeholder retires — full replacement, not a partial offset: the store now carries
-    /// the truth-bearing account (validated in aggregate by the odometer at reclaim), and any
-    /// residue left is ordinary reconcile noise. Runs AFTER the real doses are written, so the
-    /// transition never passes through a state with neither (a brief both is the safe
-    /// direction; a gap of neither is not). Keyed on persisted state: duplicate redeliveries
-    /// find nothing and no-op. A failed delete keeps the state (retried on the next offer and
-    /// at launch) and says so, because a silent failure here is a double-counted IOB.
-    private func retireGapBookingIfExplained(offerEpoch: Int, dosesJustCommitted: [DoseEntry], carbsJustCommitted: Int) {
-        guard let gap = UserDefaults.standard.dictionary(forKey: Keys.gapBooking),
-              let gapEpoch = gap["epoch"] as? Int, gapEpoch == offerEpoch,
-              let booked = gap["units"] as? Double else { return }
+    /// The reminders name the newest estimate standing; none when none stands.
+    private func rearmPlaceholderReminders() {
+        if let newest = estimates.max(by: { $0.bookedAt < $1.bookedAt }) {
+            armPlaceholderReminders(units: newest.units, bookedAt: newest.bookedAt)
+        } else {
+            cancelPlaceholderReminders()
+        }
+    }
+
+    /// The watch came back. Its offer just committed REAL records, so every estimate whose window
+    /// they cover retires — full replacement, not a partial offset: the store now carries the
+    /// truth-bearing account, and any residue left is ordinary reconcile noise. Matched by the
+    /// window, not the loan number: an estimate booked by this phone's own reading, or by a forced
+    /// take-back under the phone's number, is still retired by the adopted loan that explains it
+    /// (next-dev 5521e758). Runs AFTER the real doses are written, so the transition never passes
+    /// through a state with neither (a brief both is the safe direction; a gap of neither is not).
+    /// A failed delete is marked (retried at launch and at the next covering records) and said,
+    /// because a silent failure here is a double-counted IOB.
+    private func retireEstimates(coveredBy dosesJustCommitted: [DoseEntry], carbsJustCommitted: Int, offerEpoch: Int) {
         guard !dosesJustCommitted.isEmpty else { return }   // an empty offer explains nothing
+        let covered = estimates.filter { estimate in
+            dosesJustCommitted.contains { $0.endDate > estimate.window.start && $0.startDate < estimate.window.end }
+        }
+        guard !covered.isEmpty else {
+            if !estimates.isEmpty {
+                handbackDiag(offerEpoch, "estimate STANDS — these records do not cover the window it was booked for")
+            }
+            return
+        }
         // The array, not a pre-summed total: `booked` is a bolus-shaped, odometer-derived number,
         // so only bolus units are comparable to it. LoanReconciler mints every dose without
         // deliveredUnits (:193-198, :205-210), which made the old single total ALWAYS gross
@@ -1118,45 +1273,38 @@ final class PodLoanPhoneController {
         let bolusUnits = boluses.reduce(0.0) { $0 + ($1.deliveredUnits ?? $1.programmedUnits) }
         let rateCount = dosesJustCommitted.count - boluses.count
         let rateGross = dosesJustCommitted.filter { $0.type != .bolus }.reduce(0.0) { $0 + $1.programmedUnits }
-        let sync = Self.gapSyncIdentifier(epoch: gapEpoch)
-        deps.deleteGapDose(sync) { [weak self] ok in
-            guard let self = self else { return }
-            self.queue.async {
-                if ok {
-                    UserDefaults.standard.removeObject(forKey: Keys.gapBooking)
-                    // A2: the placeholder is gone from the books, so the counteraction bins that
-                    // were computed with it in the insulin curve are wrong from `bookedAt` on.
-                    // Same prune as the doses that just replaced it — the pair is one rewrite.
-                    if let bookedAt = (gap["bookedAt"] as? TimeInterval).map(Date.init(timeIntervalSince1970:)) {
-                        self.deps.insulinHistoryRewritten(bookedAt)
+        for estimate in covered {
+            let booked = estimate.units
+            deps.deleteGapDose(estimate.sync) { [weak self] ok in
+                guard let self = self else { return }
+                self.queue.async {
+                    if ok {
+                        self.estimates = self.estimates.filter { $0.sync != estimate.sync }
+                        // A2: the placeholder is gone from the books, so the counteraction bins that
+                        // were computed with it in the insulin curve are wrong from `bookedAt` on.
+                        // Same prune as the doses that just replaced it — the pair is one rewrite.
+                        self.deps.insulinHistoryRewritten(estimate.bookedAt)
+                        self.handbackDiag(offerEpoch, String(format:
+                            "estimate RETIRED — %d real dose(s) cover its window: %.2f U bolus + %d rate record(s) (%.2f U gross programmed, pre-truncation) and %d carb(s); the %.2f U estimate is replaced by actual timing",
+                            dosesJustCommitted.count, bolusUnits, rateCount, rateGross, carbsJustCommitted, booked))
+                        // STAYS (ruled 2026-08-15, restoring the 2026-08-14 field request): IOB and
+                        // COB CHANGE UNDER THE USER'S FEET at this instant, so a numbers-changed
+                        // notice belongs on the urgent channel.
+                        self.rearmPlaceholderReminders()   // this condition is gone; another may stand
+                        self.deps.issueUrgentNotice("Watch Records Recovered",
+                                              String(format: "The watch is back. Its records (%d doses, %d carbs) replaced the estimated %.2f U bolus — your IOB and COB now reflect actual timing.",
+                                                     dosesJustCommitted.count, carbsJustCommitted, booked))
+                    } else {
+                        // Mark the estimate as "real records DID arrive, the delete is what failed".
+                        // Only that state earns a launch retry — see settleEstimatesAtLaunch.
+                        self.estimates = self.estimates.map { e in
+                            var e = e
+                            if e.sync == estimate.sync { e.deleteFailed = true }
+                            return e
+                        }
+                        self.handbackDiag(offerEpoch, String(format:
+                            "** estimate DELETE FAILED — the %.2f U placeholder AND the real records are both booked; IOB is over-counted until this retries **", booked))
                     }
-                    self.handbackDiag(gapEpoch, String(format:
-                        "R37 gap RETIRED — the watch returned with %d real dose(s): %.2f U bolus + %d rate record(s) (%.2f U gross programmed, pre-truncation) and %d carb(s); the %.2f U estimate is replaced by actual timing",
-                        dosesJustCommitted.count, bolusUnits, rateCount, rateGross, carbsJustCommitted, booked))
-                    // STAYS (ruled 2026-08-15, restoring the 2026-08-14 field request). The
-                    // keeps re-review called this a congratulation banner announcing that a
-                    // self-healing correction healed, and recommended killing it. That misses
-                    // what it is actually for: IOB and COB CHANGE UNDER THE USER'S FEET at this
-                    // instant. A numbers-changed notice is not reassurance, and the urgent
-                    // channel is right for it.
-                    //
-                    // The review's real finding stands though — it omits the half the user can
-                    // act on, because the loop the audit opened is STILL OPEN and nothing in
-                    // this codebase closes it. That sentence is going into the standing
-                    // placeholder/open-loop reminder rather than here, so this can stay a short
-                    // statement of what just changed.
-                    self.cancelPlaceholderReminders()   // the condition is gone
-                    self.deps.issueUrgentNotice("Watch Records Recovered",
-                                          String(format: "The watch is back. Its records (%d doses, %d carbs) replaced the estimated %.2f U bolus — your IOB and COB now reflect actual timing.",
-                                                 dosesJustCommitted.count, carbsJustCommitted, booked))
-                } else {
-                    // Mark the booking as "real records DID arrive, the delete is what failed".
-                    // Only that state earns a launch retry — see retryPersistedGapDeleteIfAny.
-                    var marked = gap
-                    marked["deleteFailedAfterRecords"] = true
-                    UserDefaults.standard.set(marked, forKey: Keys.gapBooking)
-                    self.handbackDiag(gapEpoch, String(format:
-                        "** R37 gap DELETE FAILED — the %.2f U placeholder AND the real records are both booked; IOB is over-counted until this retries **", booked))
                 }
             }
         }
@@ -1186,7 +1334,7 @@ final class PodLoanPhoneController {
             "residual bank: n=%d mean=%+.3f worst=|%.3f| min=%+.3f max=%+.3f · window-worst this loan |%.3f| (series n=%d max |%.3f|) — diagnostics only, R32 closed 2026-08-27 (window verdict ±%.2f U)",
             history.count, mean, worst, history.min() ?? 0, history.max() ?? 0,
             worstWindow, windows.count, windows.map(abs).max() ?? 0,
-            Self.openLoopPositiveResidual))
+            Self.unexplainedInsulinBand))
     }
 
     /// True whenever this phone does NOT own the pod's connection (any non-owner
@@ -1339,17 +1487,21 @@ final class PodLoanPhoneController {
         /// inside every window band still shows here.
         var takeoverUnits: Double? = nil
         var wholeLoanExpected: Double? = nil
+        /// When the window's start reading was taken: the estimate a verdict books is named by
+        /// [windowStart, verdict reading], and a check left owed resumes from it.
+        var windowStart: Date? = nil
     }
     private var pendingHandbackAudit: PendingHandbackAudit? {
         didSet {
             // Only the force flavor persists. A restart between the force-reclaim and the
             // verified round-trip must re-arm the audit rather than quietly resume dosing —
-            // whether the loop closes again should depend on the pod's answer, not on whether
+            // whether dosing resumes should depend on the pod's answer, not on whether
             // the app happened to relaunch first.
             if let p = pendingHandbackAudit, p.flavor == .forceReclaim {
-                UserDefaults.standard.set(["epoch": p.epoch, "atStart": p.deliveredAtStart,
-                                           "expected": p.expected, "loanMinutes": p.loanMinutes],
-                                          forKey: Keys.pendingForceAudit)
+                var saved: [String: Any] = ["epoch": p.epoch, "atStart": p.deliveredAtStart,
+                                            "expected": p.expected, "loanMinutes": p.loanMinutes]
+                if let start = p.windowStart { saved["windowStart"] = start }
+                UserDefaults.standard.set(saved, forKey: Keys.pendingForceAudit)
             } else if oldValue?.flavor == .forceReclaim {
                 UserDefaults.standard.removeObject(forKey: Keys.pendingForceAudit)
             }
@@ -1480,6 +1632,14 @@ final class PodLoanPhoneController {
         /// The booked odometer-gap placeholder {epoch, units, bookedAt} awaiting the
         /// watch's real records.
         static let gapBooking = "PodLoanPhoneController.gapBooking"
+        /// The insulin ledger (ported from next-dev, 2026-10-22): the pod's total at the phone's last
+        /// reading {units, at, owed}, which opens the window the phone's next reading judges.
+        static let ownReading = "PodLoanPhoneController.ownReading"
+        /// Every estimate standing in the dose store: [{sync, units, bookedAt, windowStart, windowEnd, deleteFailed}].
+        static let estimates = "PodLoanPhoneController.estimates"
+        /// A loan adopted after this phone had already read the pod past the loan's start: its
+        /// window was judged by those readings, so the offer's audit is skipped.
+        static let adoptedJudgedEpoch = "PodLoanPhoneController.adoptedJudgedEpoch"
         /// A force-reclaim audit armed but not yet resolved (restart survival).
         static let pendingForceAudit = "PodLoanPhoneController.pendingForceAudit"
         /// Item 1: the last loan's delivered total measured against a PHONE-read end odometer.
@@ -1527,7 +1687,6 @@ final class PodLoanPhoneController {
     private enum ReminderLadder {
         /// t=0 is already covered by the force-reclaim notice that announced the booking.
         static let placeholderRungs: [TimeInterval] = [.hours(2), .hours(4)]
-        static let openLoopDelay: TimeInterval = .hours(1)
     }
 
     /// Derived — what v1 kept as the volatile `podLoanedToWatch` flag (:480/:697).
@@ -1603,7 +1762,8 @@ final class PodLoanPhoneController {
             pendingHandbackAudit = PendingHandbackAudit(
                 epoch: e, deliveredAtStart: atStart, expected: expected,
                 loanMinutes: loanMinutes, cycles: 0,
-                watchLatest: nil, watchFreshened: false, flavor: .forceReclaim)
+                watchLatest: nil, watchFreshened: false, flavor: .forceReclaim,
+                windowStart: saved["windowStart"] as? Date)
             queue.async { [weak self] in
                 guard let self = self else { return }
                 self.handbackDiag(e, "R37 audit RE-ARMED after relaunch — verdict still owed")
@@ -1611,18 +1771,18 @@ final class PodLoanPhoneController {
             }
         }
 
-        // A gap placeholder whose delete failed has no other trigger once the watch's
-        // resend loop has been acked off — see retryPersistedGapDeleteIfAny for why. Independent
-        // of the audit re-arm above: this fires on every launch that finds ANY persisted
-        // booking, whether or not a force-reclaim is currently in flight.
+        // An estimate whose delete failed has no other trigger once the watch's resend loop has
+        // been acked off — see settleEstimatesAtLaunch for why. Independent of the audit re-arm
+        // above: this fires on every launch that finds ANY persisted estimate, whether or not a
+        // force-reclaim is currently in flight.
         // Store work waits for first unlock — see Dependencies.whenProtectedDataAvailable.
         deps.whenProtectedDataAvailable { [weak self] in
             guard let self = self else { return }
             self.queue.async {
-                self.retryPersistedGapDeleteIfAny()
-                // Best-effort tidy-up: if the user closed the loop while the app was dead, retire
-                // the pending reminder rather than let it fire about a decision already made.
-                self.cancelOpenLoopReminderIfLoopClosed()
+                self.settleEstimatesAtLaunch()
+                // No audit turns the loop off any more (ruled 2026-10-22); retire a "Closed Loop
+                // Is Off" reminder that an earlier build may have left scheduled.
+                self.cancelNotification(id: NotificationID.openLoop)
             }
         }
 
@@ -1788,10 +1948,15 @@ final class PodLoanPhoneController {
         }
         // Never lend the pod while the last session's insulin is still being checked: the next
         // loan's audit would replace it unread. Normally seconds (the reclaim's own pod reading
-        // concludes it); up to the settle ceiling when the pod is out of reach, where it ends as
-        // unverified.
+        // concludes it); while the pod is out of reach it stays owed until the pod next answers.
+        // A hand-back's window left for the phone's next reading counts too.
         if let pending = pendingHandbackAudit {
             handbackDiag(pending.epoch, "grant REFUSED — this session's insulin check is still pending (the pod hasn't answered since it came back)")
+            deny("The iPhone is still checking the last session's insulin. Tap Start again in a minute.")
+            return
+        }
+        if ownReading?.owed == true {
+            handbackDiag(epoch, "grant REFUSED — the last session's insulin is checked at the phone's next pod reading, which hasn't come yet")
             deny("The iPhone is still checking the last session's insulin. Tap Start again in a minute.")
             return
         }
@@ -1935,6 +2100,8 @@ final class PodLoanPhoneController {
         UserDefaults.standard.removeObject(forKey: Keys.deliveredAtTakeover)
         UserDefaults.standard.set(false, forKey: Keys.watchAuditRan)
         UserDefaults.standard.removeObject(forKey: Keys.expectedUnits)
+        // The phone's window closes at the grant; the loan's window is the audits' from here.
+        ownReading = nil
 
         // Pause dosing, then stop bidding for the pod (C5 truncation happens inside).
         deps.setAutomaticDosingPaused(true)
@@ -2250,6 +2417,9 @@ final class PodLoanPhoneController {
             loanStartedAt = asOf
             UserDefaults.standard.set(asOf, forKey: Keys.loanStartedAt)
         }
+        // The phone's own window closes here (its last reading was judged at that reading); the
+        // watch's loan window runs from the anchor above.
+        ownReading = nil
         deps.setAutomaticDosingPaused(true)
         // Yield the RADIO too, exactly as a grant does: a yielded phone that keeps its
         // standing connect starves an alive watch's per-cycle reclaims (single-central
@@ -2623,6 +2793,7 @@ final class PodLoanPhoneController {
                 handbackDiag(offer.epoch, "[seize] retro-ack arrived MID-RECLAIM — ladder stood down; the aimed revoke got its drain")
             }
             handbackDiag(offer.epoch, "[seize] RETRO-ACK — offer for a SEIZED loan (token …\(String(token.uuidString.suffix(8)))); adopting epoch \(epoch)→\(offer.epoch) as .loaned, reconciling on the normal path")
+            let wasYielding = yieldingToInferredLoan
             // PHONE MIRROR exit: the inferred loan just became a KNOWN loan — the flag's
             // job is done (dosing stays paused; the drain-close unpauses as always).
             clearInferredLoanYield(reason: "retro-ack — the inferred loan is now the adopted loan e\(offer.epoch)")
@@ -2630,10 +2801,17 @@ final class PodLoanPhoneController {
             state = .loaned
             holdRenewedAt = offer.handedBackAt
             holdLapseNoticedAt = nil
-            // The seized loan's audit anchors at ITS OWN seize-time odometer read
-            // (offer.odometer.deliveredAtStart); anchors from before the blackout must not
-            // widen the window or misattribute the phone's own pre-blackout delivery.
-            auditBase = nil
+            // Where the adopted loan's window starts (next-dev 24419772, 738323ea): the LATEST
+            // reading of the pod, so the phone's own doses before it stay the phone's. A phone that
+            // stood aside keeps the reading it stood aside at (re-saved under the adopted number);
+            // otherwise the loan's own seize-time read (offer.odometer.deliveredAtStart) anchors it,
+            // unless this phone read the pod after the loan began — see below.
+            if wasYielding, let base = auditBase {
+                auditBase = base
+                handbackDiag(offer.epoch, String(format: "[seize] adopted loan's window starts at the reading this phone stood aside at: %.3f U", base.units))
+            } else {
+                auditBase = nil
+            }
             checkpointsThisLoan = 0
             worstWindowThisLoan = 0
             UserDefaults.standard.removeObject(forKey: Keys.deliveredAtTakeover)
@@ -2646,6 +2824,16 @@ final class PodLoanPhoneController {
                              deps.now().addingTimeInterval(-.hours(6)))
             loanStartedAt = anchor
             UserDefaults.standard.set(anchor, forKey: Keys.loanStartedAt)
+            // This phone read the pod after the loan began (it came back while the watch was dead,
+            // or before the watch's word arrived): that reading already judged the loan's window
+            // against the phone's records and booked what they could not explain, and the phone's
+            // next reading judges the rest against its dose store, which now holds these records.
+            // Auditing the offer from the seize-time read would count the phone's own doses since
+            // as unexplained (the false "Unexplained Insulin" of the dead-watch reunion).
+            if !wasYielding, let own = ownReading, own.at > anchor {
+                UserDefaults.standard.set(offer.epoch, forKey: Keys.adoptedJudgedEpoch)
+                handbackDiag(offer.epoch, String(format: "[seize] this phone read the pod after the loan began (%.3f U); that reading judged its window, so the offer is not audited", own.units))
+            }
             // The phone never paused for this loan, so the reclaim's restore would find no
             // capture and fail-safe to OPEN loop — wrong here: the user's setting was
             // untouched all along. Seed the capture with the CURRENT value so the restore
@@ -2869,7 +3057,11 @@ final class PodLoanPhoneController {
                     String(format: "final offer carries no pod totals — auditing from this phone's own start reading %.3f U", $0)
                 } ?? "** final offer carries no pod totals and this phone has no start reading — NO AUDIT for this loan **")
             }
-            if isFinal, let start = offer.odometer?.deliveredAtStart ?? phoneStart {
+            let judgedByPhone = (UserDefaults.standard.object(forKey: Keys.adoptedJudgedEpoch) as? Int) == offer.epoch
+            if isFinal, judgedByPhone {
+                handbackDiag(offer.epoch, "no audit for this adopted loan — this phone's own readings judge its window (see the retro-ack)")
+            }
+            if isFinal, !judgedByPhone, let start = offer.odometer?.deliveredAtStart ?? phoneStart {
                 // Since-last-sync: the verdict window runs from the audit base — the last
                 // checkpoint when mid-loan syncs reconciled, the takeover reading when none
                 // did (in which case base.units == start and this is the whole loan, the old
@@ -2890,7 +3082,8 @@ final class PodLoanPhoneController {
                     loanMinutes: loanMin, cycles: allStagedEvents.count,
                     watchLatest: offer.odometer?.deliveredLatest,
                     watchFreshened: offer.odometer?.freshenSucceeded == true,
-                    takeoverUnits: start, wholeLoanExpected: expected)
+                    takeoverUnits: start, wholeLoanExpected: expected,
+                    windowStart: auditBase?.asOf ?? loanStartedAt)
             }
         }
 
@@ -3059,10 +3252,9 @@ final class PodLoanPhoneController {
                         // NEW loan has started re-offers its old epoch as stale, and stale offers still
                         // write their doses ("historical truth" above). If those doses explain a gap
                         // booking, the placeholder retires regardless of loan-state bookkeeping.
-                        self.retireGapBookingIfExplained(
-                            offerEpoch: offer.epoch,
-                            dosesJustCommitted: sane,
-                            carbsJustCommitted: isStale ? 0 : outcome.carbs.count)
+                        self.retireEstimates(coveredBy: sane,
+                                             carbsJustCommitted: isStale ? 0 : outcome.carbs.count,
+                                             offerEpoch: offer.epoch)
                         self.drainAfterCommit()   // replay one coalesced offer, or run a deferred force-reclaim
                     }
                 }
@@ -3674,10 +3866,10 @@ final class PodLoanPhoneController {
             anchor = nil
         }
         guard let anchor = anchor, let schedule = deps.settings().basalRateSchedule else {
-            handbackDiag(epoch, "** R37 force-reclaim audit IMPOSSIBLE — no start odometer/schedule; loop OPENS on principle (cannot verify => do not resume) **")
-            deps.openLoopForUncertainReconciliation()
-            armOpenLoopReminder()
-            deps.issueUrgentNotice("Watch Session Unverified", Self.sessionUnverifiedBody)
+            // Nothing to check against. The loop keeps running (ruled 2026-10-22); the user is told
+            // the watch's insulin may be missing from insulin on board.
+            handbackDiag(epoch, "** R37 force-reclaim audit IMPOSSIBLE — no start odometer/schedule; session UNVERIFIED; still looping **")
+            deps.issueUrgentNotice(Self.sessionUnverifiedTitle, Self.sessionUnverifiedBody)
             return false
         }
         let allEvents = staged.values.sorted { $0.seq < $1.seq }
@@ -3693,7 +3885,8 @@ final class PodLoanPhoneController {
             epoch: epoch, deliveredAtStart: anchor.units, expected: expected,
             loanMinutes: deps.now().timeIntervalSince(start) / 60, cycles: 0,
             watchLatest: nil, watchFreshened: false, flavor: .forceReclaim,
-            takeoverUnits: takeoverUnits, wholeLoanExpected: wholeLoanExpected)
+            takeoverUnits: takeoverUnits, wholeLoanExpected: wholeLoanExpected,
+            windowStart: anchor.asOf)
         // checkpointsThisLoan survives relaunch (persisted with the base), so this label
         // stays true even when the audit re-arms after a mid-loan restart.
         handbackDiag(epoch, String(format:
@@ -3816,14 +4009,13 @@ final class PodLoanPhoneController {
             NSLocalizedString("Loop can't read a message from the watch. The apps may be on different builds — check both are current.", comment: "Phone notice body when a loan message cannot be decoded"))
     }
 
-    /// Shared by the three paths that end an unverifiable session: the pod never answered, it
+    /// Shared by the two paths where a session's insulin cannot be checked at all: the pod
     /// answered without an insulin total, or there was no start-of-loan baseline to compare
-    /// against. Those are three internal reasons for one user-facing fact, and previously each
-    /// shipped its own wording — so the same situation read as three different problems. The
-    /// second sentence is the house phrasing already used elsewhere in this file for a latched
-    /// loop, which is what makes it accurate here: nothing reopens it automatically.
+    /// against. The loop keeps running (ruled 2026-10-22); a pod that has not answered yet is not
+    /// one of them, since its check stays owed. Wording from next-dev's reviewed set.
+    static let sessionUnverifiedTitle = "Insulin Not Checked After Sport Mode"
     static let sessionUnverifiedBody = NSLocalizedString(
-        "Loop couldn't verify the watch's insulin delivery. Automatic dosing is off until you turn it back on.",
+        "Unexpected: the iPhone couldn't check the watch's insulin against the pod. Insulin the watch gave may be missing from insulin on board. Consider reporting it with a Loop Report.",
         comment: "Phone notice when a watch session's insulin could not be verified after reclaim")
 
     /// RETIRED (ruled 2026-08-15). It repeated hourly, forever, to say that automatic dosing was
@@ -3834,16 +4026,11 @@ final class PodLoanPhoneController {
 
     // MARK: - Standing reminders (ruled 2026-08-15)
     //
-    // Two conditions can outlive the notice that announced them, and both stop mattering after
-    // the insulin action duration:
-    //
-    //   1. A PLACEHOLDER bolus stands in your IOB for insulin the pod proved it delivered and
-    //      no record explains. You may be able to correct it from memory — but only while the
-    //      dose is still within the manual-entry date picker's ±6 h reach, which is the same 6 h
-    //      after which it has decayed out anyway. Two rungs, then silence.
-    //   2. An AUDIT OPENED THE LOOP and nothing in this codebase closes it. One reminder only:
-    //      the first tells someone who missed the original notice; a second would be nagging
-    //      about a decision they have now made.
+    // A PLACEHOLDER bolus stands in your IOB for insulin the pod proved it delivered and no
+    // record explains. You may be able to correct it from memory — but only while the dose is
+    // still within the manual-entry date picker's ±6 h reach, which is the same 6 h after which
+    // it has decayed out anyway. Two rungs, then silence. (The second condition, an audit that
+    // opened the loop, is gone with the ruling of 2026-10-22: no audit turns the loop off.)
 
     /// Arm the placeholder ladder. Cancelled wherever the booking retires.
     private func armPlaceholderReminders(units: Double, bookedAt: Date) {
@@ -3862,24 +4049,6 @@ final class PodLoanPhoneController {
         for index in ReminderLadder.placeholderRungs.indices {
             cancelNotification(id: NotificationID.placeholder(index))
         }
-    }
-
-    /// Arm the single open-loop reminder. Best-effort cancelled: the phone cannot observe the
-    /// user flipping Closed Loop back on from outside its own work, so this is also cleared at
-    /// launch and at the next grant if dosing is already enabled by then. Worst case is one
-    /// stale reminder, which is why this is a single rung and not a ladder.
-    private func armOpenLoopReminder() {
-        scheduleNotification(
-            id: NotificationID.openLoop,
-            title: NSLocalizedString("Closed Loop Is Off", comment: "Phone reminder title after an audit opened the loop"),
-            body: NSLocalizedString("Loop couldn't verify the watch session's insulin, so it stopped dosing. Turn Closed Loop back on when you're ready.", comment: "Phone reminder body after an audit opened the loop"),
-            delay: ReminderLadder.openLoopDelay, repeats: false)
-    }
-
-    /// Clear the open-loop reminder if the user has already closed the loop themselves.
-    private func cancelOpenLoopReminderIfLoopClosed() {
-        guard deps.settings().dosingEnabled else { return }
-        cancelNotification(id: NotificationID.openLoop)
     }
 
     private static let reminderTimeFormatter: DateFormatter = {

@@ -1312,11 +1312,20 @@ extension DeviceDataManager: PumpManagerDelegate {
         doseStore.addPumpEvents(events, lastReconciliation: lastReconciliation, replacePendingEvents: replacePendingEvents) { (error) in
             if let error = error {
                 self.log.error("Failed to addPumpEvents to DoseStore: %{public}@", String(describing: error))
+                completion(error)
+                return
             }
 
-            completion(error)
-
-            if error == nil {
+            // PODLOAN: every pump report closes the insulin ledger's open window before the report
+            // completes, so the loop cycle this reading feeds counts anything it books (next-dev
+            // fc4a5190). Bounded: the controller completes within 10 s whatever happens.
+            guard let controller = self.watchManager?.podLoanController else {
+                completion(nil)
+                NotificationCenter.default.post(name: .PumpEventsAdded, object: self, userInfo: nil)
+                return
+            }
+            controller.checkOwnPumpTotal {
+                completion(nil)
                 NotificationCenter.default.post(name: .PumpEventsAdded, object: self, userInfo: nil)
             }
         }

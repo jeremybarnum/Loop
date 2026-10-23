@@ -382,24 +382,6 @@ final class WatchDataManager: NSObject {
                 guard let self = self else { return completion(nil) }
                 self.deviceManager.loopManager.cancelTempBasalAfterPodReturn(completion: completion)
             },
-            openLoopForUncertainReconciliation: { [weak self] in
-                guard let self = self else { return }
-                // ORDER MATTERS: clear the pre-loan capture before opening the loop. The end of the next
-                // loan restores dosingEnabled from that key, so leaving it set would silently re-close the
-                // loop this just opened — one loud warning followed by the machine quietly resuming, which
-                // is worse than not warning at all. Cleared, the next loan captures false and restores
-                // false, and only the user's own settings change can re-close it.
-                UserDefaults.standard.removeObject(forKey: dosingKey)
-                // MAIN-hopped (ported from next-dev, field 2026-08-26): third instance of the
-                // off-main therapy-write desync — the port's 9-hour overnight loan ended with
-                // an R32 open applied from the controller queue, automation genuinely off while
-                // the settings screen kept showing CLOSED. Same treatment as the pause/restore
-                // writes. (The capture clear above stays synchronous and first — ORDER MATTERS,
-                // see the comment.)
-                DispatchQueue.main.async {
-                    self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
-                }
-            },
             latestGlucoseDate: { [weak self] in self?.deviceManager.glucoseStore.latestGlucose?.startDate },
             issueUrgentNotice: { [weak self] title, body in
                 // The urgent channel's distinction is TIME-SENSITIVE interruption: it breaks
