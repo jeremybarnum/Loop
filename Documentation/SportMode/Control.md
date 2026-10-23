@@ -33,18 +33,24 @@ describes next-dev's code, not this build's.
 | 7, 9 | No insulin check turns the loop off. Unexplained insulin after a hand-back is reported; after a forced take-back it is booked. A check that cannot run yet stays owed until the pod answers. |
 | 7 | End is refused while a watch bolus is on its way to the pod, and a watch bolus is refused while End is waiting. |
 | 7, 9 | A check whose reading falls inside a watch bolus's delivery waits for the next reading after it. |
+| 9 | A take-back marks a bolus the pod is still giving as the watch's, so the phone's pod driver does not book it a second time. |
 
-**Differences still open (not ruled):**
+**Ruled 2026-10-23 to conform to this document (built on `prod-126-ledger`):**
 
-- Row 2: an offline Start does not check the pod's total against the copy it starts from.
-- Row 3: no "Not Hearing From iPhone" warning on the watch outside a loan.
-- Row 8: End with the phone away is refused on the reachability flag at once, without a query.
-- Row 9: Take Back is not refused while the watch's bolus is being given; the insulin check waits for it instead
-  (see above). The production phone cannot read the pod while the watch holds it.
-- Section 4: the watch's own stall warnings ask for critical delivery at 1 h and 2 h; this document says nothing is
-  critical.
-- Several control changes happen on a timer rather than on evidence: the Take Back force (ruled), a phone relaunched
-  mid-take-back returning itself to owner after 120 s, and the 5-minute grant lease.
+| Row | Change |
+|---|---|
+| 2 | An offline Start checks the pod's total against the copy it starts from. |
+| 3 | The watch warns "Not Hearing From iPhone" when no loan runs and the phone has gone quiet. |
+| 8 | End with the phone away asks the phone before refusing; one unreachable reading does not end it. |
+| Section 4 | The watch's own stall warnings are time-sensitive, not critical. The build has no critical-alerts entitlement, so a critical request was already delivered as time-sensitive. |
+| Transfers | The grant's lease is 60 s, not 5 minutes, with the query before the take-back. A phone relaunched during a take-back asks the watch or reads the pod before it takes the pod back; it no longer returns itself to owner after 120 s. |
+
+**Ruled 2026-10-23 to differ:**
+
+- Row 9: Take Back is not refused while the watch's bolus is being given. The pod finishes the bolus; the phone books
+  it only from the watch's record and checks the insulin after it. The production phone cannot read the pod while
+  the watch holds it, so refusing would need a new reply in the phone-watch protocol, and could not apply to a dead
+  watch. A phone bolus tapped before the pod has finished is refused by the pod, as it would be on any pod.
 
 ---
 
