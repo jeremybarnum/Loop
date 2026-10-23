@@ -321,6 +321,15 @@ extension LoopDataManager {
         return presets
     }
 
+    var listedPresets: [SelectablePreset] {
+        selectablePresets.filter { preset in
+            if case .activity = preset {
+                return watchInfo.showsActivityPresets
+            }
+            return true
+        }
+    }
+
     var glucoseValue: String {
         guard let activeContext = activeContext,
               let glucose = activeContext.glucose,

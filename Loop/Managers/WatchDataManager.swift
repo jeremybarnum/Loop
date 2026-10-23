@@ -165,7 +165,8 @@ final class WatchDataManager: NSObject {
     private func sendSettingsIfNeeded() {
         let userInfo = LoopSettingsUserInfo(
             loopSettings: settingsManager.loopSettings,
-            scheduleOverride: temporaryPresetsManager.scheduleOverride)
+            scheduleOverride: temporaryPresetsManager.scheduleOverride,
+            showsActivityPresets: temporaryPresetsManager.showsActivityPresets)
 
         guard let session = watchSession, session.isPaired, session.isWatchAppInstalled else {
             return
@@ -474,7 +475,8 @@ final class WatchDataManager: NSObject {
         case SettingsRequestUserInfo.name?:
             let userInfo = LoopSettingsUserInfo(
                 loopSettings: settingsManager.loopSettings,
-                scheduleOverride: temporaryPresetsManager.scheduleOverride)
+                scheduleOverride: temporaryPresetsManager.scheduleOverride,
+                showsActivityPresets: temporaryPresetsManager.showsActivityPresets)
             return userInfo.rawValue
         case GetBolusRecommendationUserInfo.name?:
             if let request = GetBolusRecommendationUserInfo(rawValue: message) {
