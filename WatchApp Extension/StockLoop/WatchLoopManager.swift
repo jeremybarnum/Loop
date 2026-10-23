@@ -3110,7 +3110,7 @@ final class WatchLoopManager {
             }
             guard self.beginLoanBolus?() ?? true else {
                 DispatchQueue.main.async {
-                    completion(WatchLoopError.enactFailed("Sport Mode is ending. Bolus from the iPhone once it has the pod."))
+                    completion(WatchLoopError.enactFailed("Sport Mode is ending. Bolus on the iPhone once it has the pod."))
                 }
                 return
             }

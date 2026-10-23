@@ -503,8 +503,8 @@ final class GlanceViewModel: ObservableObject {
             // 120 s timeout with no idea which it was.
             s.phoneUnreachable = !snap.phoneReachable
             s.idleNote = snap.phoneReachable
-                ? NSLocalizedString("Waiting for iPhone — pod still on watch. Bolus unavailable until it connects.", comment: "Glance note while a hand-back waits for the phone")
-                : NSLocalizedString("Can't reach iPhone — pod still on watch. Move it closer or check its Bluetooth.", comment: "Glance note while a hand-back waits for an UNREACHABLE phone")
+                ? NSLocalizedString("Waiting for iPhone to take the pod. Bolus unavailable until then.", comment: "Glance note while a hand-back waits for the phone")
+                : NSLocalizedString("Can't reach iPhone. Waiting for it to take the pod.", comment: "Glance note while a hand-back waits for an UNREACHABLE phone")
             state = s
         case .revoked:
             var s = GlanceUIState(); s.phase = .draining
@@ -557,7 +557,7 @@ final class GlanceViewModel: ObservableObject {
                 // continuing is the reassuring half of the message, so say both.
                 s.phoneUnreachable = !snap.phoneReachable
                 if !snap.phoneReachable {
-                    s.idleNote = NSLocalizedString("Can't reach iPhone — still looping. Move it closer or check its Bluetooth.", comment: "Glance note when an interim hand-back is blocked by an unreachable phone")
+                    s.idleNote = NSLocalizedString("Can't reach iPhone. The watch is still looping.", comment: "Glance note when an interim hand-back is blocked by an unreachable phone")
                 }
             } else if snap.endDidNotGoThrough {
                 // The same sentence as the notification, so opening the app agrees with it.
@@ -587,18 +587,18 @@ final class GlanceViewModel: ObservableObject {
                 // So the verb is "starting", not "delivering" or stock's "bolusing" — the pod is
                 // still orphaned and nothing has been commanded yet, and those would be true only
                 // on the phone, where the pump is already connected. Naming the AMOUNT tells the
-                // user what is coming without exposing the plumbing; "bolus will deliver" is what
-                // stops the End tap.
+                // user what is coming without exposing the plumbing; "still sending" says the bolus
+                // is on its way.
                 let pending = session.stack.loopManager.manualBolusPendingUnits
                 let amount = pending.map { Self.unitsFormatter.string(from: NSNumber(value: $0)) ?? String($0) }
                 s.transientText = Date().timeIntervalSince(startedAt) < 20
                     ? (amount.map { String(format: NSLocalizedString("starting %@ U…", comment: "Glance status while a manual bolus is being sent to the pod (1: units)"), $0) }
                         ?? NSLocalizedString("starting bolus…", comment: "Glance status while a manual bolus is being sent, amount unknown"))
                     // Reuses the takeover bar's existing overrun phrase (:1017) rather than
-                    // inventing a second vocabulary for "slower than expected". The "will
-                    // deliver" half stays — it is what stops the End tap that killed three doses.
-                    : (amount.map { String(format: NSLocalizedString("taking longer than usual — %@ U will deliver", comment: "Glance status when a manual bolus is slow to reach the pod (1: units)"), $0) }
-                        ?? NSLocalizedString("taking longer than usual — the bolus will deliver", comment: "Glance status when a slow manual bolus has no known amount"))
+                    // inventing a second vocabulary for "slower than expected"; "still sending" says
+                    // the bolus is on its way (next-dev's reviewed words).
+                    : (amount.map { String(format: NSLocalizedString("taking longer than usual — still sending %@ U", comment: "Glance status when a manual bolus is slow to reach the pod (1: units)"), $0) }
+                        ?? NSLocalizedString("taking longer than usual — still sending the bolus", comment: "Glance status when a slow manual bolus has no known amount"))
             }
             // Once the pod ACCEPTS, hand the view the window and let it narrate delivery.
             // Deliberately after the pre-acceptance branch so acceptance replaces "starting…"
@@ -1656,7 +1656,7 @@ struct GlanceDemoView: View {
         s.phase = .active; s.bgText = "111"; s.trendSymbol = "→"; s.bgColor = .inRange
         s.eventualText = "88"; s.iobText = "1.2"; s.cobText = "8"; s.tempText = "0.00"
         s.loopStatusText = "CLOSED · 1m"; s.loopDotColor = .glanceGood
-        s.transientText = "taking longer than usual — 0.90 U will deliver"
+        s.transientText = "taking longer than usual — still sending 0.90 U"
     }))
 }
 

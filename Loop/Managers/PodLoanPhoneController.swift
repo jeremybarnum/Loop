@@ -974,7 +974,7 @@ final class PodLoanPhoneController {
             // under-doses and decays out; opening would worsen it). The previous plain-channel
             // choice meant a Focus mode could eat the only witness to a recording failure.
             deps.issueUrgentNotice("Insulin On Board May Be Overstated",
-                             String(format: "The watch session's records account for %.2f U more than the pod delivered. Automatic dosing continues; expect it to run cautious until this clears.", -residual))
+                             String(format: "Unexpected: the watch recorded %.2f U more than the pod delivered. Loop may dose cautiously for a few hours. Consider reporting it with a Loop Report.", -residual))
         }
     }
 
@@ -1004,7 +1004,7 @@ final class PodLoanPhoneController {
             // be the ONLY witness that recording failed. Looping still continues (the action
             // asymmetry is unchanged).
             deps.issueUrgentNotice("Insulin On Board May Be Overstated",
-                             String(format: "After the watch session ended abruptly, records account for %.2f U more than the pod delivered. Automatic dosing resumes; expect it to run cautious until this clears.", -residual))
+                             String(format: "Insulin on board may be %.2f U high until the watch's records arrive. Loop will dose cautiously meanwhile.", -residual))
         } else {
             handbackDiag(epoch, String(format:
                 "R37 audit CLEAN — residual %+.3f U within ±%.2f; automatic dosing resumes", residual, Self.unexplainedInsulinBand))
@@ -1315,9 +1315,9 @@ final class PodLoanPhoneController {
                         // COB CHANGE UNDER THE USER'S FEET at this instant, so a numbers-changed
                         // notice belongs on the urgent channel.
                         self.rearmPlaceholderReminders()   // this condition is gone; another may stand
-                        self.deps.issueUrgentNotice("Watch Records Recovered",
-                                              String(format: "The watch is back. Its records (%d doses, %d carbs) replaced the estimated %.2f U bolus — your IOB and COB now reflect actual timing.",
-                                                     dosesJustCommitted.count, carbsJustCommitted, booked))
+                        self.deps.issueUrgentNotice("Watch Records Recovered", carbsJustCommitted > 0
+                            ? String(format: "The watch's records replaced the estimated %.2f U. Loop now doses with the watch's insulin and carbs.", booked)
+                            : String(format: "The watch's records replaced the estimated %.2f U. Insulin on board is exact again.", booked))
                     } else {
                         // Mark the estimate as "real records DID arrive, the delete is what failed".
                         // Only that state earns a launch retry — see settleEstimatesAtLaunch.
@@ -2031,7 +2031,7 @@ final class PodLoanPhoneController {
                 // is gone. The user retries in a moment.
                 os_log("Loan request while LOANED — revoking the previous loan first", log: log, type: .default)
                 reclaimNow()
-                deny("Reclaiming the previous loan from the watch — try Start again in a few seconds.")
+                deny("Ending the previous Sport Mode session. Tap Start again in a few seconds.")
             case .owner:
                 break
             }
@@ -2054,7 +2054,7 @@ final class PodLoanPhoneController {
             return
         }
         guard let lendable = pump as? PumpConnectionLendable else {
-            deny("This pump can't be loaned to the watch (\(type(of: pump))).")
+            deny("This pump doesn't support Sport Mode.")
             return
         }
         // Never lend the pod while the last session's insulin is still being checked: the next
@@ -2076,7 +2076,7 @@ final class PodLoanPhoneController {
         // queued — the user taps Start again when it has finished; cancel stays available here.
         if let wait = pump.status.bolusState.loanDeliveryWait(now: deps.now()) {
             PhoneLog.event("loan", "grant REFUSED — this iPhone's bolus is still being delivered (\(wait))")
-            deny("The iPhone is still delivering a bolus. Tap Start again \(wait).")
+            deny("A bolus is still being given. Try again \(wait).")
             return
         }
         // Never release the link under a command awaiting its reply: the reply is lost, the
@@ -2135,7 +2135,7 @@ final class PodLoanPhoneController {
            reclaimVerifiedAt == nil {
             os_log("Grant deferred: pod still returning from the last reclaim (%.0fs into settle, round-trip not yet verified) — deny-and-retry",
                    log: log, type: .default, deps.now().timeIntervalSince(started))
-            deny("The pod is still returning from the last session. Try Start again in a few seconds.")
+            deny("The iPhone is still reconnecting to the pod. Try again in a few seconds.")
             attemptReclaimVerificationNow(started: started)   // the tap accelerates the return check
             return
         }
@@ -2580,7 +2580,7 @@ final class PodLoanPhoneController {
         // still looking; the phone posts nothing. Reasons here are internal encoding failures
         // the user cannot act on, and the pod never left the phone.
         os_log("Grant aborted: %{public}@", log: log, type: .error, reason)
-        sendMessage(.denied(LoanDenied(reason: "The loan could not start (\(reason)). The phone kept the pod.")))
+        sendMessage(.denied(LoanDenied(reason: "Sport Mode couldn't start. The iPhone kept the pod. Try again.")))
         reclaimToOwner(alert: nil)
     }
 
@@ -2807,7 +2807,7 @@ final class PodLoanPhoneController {
             // note ("No response from iPhone"), which is FALSE in this case — the phone answered,
             // it was the grant that went missing — and points the user at the wrong device.
             // With the reason routed, the glance shows it where the user is already looking.
-            sendMessage(.denied(LoanDenied(reason: "The hand-over never reached the watch. The phone kept the pod. Tap Start again.")))
+            sendMessage(.denied(LoanDenied(reason: "The hand-over never reached the watch. The iPhone kept the pod. Tap Start again.")))
             reclaimToOwner(alert: nil)
         }
         if report.podFault != nil {
@@ -3019,7 +3019,7 @@ final class PodLoanPhoneController {
         // covered, by design: Bluetooth on but the phone out of the pod's range.
         if !isStale, canTransition, deps.isBluetoothPoweredOff() {
             handbackDiag(offer.epoch, "hand-back REFUSED — this phone's Bluetooth is off, so it could not reclaim the pod; the watch keeps the loan")
-            sendMessage(.denied(LoanDenied(reason: NSLocalizedString("iPhone Bluetooth is off — still running", comment: "Hand-back refused: shown on the watch"))))
+            sendMessage(.denied(LoanDenied(reason: NSLocalizedString("The watch is still looping. To end, turn on iPhone Bluetooth and tap End again.", comment: "Hand-back refused: shown on the watch"))))
             return
         }
         if !isStale, isFinal, canTransition {
@@ -4136,7 +4136,7 @@ final class PodLoanPhoneController {
         hasWarnedProtocolMismatch = true
         deps.issueNotice(
             NSLocalizedString("Watch Message Unreadable", comment: "Phone notice title when a loan message cannot be decoded"),
-            NSLocalizedString("Loop can't read a message from the watch. The apps may be on different builds — check both are current.", comment: "Phone notice body when a loan message cannot be decoded"))
+            NSLocalizedString("Loop can't read a message from the watch. The iPhone and watch apps may be on different versions.", comment: "Phone notice body when a loan message cannot be decoded"))
     }
 
     /// Shared by the two paths where a session's insulin cannot be checked at all: the pod
@@ -4170,7 +4170,7 @@ final class PodLoanPhoneController {
             scheduleNotification(
                 id: NotificationID.placeholder(index),
                 title: NSLocalizedString("Estimated Insulin Still Booked", comment: "Phone reminder title while an unexplained gap bolus stands"),
-                body: String(format: NSLocalizedString("%1$@ U is booked as a bolus at %2$@ — the pod's total, not real timing. If you remember the session, correct it in Insulin Delivery.", comment: "Phone reminder body while an unexplained gap bolus stands (1: units, 2: time booked)"), amount, time),
+                body: String(format: NSLocalizedString("%1$@ U is still booked as a bolus at %2$@. The watch's records replace it when it's back.", comment: "Phone reminder body while an unexplained gap bolus stands (1: units, 2: time booked)"), amount, time),
                 delay: delay, repeats: false)
         }
     }

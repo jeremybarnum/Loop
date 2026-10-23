@@ -172,7 +172,7 @@ final class TakeoverDiscoveryHintTests: XCTestCase {
 
     func testFirstContactAsksForTheWristThenReleasesIt() {
         let asking = PodLoanWatchController.takeoverHint(firstContact: true, podReached: false, nudged: false)
-        XCTAssertEqual(asking?.contains("keep your wrist up"), true)
+        XCTAssertEqual(asking?.contains("Keep your wrist up"), true)
         let done = PodLoanWatchController.takeoverHint(firstContact: true, podReached: true, nudged: false)
         XCTAssertEqual(done?.contains("lower your wrist"), true, "once the pod is reached the rest needs no screen")
     }

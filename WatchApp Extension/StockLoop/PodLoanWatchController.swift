@@ -479,7 +479,7 @@ final class PodLoanWatchController {
                 // bar. Stash the epoch — drainRecoveredIfNeeded fails it to the phone
                 // once `send` is wired — and reset to a legible idle.
                 pendingInterruptedTakeoverEpoch = epoch
-                lastIdleNote = NSLocalizedString("Sport Mode start was interrupted. Tap Start to try again.", comment: "Glance: start interrupted by relaunch")
+                lastIdleNote = NSLocalizedString("Sport Mode start was interrupted. Your iPhone still has the pod. Tap Start to try again.", comment: "Glance: start interrupted by relaunch")
                 phase = .idle
                 epoch = nil
             case .active, .handingBack, .revoked, .recoveredDrain:
@@ -985,7 +985,7 @@ final class PodLoanWatchController {
                     SportLog.event("seize", String(format: "REQUEST TIMED OUT — offering offline start (credential issued %@) [seize]",
                                                    DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .short, timeStyle: .short)))
                 } else {
-                    self.lastIdleNote = NSLocalizedString("No response from iPhone — check the phone (loan refused, or busy) and try again.", comment: "Glance: loan request timed out")
+                    self.lastIdleNote = NSLocalizedString("No answer from iPhone. Open Loop on the iPhone and try again.", comment: "Glance: loan request timed out")
                     SportLog.event("loan", "REQUEST TIMED OUT — no grant in \(Int(timeout))s (phone refused / busy / unreachable)")
                 }
                 self.notifyUI()   // offer/note landed within a possibly same-value phase
@@ -1294,7 +1294,7 @@ final class PodLoanWatchController {
               let manager = OmniPumpManager(rawState: rawState) else {
             teardownPump()
             returnToRestingPhase()
-            lastIdleNote = NSLocalizedString("Couldn't read the pod from the phone. Try again.", comment: "Glance: pump snapshot rejected")
+            lastIdleNote = NSLocalizedString("Couldn't build the pod driver from the iPhone's details. Try again.", comment: "Glance: pump snapshot rejected")
             SportLog.event("loan", "grant FAILED — could not rebuild the pump from the phone's snapshot")
             sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pump state snapshot rejected")))
             return
@@ -1306,7 +1306,7 @@ final class PodLoanWatchController {
         if let wait = manager.status.bolusState.loanDeliveryWait(now: now()) {
             manager.podLoanOrphanConnection()
             returnToRestingPhase()
-            lastIdleNote = String(format: NSLocalizedString("A bolus is still being delivered. Tap Start again %@.", comment: "Glance: Start refused while a bolus is delivering"), wait)
+            lastIdleNote = String(format: NSLocalizedString("A bolus is still being given. Try again %@.", comment: "Glance: Start refused while a bolus is delivering (1: when, e.g. in about 2 min)"), wait)
             SportLog.event("loan", "Start REFUSED — the copy shows a bolus still being delivered (\(wait)); nothing sent to the pod\(seizeMarkerActive ? " [seize]" : "")")
             sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "bolus still being delivered at handover")))
             return
@@ -1501,7 +1501,7 @@ final class PodLoanWatchController {
                     if PodLoanConnectClock.wedgeSignature {
                         self.lastIdleNote = NSLocalizedString("The pod didn't answer. Turn watch Bluetooth off and on, then try again.", comment: "Glance: takeover failed with the BLE-wedge signature")
                     } else {
-                        self.lastIdleNote = NSLocalizedString("Sport Mode start expired before the pod answered. Tap Start to try again.", comment: "Glance: grant lease expired mid-takeover")
+                        self.lastIdleNote = NSLocalizedString("The pod didn't answer in time. Your iPhone still has the pod. Tap Start to try again.", comment: "Glance: grant lease expired mid-takeover")
                     }
                     SportLog.event("loan", "TAKEOVER ABORTED — grant lease expired mid-takeover after \(attempt + 1) read(s), epoch \(grant.epoch), wedgeSignature=\(PodLoanConnectClock.wedgeSignature)\(self.seizeMarkerActive ? " [seize]" : "")")
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "grant expired mid-takeover")))
@@ -1513,7 +1513,7 @@ final class PodLoanWatchController {
                 if success, manager.podLoanPodIsBolusing {
                     self.teardownPump()
                     self.returnToRestingPhase()
-                    self.lastIdleNote = NSLocalizedString("A bolus is still being delivered. Tap Start again when it finishes.", comment: "Glance: Start refused, the pod reported a bolus in progress")
+                    self.lastIdleNote = NSLocalizedString("A bolus is still being given. Try again when it has finished.", comment: "Glance: Start refused, the pod reported a bolus in progress")
                     SportLog.event("loan", "Start REFUSED — the pod reports a bolus still being delivered that the copy did not know; pod let go, nothing sent, epoch \(grant.epoch)\(self.seizeMarkerActive ? " [seize]" : "")")
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pod reported a bolus in progress at takeover")))
                     return
@@ -2314,14 +2314,14 @@ final class PodLoanWatchController {
             if let wait = manager.status.bolusState.loanDeliveryWait(now: self.now()) {
                 SportLog.event("loan", "End REFUSED — the watch's bolus is still being delivered (\(wait))")
                 self.issueProtocolAlert(title: "Couldn't End Sport Mode",
-                                        body: "A bolus is still being delivered. Tap End again \(wait).")
+                                        body: "A bolus is still being given. Try again \(wait).")
                 return
             }
             // ...nor while one is still on its way to the pod (see watchBolusBeingSent).
             if self.watchBolusBeingSent {
                 SportLog.event("loan", "End REFUSED — a watch bolus is still being sent to the pod")
                 self.issueProtocolAlert(title: "Couldn't End Sport Mode",
-                                        body: "A bolus is still being sent to the pod. Tap End again in a minute.")
+                                        body: "A bolus is still being given. Try again when it has finished.")
                 return
             }
             self.reunionPromptActive = false   // a manual End answers the R40(f) prompt too
@@ -2454,10 +2454,10 @@ final class PodLoanWatchController {
             onLoanActiveChanged?(false)
             phase = .recoveredDrain        // drain-only, even with no records left: the offer itself is the news
             sendHandbackOffer(freshened: false, recovered: true)
-            // The pre-scheduled "still running on your watch" notification would now be false.
+            // The pre-scheduled hand-back-stuck notification is superseded by the alert below.
             HandbackStuckAlert.disarm()
             issueProtocolAlert(title: "End Not Confirmed",
-                               body: "The watch has stopped dosing and keeps sending its records. If your iPhone hasn't taken over in a minute or two, open Loop on the iPhone and tap the pod tile.")
+                               body: "Neither device is looping. Reclaim the pod on the iPhone.")
         } else {
             // Interim: never stopped dosing; phase already .active. Just abort the drain.
             SportLog.event("loan", "HAND-BACK \(why) (interim); Sport Mode continues on the watch\(wedgeSuffix)")
@@ -2474,7 +2474,7 @@ final class PodLoanWatchController {
                 // Row 8: the offer went unanswered for the whole wait (next-dev's reviewed words).
                 body = NSLocalizedString("iPhone didn't answer, so the watch is still looping. To stop automatic dosing, open the loop on the watch.", comment: "Watch alert body: End refused, the phone did not answer the hand-back offer")
             } else if wedge == .oneWay {
-                body = "End didn't go through — Sport Mode is still running. Your iPhone is reachable but didn't confirm: reopen Loop on both devices, then tap End again."
+                body = "The watch is still looping. Reopening Loop on both devices usually clears this."
             } else {
                 body = Self.endDidNotGoThroughText
             }
@@ -3103,7 +3103,7 @@ final class PodLoanWatchController {
         if nudged {
             return NSLocalizedString("Raise your wrist to finish connecting.", comment: "Glance: takeover stuck with the screen off")
         }
-        return NSLocalizedString("First Sport Mode on this pod — keep your wrist up until the pod is found.", comment: "Glance: first takeover of a pod")
+        return NSLocalizedString("Keep your wrist up until the pod is found.", comment: "Glance: first takeover of a pod")
     }
 
     /// Tap the wrist only when it can help: the pod is not yet reached, the screen is off (with it

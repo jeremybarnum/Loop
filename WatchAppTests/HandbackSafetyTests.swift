@@ -199,7 +199,7 @@ final class HandbackSafetyTests: XCTestCase {
         c.beginHandback()
         XCTAssertTrue(c.debugSnapshot().handbackPending, "precondition: End is in flight")
 
-        let reason = "iPhone Bluetooth is off — still running"
+        let reason = "The watch is still looping. To end, turn on iPhone Bluetooth and tap End again."
         c.handleIncoming(userInfo: try LoanMessage.denied(LoanDenied(reason: reason)).transportDictionary(), channel: .urgent)
         let snap = c.debugSnapshot()
         XCTAssertEqual(snap.phase, .active, "the loan continues")
@@ -316,7 +316,7 @@ final class HandbackSafetyTests: XCTestCase {
         c.expireHandbackForTesting()          // released: the drain, holding no pod
         XCTAssertEqual(c.debugSnapshot().phase, .recoveredDrain, "precondition: the drain")
 
-        c.handleIncoming(userInfo: try LoanMessage.denied(LoanDenied(reason: "iPhone Bluetooth is off — still running")).transportDictionary(),
+        c.handleIncoming(userInfo: try LoanMessage.denied(LoanDenied(reason: "The watch is still looping. To end, turn on iPhone Bluetooth and tap End again.")).transportDictionary(),
                          channel: .urgent)
         XCTAssertEqual(c.debugSnapshot().phase, .recoveredDrain, "still draining — never idle while the phone is loaned")
         let resend = timers.last { $0.label == "handback-resend" }

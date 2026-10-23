@@ -233,9 +233,11 @@ public final class AlertManager {
                 notificationContent.body = String(format: NSLocalizedString("Loop has not completed successfully in %@", comment: "The notification alert describing a long-lasting loop failure. The substitution parameter is the time interval since the last loop"), failureIntervalString)
             }
 
-            // Names the device: during a loan the watch has its own ladder with the same wording, and
-            // the wrist shows both (2026-10-21).
-            notificationContent.title = NSLocalizedString("Loop Failure (iPhone)", comment: "The notification title for a loop failure on the phone")
+            // PODLOAN: names the device. The phone's warnings also reach the watch, so during an offline
+            // start the looper sees the phone's not-looping warnings beside the watch's own; the label
+            // says these are the iPhone's, safe to ignore while the watch loops. Same form as next-dev's
+            // "Watch Loop Failure" (ruled 2026-10-23).
+            notificationContent.title = NSLocalizedString("iPhone Loop Failure", comment: "The notification title for a loop failure on the phone")
             let shouldMuteAlert = alertMuter.shouldMuteAlert(scheduledAt: timeUntilNotification)
             if isCritical, FeatureFlags.criticalAlertsEnabled {
                 if #available(iOS 15.0, *) {

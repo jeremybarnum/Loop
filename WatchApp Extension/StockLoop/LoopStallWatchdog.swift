@@ -54,8 +54,9 @@ enum LoopStallWatchdog {
         formatter.unitsStyle = .full
         for rung in rungs {
             let content = UNMutableNotificationContent()
-            // Names the device: the phone's own ladder can reach the wrist too (2026-10-21).
-            content.title = NSLocalizedString("Loop Failure (Watch)", comment: "The notification title for a loop failure on the watch")
+            // Names the device: the phone's own ladder ("iPhone Loop Failure") reaches the wrist too.
+            // next-dev's title (ruled 2026-10-23).
+            content.title = NSLocalizedString("Watch Loop Failure", comment: "The notification title for a loop failure on the watch")
             content.body = String(format: NSLocalizedString("Loop has not completed successfully in %@", comment: "The notification alert describing a long-lasting loop failure. The substitution parameter is the time interval since the last loop"),
                                   formatter.string(from: rung)?.localizedLowercase ?? "\(Int(rung / 60)) minutes")
             content.interruptionLevel = .timeSensitive
@@ -128,7 +129,7 @@ enum HandbackStuckAlert {
         center.removePendingRequests(withIdentifiers: [identifier])
         let content = UNMutableNotificationContent()
         content.title = NSLocalizedString("Couldn't End Sport Mode", comment: "Hand-back-stuck alert title")
-        content.body = NSLocalizedString("The iPhone didn't respond, so Sport Mode is still running on your watch. Tap End to try again.", comment: "Hand-back-stuck alert body")
+        content.body = NSLocalizedString("iPhone didn't confirm. Reopen Loop on the watch to see where things stand.", comment: "Hand-back-stuck alert body")
         content.interruptionLevel = .timeSensitive
         content.sound = .default
         content.threadIdentifier = identifier

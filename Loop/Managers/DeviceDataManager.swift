@@ -51,7 +51,7 @@ final class DeviceDataManager {
 
     var closedLoopDisallowedLocalizedDescription: String? {
         if isPodLoanedToWatch {
-            return NSLocalizedString("Sport Mode is active — the pod is on your Apple Watch, which is looping. Reclaim the pod to loop on this phone.", comment: "Closed-loop-disallowed reason: the pod is loaned to the watch (Sport Mode)")
+            return String(format: NSLocalizedString("Apple Watch is running the loop and controlling the pod. %1$@ on this phone will resume automation when the pod is reclaimed.", comment: "Closed-loop-disallowed reason: the pod is loaned to the watch (Sport Mode) (1: app name)"), Bundle.main.bundleDisplayName)
         } else if !cgmHasValidSensorSession {
             return NSLocalizedString("Closed Loop requires an active CGM Sensor Session", comment: "The description text for the looping enabled switch cell when closed loop is not allowed because the sensor is inactive")
         } else if !pumpIsAllowingAutomation {

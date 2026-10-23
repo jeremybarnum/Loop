@@ -119,7 +119,7 @@ extension NotificationManager {
         let notification = UNMutableNotificationContent()
         notification.title = NSLocalizedString("Bolus Not Delivered", comment: "Notification title when a bolus is refused because the pod is on loan")
         notification.body = String(
-            format: NSLocalizedString("%1$@ U was not delivered — the pod is on the watch. Bolus from the watch, or end Sport Mode first.", comment: "Notification body when a bolus is refused because the pod is on loan (1: units)"),
+            format: NSLocalizedString("%1$@ U wasn't delivered because the pod is on the watch. Bolus on the watch instead.", comment: "Notification body when a bolus is refused because the pod is on loan (1: units)"),
             NumberFormatter.localizedString(from: NSNumber(value: units), number: .decimal))
         notification.sound = .default
         // No bolusFailure CATEGORY: that attaches a "Retry Bolus" action which would
