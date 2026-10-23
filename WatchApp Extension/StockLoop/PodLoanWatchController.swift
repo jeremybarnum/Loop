@@ -739,7 +739,7 @@ final class PodLoanWatchController {
         queue.async {
             guard self.seizeOffer != nil else { return }
             self.seizeOffer = nil
-            self.lastIdleNote = NSLocalizedString("Offline start cancelled.", comment: "Glance note after dismissing a seize offer")
+            // No note (ruled 2026-10-23, as next-dev): she just dismissed it herself.
             SportLog.event("seize", "seize offer DISMISSED [seize]")
             self.notifyUI()
         }
@@ -1492,17 +1492,10 @@ final class PodLoanWatchController {
                 guard self.now() < grant.expiresAt else {
                     self.teardownPump()
                     self.returnToRestingPhase()
-                    // Two messages, because the two failures need OPPOSITE user responses.
-                    // The wedge (Code-11, or a ladder that never connected once) is made WORSE
-                    // by retrying — tonight's field session force-quit-and-retried its way from
-                    // one camped slot to a blind radio — and fixed by a watch Bluetooth toggle.
-                    // Only a clean transient (pod seen, connects attempted, no #11) earns
-                    // "try again".
-                    if PodLoanConnectClock.wedgeSignature {
-                        self.lastIdleNote = NSLocalizedString("The pod didn't answer. Turn watch Bluetooth off and on, then try again.", comment: "Glance: takeover failed with the BLE-wedge signature")
-                    } else {
-                        self.lastIdleNote = NSLocalizedString("The pod didn't answer in time. Your iPhone still has the pod. Tap Start to try again.", comment: "Glance: grant lease expired mid-takeover")
-                    }
+                    // One message (ruled 2026-10-23, next-dev 9240a2f5): the "turn watch Bluetooth off
+                    // and on" variant rested on a wedge signature that a pod simply out of reach also
+                    // matches, where that advice is wrong. The signature stays in the log line below.
+                    self.lastIdleNote = NSLocalizedString("The pod didn't answer in time. Your iPhone still has the pod. Tap Start to try again.", comment: "Glance: grant lease expired mid-takeover")
                     SportLog.event("loan", "TAKEOVER ABORTED — grant lease expired mid-takeover after \(attempt + 1) read(s), epoch \(grant.epoch), wedgeSignature=\(PodLoanConnectClock.wedgeSignature)\(self.seizeMarkerActive ? " [seize]" : "")")
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "grant expired mid-takeover")))
                     return
