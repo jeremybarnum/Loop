@@ -137,15 +137,22 @@ final class SportModePushTests: XCTestCase {
         XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "bearer h.c.s")
         XCTAssertEqual(request.value(forHTTPHeaderField: "apns-topic"), "com.example.Loop")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "apns-push-type"), "background")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "apns-priority"), "5")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "apns-push-type"), "alert",
+                       "a visible alert: Apple delivers it at once")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "apns-priority"), "10")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "apns-collapse-id"), "sport-mode-e12",
+                       "one notice per loan on the phone's screen")
         XCTAssertEqual(request.value(forHTTPHeaderField: "apns-expiration"),
                        String(Int(sentAt.timeIntervalSince1970) + 600), "Apple holds it ten minutes at most")
 
         let body = try XCTUnwrap(request.httpBody)
         let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
-        XCTAssertEqual((payload["aps"] as? [String: Any])?["content-available"] as? Int, 1)
-        XCTAssertNil((payload["aps"] as? [String: Any])?["alert"], "silent: no alert")
+        let aps = try XCTUnwrap(payload["aps"] as? [String: Any])
+        XCTAssertEqual(aps["content-available"] as? Int, 1, "still wakes the app")
+        XCTAssertEqual(aps["interruption-level"] as? String, "time-sensitive")
+        let alert = try XCTUnwrap(aps["alert"] as? [String: Any])
+        XCTAssertEqual(alert["title"] as? String, "Sport Mode started on the watch")
+        XCTAssertEqual(alert["body"] as? String, "The watch has the pod. This iPhone has paused dosing.")
         let sportMode = try XCTUnwrap(payload["sport-mode"] as? [String: Any])
         XCTAssertEqual(sportMode["event"] as? String, "started-on-watch")
         XCTAssertEqual(sportMode["loan"] as? Int, 12)

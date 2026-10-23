@@ -711,8 +711,8 @@ public struct PhoneReach: Codable, Equatable {
 }
 
 /// The notice a cellular watch pushes to the phone at an offline start: "Sport Mode started on the
-/// watch". The APNs payload is `{"aps":{"content-available":1},"sport-mode":{"event","loan","token",
-/// "sent-at"}}`; both sides build and read it here so the keys cannot drift. `token` is the dormant
+/// watch". The APNs payload is `{"aps":{alert, time-sensitive, "content-available":1},"sport-mode":
+/// {"event","loan","token","sent-at"}}`; both sides build and read it here so the keys cannot drift. `token` is the dormant
 /// grant's seize token, a secret the phone issued: the phone acts only on a matching one, so the
 /// push key alone cannot fake a start.
 public struct SportModeStartedNotice: Equatable {
@@ -732,9 +732,18 @@ public struct SportModeStartedNotice: Equatable {
         self.sentAt = sentAt
     }
 
-    /// The whole APNs body (a silent push).
+    /// What the phone shows. Read at a glance: the news first, then what the phone did about it.
+    public static let alertTitle = "Sport Mode started on the watch"
+    public static let alertBody = "The watch has the pod. This iPhone has paused dosing."
+
+    /// The whole APNs body: a visible time-sensitive alert that also wakes the app
+    /// (content-available). Sent at high priority, Apple delivers it at once; the silent
+    /// low-priority version reached a sleeping phone 199 s late on the bench (2026-10-23).
     public var apnsPayload: [String: Any] {
-        ["aps": ["content-available": 1],
+        ["aps": ["alert": ["title": Self.alertTitle, "body": Self.alertBody],
+                 "sound": "default",
+                 "interruption-level": "time-sensitive",
+                 "content-available": 1],
          Self.payloadKey: ["event": event, "loan": loan, "token": token,
                            "sent-at": Self.iso8601.string(from: sentAt)]]
     }

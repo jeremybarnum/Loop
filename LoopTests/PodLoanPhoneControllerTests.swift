@@ -3646,6 +3646,7 @@ extension PodLoanPhoneControllerTests {
         XCTAssertTrue(SportModeStartedNotice.isSportModePayload(userInfo))
         XCTAssertEqual(SportModeStartedNotice(userInfo: userInfo), sent)
         XCTAssertEqual((userInfo["aps"] as? [String: Any])?["content-available"] as? Int, 1)
+        XCTAssertNotNil((userInfo["aps"] as? [String: Any])?["alert"], "a visible alert")
         XCTAssertFalse(SportModeStartedNotice.isSportModePayload(["aps": ["content-available": 1], "override-name": "x"]),
                        "Nightscout's commands are not ours")
     }

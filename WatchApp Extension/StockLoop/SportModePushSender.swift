@@ -3,7 +3,7 @@
 //  WatchApp Extension
 //
 //  "Sport Mode started on the watch": at an offline start, a cellular watch tells the distant
-//  phone over its own internet, with one silent Apple push sent straight to Apple (no Nightscout).
+//  phone over its own internet, with one visible, high-priority Apple push sent straight to Apple (no Nightscout).
 //  A BACKUP, never relied on: without internet nothing is sent and nothing else changes — the
 //  phone's insulin ledger already makes its return safe. With it, the phone stands aside before
 //  its first reading and its pre-scheduled not-looping warnings stop reaching the wrist.
@@ -200,8 +200,12 @@ final class SportModePushSender: OfflineStartNoticeSending {
         request.timeoutInterval = attemptTimeout
         request.setValue("bearer \(jwt)", forHTTPHeaderField: "authorization")
         request.setValue(push.topic, forHTTPHeaderField: "apns-topic")
-        request.setValue("background", forHTTPHeaderField: "apns-push-type")
-        request.setValue("5", forHTTPHeaderField: "apns-priority")
+        // A visible alert at high priority: Apple delivers it at once. A background push is
+        // low priority and iOS may hold it for minutes on a sleeping phone.
+        request.setValue("alert", forHTTPHeaderField: "apns-push-type")
+        request.setValue("10", forHTTPHeaderField: "apns-priority")
+        // One loan, one notice on the phone's screen, however many copies arrive.
+        request.setValue("sport-mode-e\(notice.loan)", forHTTPHeaderField: "apns-collapse-id")
         request.setValue(String(Int(notice.sentAt.addingTimeInterval(expiration).timeIntervalSince1970)),
                          forHTTPHeaderField: "apns-expiration")
         request.setValue("application/json", forHTTPHeaderField: "content-type")

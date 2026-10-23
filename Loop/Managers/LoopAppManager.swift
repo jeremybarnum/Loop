@@ -401,6 +401,18 @@ class LoopAppManager: NSObject {
         deviceDataManager?.servicesManager.handleRemoteNotification(notification)
         return true
     }
+
+    /// Sends a Sport Mode push shown or tapped as a notification to the same handler as a
+    /// background delivery. Returns true when the payload was ours.
+    @discardableResult
+    func routeSportModeNotice(_ userInfo: [AnyHashable: Any]) -> Bool {
+        guard SportModeStartedNotice.isSportModePayload(userInfo),
+              let notification = userInfo as? [String: AnyObject] else {
+            return false
+        }
+        handleRemoteNotification(notification)
+        return true
+    }
     
     // MARK: - Deeplinking
     
@@ -581,10 +593,19 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
         // here. The one notification this blanket ever promoted by accident — the designed-
         // silent on-loan escape-hatch notice — was DELETED rather than carved out (field-ruled
         // clutter); anything posted is meant to be seen.
+        // Sport Mode's push arriving while the app is open: act on it here too (a repeat of the
+        // background delivery changes nothing), and still show it.
+        routeSportModeNotice(notification.request.content.userInfo)
         completionHandler([.badge, .sound, .list, .banner])
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        // Sport Mode's push tapped: the app may not have been woken for it (force-quit), so act on
+        // it now. The phone's own checks (token, age, epoch) still decide.
+        if routeSportModeNotice(response.notification.request.content.userInfo) {
+            completionHandler()
+            return
+        }
         switch response.actionIdentifier {
         case NotificationManager.Action.retryBolus.rawValue:
             if  let units = response.notification.request.content.userInfo[LoopNotificationUserInfoKey.bolusAmount.rawValue] as? Double,
