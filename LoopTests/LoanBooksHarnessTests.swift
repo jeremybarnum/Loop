@@ -1823,7 +1823,10 @@ private final class PhoneOverrideHarness {
     private var controller: PodLoanPhoneController!
     private static let defaultsKeys = ["PodLoanPhoneController.state", "PodLoanPhoneController.epoch",
                                        "PodLoanPhoneController.cursor", "PodLoanPhoneController.pendingRevoke",
-                                       "PodLoanPhoneController.committedIDs", "PodLoanPhoneController.loanStartedAt"]
+                                       "PodLoanPhoneController.committedIDs", "PodLoanPhoneController.loanStartedAt",
+                                       // The insulin ledger's saved state (2026-10-22).
+                                       "PodLoanPhoneController.ownReading", "PodLoanPhoneController.estimates",
+                                       "PodLoanPhoneController.adoptedJudgedEpoch"]
     private static var stagedFileURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("PodLoanStagedRecordsV2.json")

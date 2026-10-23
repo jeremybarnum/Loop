@@ -3335,7 +3335,7 @@ extension PodLoanPhoneControllerTests {
 
 // MARK: - Timers to evidence (ruled 2026-10-23)
 //
-// The grant's lease is 60 s, and the phone asks before it takes the pod back (next-dev 69adf6d6,
+// The grant's lease is 120 s on this build (next-dev 60; ruled 2026-10-23), and the phone asks before it takes the pod back (next-dev 69adf6d6,
 // control document transfer G). A relaunch in the middle of a transfer asks the watch and acts on
 // its answer or on silence after the question; it no longer returns the phone to owner after 120 s.
 extension PodLoanPhoneControllerTests {
@@ -3356,16 +3356,16 @@ extension PodLoanPhoneControllerTests {
                                                   knowsGrant: knowsGrant)).transportDictionary()
     }
 
-    /// Transfer G: the grant's lease is 60 s. At its end the phone asks once more; silence after
+    /// Transfer G: the grant's lease is 120 s here. At its end the phone asks once more; silence after
     /// that question takes the pod back. The lease's end only decides when to ask.
     func testTheGrantsLeaseIsSixtySecondsAndItsEndAsksBeforeTakingBack() throws {
         let controller = makeController()
         let ladder = ReclaimLadderRecorder()
         ladder.install(on: controller)
         let grant = try offerGrant(controller)
-        XCTAssertEqual(grant.expiresAt.timeIntervalSinceNow, 60, accuracy: 5, "the watch has 60 s to reach the pod")
+        XCTAssertEqual(grant.expiresAt.timeIntervalSinceNow, 120, accuracy: 5, "the watch has 120 s to reach the pod")
         waitUntil(timeout: 5, "lease armed") { ladder.armed.contains { $0.label == "grant-lease" } }
-        XCTAssertEqual(ladder.armed.first { $0.label == "grant-lease" }?.delay, 60)
+        XCTAssertEqual(ladder.armed.first { $0.label == "grant-lease" }?.delay, 120)
 
         let asked = statusQueries().count
         controller.queue.sync { _ = ladder.fire("grant-lease") }
@@ -3481,5 +3481,40 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(controller.state, .reconciling, "precondition: the hand-back is mid-commit")
         holdPumpEventWrites = false
         return grant
+    }
+}
+
+// MARK: - A relaunch right after a hand-back's commit keeps its insulin check (simulator, 2026-10-23)
+extension PodLoanPhoneControllerTests {
+
+    /// The hand-back's audit lived in memory until the settle read the pod; a kill a second after
+    /// "commit done" lost it, and no check ever ran. The commit now also leaves the loan's window
+    /// owed, so the relaunched phone's first pod reading judges it.
+    func testARelaunchAfterTheCommitStillChecksTheLoansInsulin() throws {
+        let controller = makeController()
+        let grant = try establishLoan(controller)
+        connectionReady = false                       // the settle never reads the pod before the kill
+        let ackSent = expectSend()
+        let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil,
+                                  odometer: LoanOdometerSnapshot(deliveredAtStart: 10.0, deliveredLatest: 10.5,
+                                                                 freshenSucceeded: false),
+                                  events: [], tombstones: [], recovered: false, released: true)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+        controller.queue.sync { }
+        let saved = UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.ownReading")
+        XCTAssertEqual(saved?["owed"] as? Bool, true, "the loan's window is left owed at the commit")
+        XCTAssertEqual(saved?["units"] as? Double, 10.0, "from the loan's start reading")
+
+        // The relaunched phone (same saved state) reads the pod: 0.5 U that no record explains.
+        let relaunched = makeController()
+        connectionReady = true
+        MockPumpManager.testOdometer = 10.5
+        pump.lastSync = Date()
+        let checked = expectation(description: "first reading after the relaunch")
+        relaunched.checkOwnPumpTotal { checked.fulfill() }
+        wait(for: [checked], timeout: 5)
+        XCTAssertEqual(positiveVerdicts, 1, "the loan's window is judged at the first reading")
     }
 }

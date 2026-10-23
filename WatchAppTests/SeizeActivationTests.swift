@@ -127,8 +127,8 @@ final class SeizeActivationTests: XCTestCase {
                        "the LIVE lease is minted at activation — the handshake starts at the confirm, not at issue")
         XCTAssertGreaterThan(rebuilt.expiresAt.timeIntervalSinceNow, 50,
                              "an hour-old credential must still enter the ladder with (almost) the full lease")
-        XCTAssertEqual(PodLoanWatchController.seizeActivationLease, 60,
-                       "an offline start has the same 60 s to reach the pod as a granted one (next-dev 69adf6d6)")
+        XCTAssertEqual(PodLoanWatchController.seizeActivationLease, 120,
+                       "an offline start has the same 120 s to reach the pod as a granted one (next-dev 60; 120 here, ruled 2026-10-23)")
         // Every other field carries verbatim.
         XCTAssertEqual(rebuilt.pumpManagerRawState, dormant.grant.pumpManagerRawState)
         XCTAssertEqual(rebuilt.podAddress, dormant.grant.podAddress)

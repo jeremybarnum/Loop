@@ -185,7 +185,11 @@ final class LoanTwoSidedContractTests: XCTestCase {
                     "PodLoanPhoneController.cursor", "PodLoanPhoneController.pendingRevoke",
                     "PodLoanPhoneController.committedIDs", "PodLoanPhoneController.loanStartedAt",
                     "PodLoanPhoneController.deliveredAuthoritative",
-                    "PodLoanPhoneController.residualHistory"] {
+                    "PodLoanPhoneController.residualHistory",
+                    // The insulin ledger's saved state (2026-10-22): an owed window left by an earlier
+                    // test refused this test's first Start.
+                    "PodLoanPhoneController.ownReading", "PodLoanPhoneController.estimates",
+                    "PodLoanPhoneController.adoptedJudgedEpoch"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!

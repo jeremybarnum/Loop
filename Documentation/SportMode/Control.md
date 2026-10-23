@@ -43,7 +43,7 @@ describes next-dev's code, not this build's.
 | 3 | The watch warns "Not Hearing From iPhone" when no loan runs and the phone has gone quiet. |
 | 8 | End with the phone away asks the phone before refusing; one unreachable reading does not end it. |
 | Section 4 | The watch's own stall warnings are time-sensitive, not critical. The build has no critical-alerts entitlement, so a critical request was already delivered as time-sensitive. |
-| Transfers | The grant's lease is 60 s, not 5 minutes, with the query before the take-back. A phone relaunched during a take-back asks the watch or reads the pod before it takes the pod back; it no longer returns itself to owner after 120 s. |
+| Transfers | The grant's lease is 120 s, not 5 minutes, with the query before the take-back (next-dev's is 60 s; 120 here because the watch's quiet window around a sensor reading can hold the pod's radio for up to about 60 s in the sensor's extended phase, ruled 2026-10-23). A phone relaunched during a take-back asks the watch or reads the pod before it takes the pod back; it no longer returns itself to owner after 120 s. |
 
 **Ruled 2026-10-23 to differ:**
 

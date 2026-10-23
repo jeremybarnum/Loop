@@ -663,14 +663,15 @@ final class PodLoanWatchController {
         pendingSeizeToken != nil || defaults.string(forKey: DormantKeys.activeToken) != nil
     }
 
-    /// The takeover-liveness budget a seize activation mints for itself — the same 60 seconds
-    /// a live grant gets from the phone (next-dev 69adf6d6; was 5 minutes). The DORMANT
+    /// The takeover-liveness budget a seize activation mints for itself — the same 120 seconds
+    /// a live grant gets from the phone (next-dev 69adf6d6 has 60; 120 here for the sensor's quiet
+    /// window in its extended phase, ruled 2026-10-23; was 5 minutes). The DORMANT
     /// credential's own expiresAt is issuedAt by contract ("meaningless dormant"); forgetting
     /// to re-stamp it here is what killed the first field seize at ladder read 1 (2026-08-30,
     /// "grant lease expired mid-takeover" 900 ms after the confirm). The lease bounds the HANDSHAKE, not the
     /// credential — R40(d) keeps credential age uncapped and disclosed, and the handshake
     /// starts at the confirm.
-    static let seizeActivationLease: TimeInterval = 60
+    static let seizeActivationLease: TimeInterval = 120
 
     /// R40(b): the user asked, the phone did not answer, a credential exists — OFFER the
     /// offline path (never auto-take it). Shows the age per R40(d); a deliberate confirm

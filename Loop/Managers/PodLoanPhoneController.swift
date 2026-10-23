@@ -886,8 +886,10 @@ final class PodLoanPhoneController {
             handbackDiag(pending.epoch, "** R37: reclaim round-trip landed but no odometer — session UNVERIFIED; still looping **")
             deps.setAutomaticDosingPaused(false)
             deps.issueUrgentNotice(Self.sessionUnverifiedTitle, Self.sessionUnverifiedBody)
+            ownReading = nil   // the window left owed at the commit cannot be judged either
         } else {
             handbackDiag(pending.epoch, "reconcile[AUTHORITATIVE]: pod reachable but reported no odometer — keeping the provisional line")
+            ownReading = nil   // the window left owed at the commit cannot be judged either
         }
 
         // Cancel the watch's temp now that we can actually reach the pod.
@@ -1138,8 +1140,16 @@ final class PodLoanPhoneController {
         queue.async {
             guard self.state == .owner, !self.yieldingToInferredLoan,
                   let pump = self.deps.pumpManager(),
-                  let lendable = pump as? PumpConnectionLendable, !lendable.isConnectionReleased,
-                  let units = lendable.lentDeviceInsulinDelivered, let at = pump.lastSync else { return finish() }
+                  let lendable = pump as? PumpConnectionLendable, !lendable.isConnectionReleased else { return finish() }
+            guard let units = lendable.lentDeviceInsulinDelivered, let at = pump.lastSync else {
+                // A pump that gives no delivered total can never judge a window: one left owed must
+                // not hold the next Start for good.
+                if self.ownReading?.owed == true, self.pendingHandbackAudit == nil, lendable.lentDeviceInsulinDelivered == nil {
+                    self.ownReading = nil
+                    PhoneLog.event("loan", "[odometer] the pump gives no delivered total — the owed window cannot be judged and is dropped")
+                }
+                return finish()
+            }
             // A forced take-back's check left owed: the pod answering is the moment to run it.
             if let pending = self.pendingHandbackAudit {
                 if pending.flavor == .forceReclaim, self.reclaimStartedAt == nil {
@@ -2589,7 +2599,12 @@ final class PodLoanPhoneController {
     /// within 25 s, most within 4; a pod not reached in a minute was not reached in five either,
     /// and the looper waited that long to be told. The watch abandons a takeover at the lease's
     /// end (`grant.expiresAt`), and T1 asks once more then.
-    static let takeoverLease: TimeInterval = 60
+    ///
+    /// 120 s on this build, not next-dev's 60 (ruled 2026-10-23): here the watch rides the Dexcom
+    /// app's sensor session, and in the sensor's extended phase its quiet window can hold the pod's
+    /// radio for up to about 60 s around a reading, so a 60 s lease could expire on a takeover that
+    /// was only waiting. The phone still asks before it takes the pod back.
+    static let takeoverLease: TimeInterval = 120
 
     /// T1: start-confirmation at the end of the grant's lease, cancelled by TakeoverComplete.
     /// Row 4: query-before-reclaim — a watch whose TakeoverComplete was lost gets one chance
@@ -3211,6 +3226,14 @@ final class PodLoanPhoneController {
                     takeoverUnits: start, wholeLoanExpected: expected,
                     windowStart: auditBase?.asOf ?? loanStartedAt,
                     bolusDeliveringUntil: Self.bolusDeliveringUntil(allStagedEvents))
+                // The audit above lives in memory until the settle reads the pod. A relaunch in
+                // between lost it (simulator 2026-10-23: killed a second after "commit done", no check
+                // ever ran). Leave the loan's window owed as well: the verdict overwrites it, and if
+                // the app dies first, the phone's next pod reading judges the window against its dose
+                // store, which already holds these records.
+                if let start = auditBase?.asOf ?? loanStartedAt {
+                    ownReading = OwnReading(units: windowStart, at: start, owed: true)
+                }
             }
         }
 
