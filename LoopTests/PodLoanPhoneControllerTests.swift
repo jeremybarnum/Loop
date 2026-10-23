@@ -799,6 +799,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(addedDoses.count, 1)
         XCTAssertEqual(addedDoses[0].count, 1, "the bolus event enters the store before the ack")
         waitForState(controller, .owner)
+        // The drain close sets owner, then resumes dosing, on the controller's queue: wait for the
+        // resume rather than read between the two (failed under load 2026-10-23).
+        waitUntil(timeout: 5, "dosing resumed") { self.lock.lock(); defer { self.lock.unlock() }; return self.pauseCalls.count == 2 }
         XCTAssertEqual(pauseCalls, [true, false], "dosing restored only after commit")
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed at loan close")
     }
@@ -1500,6 +1503,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
         XCTAssertEqual(addedDoses.flatMap { $0 }.count, 1, "the legacy offer's records are committed")
         waitForState(controller, .owner)
+        waitUntil(timeout: 5, "dosing resumed") { self.lock.lock(); defer { self.lock.unlock() }; return self.pauseCalls.count == 2 }
         XCTAssertEqual(pauseCalls, [true, false], "dosing is restored — the loan is not left open")
     }
 
@@ -2182,7 +2186,8 @@ extension PodLoanPhoneControllerTests {
 
         XCTAssertTrue(ladder.isCancelled("reclaim-resend"), "a completed drain kills the pending resend")
         XCTAssertTrue(ladder.isCancelled("reclaim-force"), "and the force with it")
-        XCTAssertNil(controller.reclaimProgress, "nothing left to draw a determinate bar for")
+        // The settle after the drain verifies the pod first, which takes longer under load: wait for it.
+        waitUntil(timeout: 8, "nothing left to draw a determinate bar for") { controller.reclaimProgress == nil }
 
         // Belt and braces: even if a rung reached its deadline anyway, its guards refuse.
         ladder.fire("reclaim-resend")
@@ -2816,6 +2821,7 @@ extension PodLoanPhoneControllerTests {
                           events: [], tombstones: [], recovered: true, released: true,
                           seizeToken: token)).transportDictionary())
         waitUntil(timeout: 5, "close yielded") { controller.yieldingToInferredLoan }
+        controller.queue.sync { }   // barrier: the block that set the flag has finished (raced under load 2026-10-23)
 
         XCTAssertEqual(controller.state, .owner, "books closed at .owner…")
         XCTAssertTrue(MockPumpManager.testConnectionReleased, "…but custody NOT resumed — the pod stays the live loan's")
@@ -2846,6 +2852,7 @@ extension PodLoanPhoneControllerTests {
             epoch: 5, mode: .closedDirect, lastDirectGlucoseAge: nil, lastEventSeq: 0,
             podFault: nil, holdsPod: true, knowsGrant: true)).transportDictionary())
         waitUntil(timeout: 5, "yield engaged") { controller.yieldingToInferredLoan }
+        controller.queue.sync { }   // barrier: the block that set the flag has finished (raced under load 2026-10-23)
 
         XCTAssertEqual(controller.state, .owner, "e4 never adopted")
         XCTAssertTrue(MockPumpManager.testConnectionReleased, "the pod stays with the newer loan")
@@ -2924,6 +2931,7 @@ extension PodLoanPhoneControllerTests {
                           events: [event], tombstones: [], recovered: true, released: false,
                           seizeToken: token)).transportDictionary())
         waitUntil(timeout: 5, "adopted") { controller.state == .loaned }
+        controller.queue.sync { }   // barrier: the block that set the flag has finished (raced under load 2026-10-23)
 
         let anchor = UserDefaults.standard.object(forKey: "PodLoanPhoneController.loanStartedAt") as? Date
         XCTAssertNotNil(anchor, "the window anchor is SET, never nil-to-default")
@@ -3026,8 +3034,10 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 8, "drain adopted and closed back to owner") {
             controller.state == .owner && !controller.yieldingToInferredLoan
         }
+        controller.queue.sync { }   // barrier: the block that set the flag has finished (raced under load 2026-10-23)
         XCTAssertNil(diagMatching("ladder spent"), "the aimed revoke got its drain — no force")
-        XCTAssertNotNil(diagMatching("retro-ack arrived MID-RECLAIM"), "the .reclaimPending door took the offer")
+        // Diags reach the harness through the controller's sender, after its block: wait for the line.
+        waitUntil(timeout: 5, "the .reclaimPending door took the offer") { self.diagMatching("retro-ack arrived MID-RECLAIM") != nil }
     }
 
     /// Evidence can arrive BETWEEN the rungs: the watch's holdsPod answer to a mis-aimed

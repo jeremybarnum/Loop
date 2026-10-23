@@ -2446,6 +2446,9 @@ final class PodLoanPhoneController {
             PhoneLog.event("mirror", "inferred-loan evidence (\(evidence)) but yield DISABLED by kill switch [mirror]")
             return
         }
+        // The phone's own window closes here (its last reading was judged at that reading); the
+        // watch's loan window runs from the anchor below.
+        ownReading = nil
         yieldingToInferredLoan = true
         // First contact with this loan: the silence clock counts from here.
         holdRenewedAt = deps.now()
@@ -2461,9 +2464,6 @@ final class PodLoanPhoneController {
             loanStartedAt = asOf
             UserDefaults.standard.set(asOf, forKey: Keys.loanStartedAt)
         }
-        // The phone's own window closes here (its last reading was judged at that reading); the
-        // watch's loan window runs from the anchor above.
-        ownReading = nil
         deps.setAutomaticDosingPaused(true)
         // Yield the RADIO too, exactly as a grant does: a yielded phone that keeps its
         // standing connect starves an alive watch's per-cycle reclaims (single-central
