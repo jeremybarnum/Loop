@@ -14,6 +14,7 @@ import os
 import os.log
 import UserNotifications
 import LoopKit
+import G7SensorKit
 
 
 final class ExtensionDelegate: NSObject, WKExtensionDelegate {
@@ -60,6 +61,18 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
 
     override init() {
         super.init()
+
+        // Bench only (the G7 emulator): ride-only waits for the Dexcom watch app's link, which an
+        // emulator cannot create, so a bench build that sets SPORT_MODE_BENCH_G7_DIRECT = YES in
+        // the git-ignored SportModeBench.local.xcconfig connects to the sensor itself. Every other
+        // build clears any leftover override back to the ride-only default. Before the Sport Mode
+        // stack is built, which reads the setting.
+        if (Bundle.main.object(forInfoDictionaryKey: "SportModeBenchG7Direct") as? String)?.uppercased() == "YES" {
+            UserDefaults.standard.set(false, forKey: G7RidePolicy.key)
+            SportLog.event("g7-ble", "BENCH: ride-only OFF from the build setting — the watch connects to the sensor itself")
+        } else {
+            UserDefaults.standard.removeObject(forKey: G7RidePolicy.key)
+        }
 
         let session = WCSession.default
         session.delegate = self

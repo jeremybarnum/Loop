@@ -60,3 +60,8 @@ URL_SCHEME_NAME = $(MAIN_APP_DISPLAY_NAME)
 // the feature is off. Defines SPORT_MODE_PUSH_KEY_ID, SPORT_MODE_PUSH_TEAM_ID and
 // SPORT_MODE_PUSH_KEY_P8_BASE64, read by the watch extension's Info.plist.
 #include? "../SportModePush.local.xcconfig"
+
+// Sport Mode (production line), bench only: SPORT_MODE_BENCH_G7_DIRECT = YES makes the watch connect
+// to the sensor itself instead of riding the Dexcom watch app's link, for the G7 emulator.
+// Git-ignored; never set in a build for the production user.
+#include? "../SportModeBench.local.xcconfig"
