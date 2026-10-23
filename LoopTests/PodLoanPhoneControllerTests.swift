@@ -216,7 +216,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                         listenForPodAdverts: @escaping (Int) -> Void = { _ in },
                         stopListeningForPodAdverts: @escaping (Int, String) -> Void = { _, _ in },
                         bluetoothPoweredOff: @escaping () -> Bool = { false },
-                        latestGlucose: (() -> Date?)? = nil) -> PodLoanPhoneController {
+                        latestGlucose: (() -> Date?)? = nil,
+                        phoneReach: @escaping () -> PhoneReach? = { nil }) -> PodLoanPhoneController {
         let controller = PodLoanPhoneController(dependencies: .init(
             pumpManager: { [weak self] in self?.pump },
             settings: { [weak self] in self?.settings ?? LoopSettings() },
@@ -301,6 +302,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             isWatchReachable: watchReachable,
             isBluetoothPoweredOff: bluetoothPoweredOff,
             lastWatchContactAt: lastWatchContact,
+            phoneReach: phoneReach,
             now: now,
             listenForPodAdverts: listenForPodAdverts,
             stopListeningForPodAdverts: stopListeningForPodAdverts
@@ -3516,5 +3518,165 @@ extension PodLoanPhoneControllerTests {
         relaunched.checkOwnPumpTotal { checked.fulfill() }
         wait(for: [checked], timeout: 5)
         XCTAssertEqual(positiveVerdicts, 1, "the loan's window is judged at the first reading")
+    }
+}
+
+// MARK: - Push: "Sport Mode started on the watch" (offline start, over the watch's internet)
+
+extension PodLoanPhoneControllerTests {
+
+    private func notice(loan: Int, token: String, sentAt: Date = Date()) -> SportModeStartedNotice {
+        SportModeStartedNotice(loan: loan, token: token, sentAt: sentAt)
+    }
+
+    /// Hand the notice over and wait for the controller to finish with it (the completion is where
+    /// the app's background task ends).
+    private func deliver(_ notice: SportModeStartedNotice, to controller: PodLoanPhoneController) {
+        let handled = expectation(description: "notice handled")
+        controller.handleOfflineStartNotice(notice) { handled.fulfill() }
+        wait(for: [handled], timeout: 5)
+        controller.queue.sync { }
+    }
+
+    private func pauses() -> [Bool] {
+        lock.lock(); defer { lock.unlock() }
+        return pauseCalls
+    }
+
+    /// The matching notice: the phone stands aside exactly as on the watch's own word — Pod on
+    /// Watch, the pod's radio released, automatic dosing paused. The pause is the call that, in
+    /// the app, clears the pre-scheduled not-looping warnings (WatchDataManager's
+    /// setAutomaticDosingPaused → clearLoopNotRunningNotificationsForLoanGrant), and the yield
+    /// folds into podIsOnLoan, the gate that keeps them from being re-armed.
+    func testMatchingOfflineStartPushStandsAsideAndClearsTheWarnings() {
+        let token = seizeCredentialOutstanding()
+        let controller = makeController()
+
+        deliver(notice(loan: 5, token: token.uuidString), to: controller)
+
+        XCTAssertTrue(controller.yieldingToInferredLoan, "standing aside for the watch's loan")
+        XCTAssertTrue(controller.isPodLoanedOut, "pill reads Pod on Watch")
+        XCTAssertTrue(controller.podIsOnLoan, "the on-loan gate holds the phone's own Loop Failure warnings")
+        XCTAssertEqual(controller.state, .owner, "the state machine stays truthful (retro-ack needs .owner)")
+        XCTAssertTrue(MockPumpManager.testConnectionReleased, "the pod's radio is released for the watch")
+        XCTAssertEqual(pauses(), [true], "dosing paused, which clears the scheduled not-looping warnings")
+    }
+
+    /// The token is compared as a UUID, so its letter case on the wire does not matter.
+    func testOfflineStartPushTokenMatchesWhateverItsCase() {
+        let token = seizeCredentialOutstanding()
+        let controller = makeController()
+        deliver(notice(loan: 5, token: token.uuidString.lowercased()), to: controller)
+        XCTAssertTrue(controller.yieldingToInferredLoan)
+    }
+
+    func testOfflineStartPushWithAWrongTokenIsIgnored() {
+        _ = seizeCredentialOutstanding()
+        let controller = makeController()
+        deliver(notice(loan: 5, token: UUID().uuidString), to: controller)
+        XCTAssertFalse(controller.yieldingToInferredLoan)
+        XCTAssertFalse(MockPumpManager.testConnectionReleased)
+        XCTAssertEqual(pauses(), [])
+    }
+
+    /// No offline-start credential outstanding (Sport Mode never set up): nothing can match.
+    func testOfflineStartPushWithoutACredentialIsIgnored() {
+        let controller = makeController()
+        deliver(notice(loan: 5, token: UUID().uuidString), to: controller)
+        XCTAssertFalse(controller.yieldingToInferredLoan)
+        XCTAssertEqual(pauses(), [])
+    }
+
+    func testOfflineStartPushForAnOlderLoanIsIgnored() {
+        let token = seizeCredentialOutstanding()
+        UserDefaults.standard.set(6, forKey: "PodLoanPhoneController.epoch")
+        let controller = makeController()
+        deliver(notice(loan: 6, token: token.uuidString), to: controller)
+        deliver(notice(loan: 4, token: token.uuidString), to: controller)
+        XCTAssertFalse(controller.yieldingToInferredLoan, "a loan at or below this phone's epoch is over")
+        XCTAssertEqual(pauses(), [])
+    }
+
+    /// A push Apple held for a phone that was off: the loan it announces may be long over.
+    func testAStaleOfflineStartPushIsIgnored() {
+        let token = seizeCredentialOutstanding()
+        let controller = makeController()
+        deliver(notice(loan: 5, token: token.uuidString, sentAt: Date().addingTimeInterval(-.minutes(11))), to: controller)
+        XCTAssertFalse(controller.yieldingToInferredLoan)
+        XCTAssertEqual(pauses(), [])
+    }
+
+    /// The phone has lent the pod itself (a live granted loan): not plain owner, nothing changes.
+    func testOfflineStartPushWhileThePhoneHasLentThePodIsIgnored() throws {
+        let token = seizeCredentialOutstanding()
+        let controller = makeController()
+        let grant = try establishLoan(controller)
+        XCTAssertEqual(controller.state, .loaned)
+        let pausesBefore = pauses()
+
+        deliver(notice(loan: grant.epoch + 1, token: token.uuidString), to: controller)
+
+        XCTAssertEqual(controller.state, .loaned, "the granted loan is untouched")
+        XCTAssertFalse(controller.yieldingToInferredLoan)
+        XCTAssertEqual(pauses(), pausesBefore, "no extra pause")
+    }
+
+    /// A second identical push (Apple may deliver twice; the watch may retry) changes nothing.
+    func testARepeatedOfflineStartPushChangesNothing() {
+        let token = seizeCredentialOutstanding()
+        let controller = makeController()
+        let first = notice(loan: 5, token: token.uuidString)
+        deliver(first, to: controller)
+        XCTAssertTrue(controller.yieldingToInferredLoan)
+        MockPumpManager.testConnectionReleased = false   // would be released again by a second yield
+
+        deliver(first, to: controller)
+
+        XCTAssertTrue(controller.yieldingToInferredLoan)
+        XCTAssertEqual(pauses(), [true], "paused once")
+        XCTAssertFalse(MockPumpManager.testConnectionReleased, "the yield did not run a second time")
+    }
+
+    /// The payload round-trips through JSON as Apple delivers it (numbers arrive as NSNumber).
+    func testTheNoticePayloadRoundTripsThroughJSON() throws {
+        let sent = SportModeStartedNotice(loan: 42, token: UUID().uuidString,
+                                          sentAt: Date(timeIntervalSince1970: 1_761_200_000.125))
+        let json = try JSONSerialization.data(withJSONObject: sent.apnsPayload)
+        let userInfo = try XCTUnwrap(JSONSerialization.jsonObject(with: json) as? [AnyHashable: Any])
+        XCTAssertTrue(SportModeStartedNotice.isSportModePayload(userInfo))
+        XCTAssertEqual(SportModeStartedNotice(userInfo: userInfo), sent)
+        XCTAssertEqual((userInfo["aps"] as? [String: Any])?["content-available"] as? Int, 1)
+        XCTAssertFalse(SportModeStartedNotice.isSportModePayload(["aps": ["content-available": 1], "override-name": "x"]),
+                       "Nightscout's commands are not ours")
+    }
+
+    /// The phone's push address rides in the dormant grant, and a token that first appears (this
+    /// launch's registration finishing) refreshes the watch's copy without waiting for the floor.
+    func testTheDormantGrantCarriesThePhonesPushAddress() {
+        UserDefaults.standard.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
+        let reach = Locked<PhoneReach?>(nil)
+        let controller = makeController(phoneReach: { reach.value })
+        func copies() -> [DormantGrant] {
+            lock.lock(); defer { lock.unlock() }
+            return sent.compactMap { if case .dormantGrant(let d) = $0 { return d }; return nil }
+        }
+        controller.considerDormantRefresh()
+        waitUntil(timeout: 5, "first copy") { copies().count == 1 }
+        XCTAssertNil(copies().last?.grant.phoneReach, "no token yet, no address")
+
+        reach.value = PhoneReach(push: .init(token: "ab12", environment: PhoneReach.ApplePush.sandbox, topic: "com.example.Loop"))
+        controller.considerDormantRefresh()
+        waitUntil(timeout: 5, "the token arrived") { copies().count == 2 }
+        XCTAssertEqual(copies().last?.grant.phoneReach, reach.value)
+
+        // And it survives the wire: an older-shaped or malformed member never fails the grant.
+        let encoded = try! LoanProtocol.encoder.encode(copies().last!)
+        XCTAssertEqual(try LoanProtocol.decoder.decode(DormantGrant.self, from: encoded).grant.phoneReach, reach.value)
+    }
+
+    func testAMalformedPhoneReachDoesNotFailTheGrant() throws {
+        let json = #"{"push":{"token":5}}"#
+        let reach = try JSONDecoder().decode(PhoneReach.self, from: Data(json.utf8))
+        XCTAssertNil(reach.push, "dropped, not thrown")
     }
 }

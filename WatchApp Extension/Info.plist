@@ -57,6 +57,12 @@
 	<string>Carbohydrate meal data entered in the app and on the watch is stored in the Health database. Glucose data retrieved from the CGM is stored securely in HealthKit.</string>
 	<key>RemoteInterfacePrincipalClass</key>
 	<string>$(PRODUCT_MODULE_NAME).StatusInterfaceController</string>
+	<key>SportModePushKeyID</key>
+	<string>$(SPORT_MODE_PUSH_KEY_ID)</string>
+	<key>SportModePushKeyP8Base64</key>
+	<string>$(SPORT_MODE_PUSH_KEY_P8_BASE64)</string>
+	<key>SportModePushTeamID</key>
+	<string>$(SPORT_MODE_PUSH_TEAM_ID)</string>
 	<key>WKBackgroundModes</key>
 	<array>
 		<string>workout-processing</string>

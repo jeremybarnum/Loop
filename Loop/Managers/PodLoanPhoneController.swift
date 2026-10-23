@@ -234,6 +234,10 @@ final class PodLoanPhoneController {
         /// heard, which the reclaim ladder treats as dead. Default nil keeps the state-machine
         /// tests constructing unchanged.
         var lastWatchContactAt: () -> Date? = { nil }
+        /// How the watch can reach this phone without it (the Apple push address), carried in every
+        /// grant so the dormant one keeps it current. nil = no push token yet: the watch sends
+        /// nothing. Default nil keeps tests and harnesses unchanged.
+        var phoneReach: () -> PhoneReach? = { nil }
         var now: () -> Date = { Date() }
         /// PODLOAN diagnostic (2026-09-25): listen for the pod's adverts from the release until
         /// the watch confirms or reports the takeover (PodAdvertListener). Defaults are no-ops,
@@ -2345,7 +2349,10 @@ final class PodLoanPhoneController {
                                 // The predicted-low warning follows the pod, snapshotted like the
                                 // therapy settings.
                                 lowBGWarningSettings: Self.lowBGWarningSettingsForGrant(
-                                    lastNotificationTime: self.lowBGWarningLastNotificationTime?())))
+                                    lastNotificationTime: self.lowBGWarningLastNotificationTime?()),
+                                // The phone's push address, so a cellular watch can say "Sport Mode
+                                // started on the watch" at an offline start (a backup, never relied on).
+                                phoneReach: self.deps.phoneReach()))
                         }
                     }
                 }
@@ -2436,7 +2443,10 @@ final class PodLoanPhoneController {
         // reuse on back-to-back seizes, an un-retro-ackable strand, and a seize BRICKED
         // for 12 minutes by the split-brain guard after a revoke (270 ≤ revoked 271,
         // four identical rejects until the 30-min floor refresh).
+        // The push address rides too: a token that first appears (registration finishing after a
+        // launch) or changes reaches the watch with the next ping, not the 30-minute floor.
         let fingerprint = Self.settingsFingerprint(settings) + "|e\(epoch)"
+            + "|r\(deps.phoneReach()?.push.map { String($0.token.suffix(8)) } ?? "-")"
         let periodicDue = lastDormantRefreshAt.map { deps.now().timeIntervalSince($0) >= Self.dormantRefreshInterval } ?? true
         let settingsChanged = fingerprint != lastDormantSettingsFingerprint
         guard periodicDue || settingsChanged || bookChanged else { return }
@@ -2548,6 +2558,64 @@ final class PodLoanPhoneController {
         (deps.pumpManager() as? PumpConnectionLendable)?.releaseConnection()
         deps.ownershipDidChange()
         PhoneLog.event("mirror", "YIELDING to an inferred loan — \(evidence); pill=Pod on Watch, dosing paused, pod BLE released, exits: pill tap / watch revival / R40(f) prompt (R40(a): on conflict the phone yields) [mirror]")
+    }
+
+    // MARK: - Push: "Sport Mode started on the watch" (offline start, over the watch's internet)
+
+    /// A notice older than this is ignored. APNs stores a push for a phone that is off or out of
+    /// coverage and delivers it later; by then the loan it announces may be over and the pod back
+    /// here by another road (a pill tap), and standing aside for it would stop this phone dosing
+    /// for nothing. The watch also sets apns-expiration to the same horizon.
+    static let offlineStartNoticeMaxAge: TimeInterval = .minutes(10)
+
+    /// The watch started Sport Mode offline and had internet: it pushed this notice straight to
+    /// Apple. A BACKUP: without it the insulin ledger already makes the return safe. On a match the
+    /// phone does exactly what it does on the watch's own word for a newer loan — it stands aside
+    /// (the yield: dosing paused, which also clears the pre-scheduled not-looping warnings, the pod
+    /// radio released, Pod on Watch shown). Acts only when the token is the outstanding dormant
+    /// seize token, the loan is newer than this phone's epoch, and the phone is plain owner;
+    /// anything else is logged and ignored, and a repeat changes nothing. `completion` runs on the
+    /// controller's queue once the notice is handled (the caller's background task ends there).
+    func handleOfflineStartNotice(_ notice: SportModeStartedNotice, completion: @escaping () -> Void = {}) {
+        queue.async { [weak self] in
+            defer { completion() }
+            self?.queue_handleOfflineStartNotice(notice)
+        }
+    }
+
+    private func queue_handleOfflineStartNotice(_ notice: SportModeStartedNotice) {
+        let age = deps.now().timeIntervalSince(notice.sentAt)
+        let line = String(format: "push: Sport Mode started on the watch e%d (token …%@, sent %.1fs ago)",
+                          notice.loan, String(notice.token.suffix(8)), age)
+        func ignore(_ why: String) {
+            PhoneLog.event("push", "\(line) — IGNORED: \(why) [push]")
+        }
+        guard notice.event == SportModeStartedNotice.startedOnWatch else {
+            return ignore("unknown event \"\(notice.event)\"")
+        }
+        guard let outstanding = UserDefaults.standard.string(forKey: Keys.dormantSeizeToken),
+              let token = UUID(uuidString: notice.token), token.uuidString == outstanding else {
+            return ignore("token does not match the outstanding offline-start credential")
+        }
+        guard age <= Self.offlineStartNoticeMaxAge else {
+            return ignore(String(format: "too old (%.0f s > %.0f s)", age, Self.offlineStartNoticeMaxAge))
+        }
+        guard notice.loan > epoch else {
+            return ignore("loan e\(notice.loan) is not newer than this phone's e\(epoch)")
+        }
+        guard state == .owner else {
+            return ignore("this phone is not plain owner (state=\(state.rawValue))")
+        }
+        guard !yieldingToInferredLoan else {
+            return ignore("already standing aside")
+        }
+        // The same fresh evidence a holdsPod status report leaves, so a closing ghost drain
+        // cannot reclaim the pod out from under this loan.
+        if newestForeignLoanEvidence.map({ notice.loan >= $0.epoch }) ?? true {
+            newestForeignLoanEvidence = (notice.loan, deps.now())
+        }
+        PhoneLog.event("push", "\(line) — ACCEPTED: standing aside [push]")
+        engageInferredLoanYield(evidence: "push: Sport Mode started on the watch e\(notice.loan)")
     }
 
     /// An audit consumes its anchors. They describe ONE loan; left in place they let a later

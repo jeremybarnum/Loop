@@ -54,3 +54,9 @@ URL_SCHEME_NAME = $(MAIN_APP_DISPLAY_NAME)
 // Optional overrides
 #include? "LoopOverride.xcconfig"
 #include? "../LoopConfigOverride.xcconfig"
+
+// Sport Mode (production line): the APNs key a cellular watch signs "Sport Mode started on the
+// watch" with. Optional and git-ignored, written by ops/push/install-push-key.sh; absent or empty,
+// the feature is off. Defines SPORT_MODE_PUSH_KEY_ID, SPORT_MODE_PUSH_TEAM_ID and
+// SPORT_MODE_PUSH_KEY_P8_BASE64, read by the watch extension's Info.plist.
+#include? "../SportModePush.local.xcconfig"

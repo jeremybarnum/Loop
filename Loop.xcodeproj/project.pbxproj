@@ -635,6 +635,7 @@
 		FADE00040000000000000022 /* StockLoopStack.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000012 /* StockLoopStack.swift */; };
 		FADE00040000000000000023 /* LoanEventJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000013 /* LoanEventJournal.swift */; };
 		FADE00040000000000000024 /* PodLoanWatchController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000014 /* PodLoanWatchController.swift */; };
+		5B0A7E0100000000000000A2 /* SportModePushSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B0A7E0100000000000000A1 /* SportModePushSender.swift */; };
 		FADE00040000000000000025 /* StockLoopSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000015 /* StockLoopSession.swift */; };
 		FADE00040000000000000026 /* LoanDebugController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000016 /* LoanDebugController.swift */; };
 		FADE00040000000000000027 /* GlanceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000017 /* GlanceController.swift */; };
@@ -1540,6 +1541,7 @@
 		FADE00040000000000000012 /* StockLoopStack.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = StockLoopStack.swift; sourceTree = "<group>"; };
 		FADE00040000000000000013 /* LoanEventJournal.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoanEventJournal.swift; sourceTree = "<group>"; };
 		FADE00040000000000000014 /* PodLoanWatchController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PodLoanWatchController.swift; sourceTree = "<group>"; };
+		5B0A7E0100000000000000A1 /* SportModePushSender.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SportModePushSender.swift; sourceTree = "<group>"; };
 		FADE00040000000000000015 /* StockLoopSession.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = StockLoopSession.swift; sourceTree = "<group>"; };
 		FADE00040000000000000016 /* LoanDebugController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoanDebugController.swift; sourceTree = "<group>"; };
 		FADE00040000000000000017 /* GlanceController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = GlanceController.swift; sourceTree = "<group>"; };
@@ -2908,6 +2910,7 @@
 				FADE00040000000000000012 /* StockLoopStack.swift */,
 				FADE00040000000000000013 /* LoanEventJournal.swift */,
 				FADE00040000000000000014 /* PodLoanWatchController.swift */,
+				5B0A7E0100000000000000A1 /* SportModePushSender.swift */,
 				FADE00040000000000000015 /* StockLoopSession.swift */,
 				FADE00040000000000000016 /* LoanDebugController.swift */,
 				FADE00040000000000000017 /* GlanceController.swift */,
@@ -3923,6 +3926,7 @@
 				FADE00040000000000000022 /* StockLoopStack.swift in Sources */,
 				FADE00040000000000000023 /* LoanEventJournal.swift in Sources */,
 				FADE00040000000000000024 /* PodLoanWatchController.swift in Sources */,
+				5B0A7E0100000000000000A2 /* SportModePushSender.swift in Sources */,
 				FADE00040000000000000025 /* StockLoopSession.swift in Sources */,
 				FADE00040000000000000026 /* LoanDebugController.swift in Sources */,
 				FADE00040000000000000027 /* GlanceController.swift in Sources */,

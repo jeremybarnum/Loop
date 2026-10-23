@@ -859,6 +859,12 @@ extension DeviceDataManager {
         watchManager.podLoanController.reclaimNow()
     }
 
+    /// Sport Mode: the watch's push "Sport Mode started on the watch" (offline start). Routed to
+    /// the loan controller, never to the services.
+    func handleSportModeStartedNotice(_ notice: SportModeStartedNotice) {
+        watchManager?.handleSportModeStartedNotice(notice)
+    }
+
     /// PODLOAN: loan state for UI (watchManager is file-private; the status screen and
     /// the pump tile need these). `isPodLoanedToWatch` = any non-owner state;
     /// `isPodLoanReclaiming` = actively coming home — reconciling/reclaimPending OR the

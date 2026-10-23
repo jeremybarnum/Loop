@@ -38,6 +38,13 @@ class SettingsManager {
 
     private var remoteNotificationRegistrationResult: Swift.Result<Data,Error>?
 
+    /// Sport Mode: this phone's APNs device token (hex), readable from any queue — the loan
+    /// controller puts it in the grant so a cellular watch can push "Sport Mode started on the
+    /// watch". Seeded from the last stored settings so a refresh before this launch's
+    /// registration completes still carries it; replaced when registration succeeds.
+    private let lockedPushDeviceToken = Locked<String?>(nil)
+    var remotePushDeviceToken: String? { lockedPushDeviceToken.value }
+
     private var cancellables: Set<AnyCancellable> = []
 
     private let log = OSLog(category: "SettingsManager")
@@ -49,6 +56,7 @@ class SettingsManager {
 
         if let storedSettings = settingsStore.latestSettings {
             latestSettings = storedSettings
+            lockedPushDeviceToken.value = storedSettings.deviceToken
         } else {
             log.default("SettingsStore has no latestSettings: initializing empty StoredSettings.")
             latestSettings = StoredSettings()
@@ -200,6 +208,9 @@ class SettingsManager {
 
     func remoteNotificationRegistrationDidFinish(_ result: Swift.Result<Data,Error>) {
         self.remoteNotificationRegistrationResult = result
+        if case .success(let token) = result {
+            lockedPushDeviceToken.value = token.hexadecimalString
+        }
         storeSettings()
     }
 

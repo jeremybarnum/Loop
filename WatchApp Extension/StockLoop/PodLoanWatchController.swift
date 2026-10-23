@@ -656,6 +656,15 @@ final class PodLoanWatchController {
     /// reunion exists for.
     private var pendingSeizeToken: UUID?
 
+    /// The offline start whose activation is in flight and owes the phone the push "Sport Mode
+    /// started on the watch" once it is ACTIVE. Set at the confirm, keyed by the epoch the
+    /// activation minted, consumed once at .active; a normal grant clears it (it supersedes any
+    /// seize that never proved out). Queue-confined.
+    private var offlineStartNoticeDue: (token: UUID, epoch: Int)?
+
+    /// Sends that push (production: the APNs key built in, URLSession). Injectable for tests.
+    lazy var offlineStartNoticeSender: OfflineStartNoticeSending = SportModePushSender.fromBundle()
+
     /// True while THIS loan attempt is seize-flavored, for the [seize] grep tag on ladder
     /// and abort lines. Two sources because the fold consumes the pending token early
     /// (persisting it), which made post-fold aborts log untagged on 2026-08-30.
@@ -720,6 +729,7 @@ final class PodLoanWatchController {
             // mid-takeover lease guard kills it at read 1 (the first field seize, 2026-08-30).
             let leaseUntil = self.now().addingTimeInterval(Self.seizeActivationLease)
             self.pendingSeizeToken = dormant.seizeToken
+            self.offlineStartNoticeDue = (dormant.seizeToken, newEpoch)
             // Belt on the timeout's cancel: the seize is the strongest possible statement
             // that no queued request should ever reach the phone (its grant would collide
             // with the loan being started RIGHT NOW).
@@ -734,6 +744,16 @@ final class PodLoanWatchController {
             self.handleGrant(dormant.grant.withEpoch(newEpoch, leaseUntil: leaseUntil))
             self.seizeActivationInFlight = false
         }
+    }
+
+    /// An offline start just became ACTIVE: tell the phone over the internet, once. Whether
+    /// anything is actually sent (a key built in, a push address in the grant, a network) is the
+    /// sender's business and it logs the outcome; nothing here waits on it.
+    private func sendOfflineStartNoticeIfDue(grant: LoanGrant) {
+        guard let due = offlineStartNoticeDue, due.epoch == grant.epoch else { return }
+        offlineStartNoticeDue = nil
+        let notice = SportModeStartedNotice(loan: grant.epoch, token: due.token.uuidString, sentAt: now())
+        offlineStartNoticeSender.sendOfflineStartNotice(notice, reach: grant.phoneReach)
     }
 
     func dismissSeize() {
@@ -1070,7 +1090,10 @@ final class PodLoanWatchController {
         // A REAL grant supersedes any seize attempt that never proved out: drop the pending
         // reunion token so this (normal) loan's ACTIVE flip cannot promote a seize identity
         // it does not own. Covers every route to .active — they all pass through here first.
-        if !seizeActivationInFlight { pendingSeizeToken = nil }
+        if !seizeActivationInFlight {
+            pendingSeizeToken = nil
+            offlineStartNoticeDue = nil
+        }
 
         /// Order matters here. The timeout is cancelled AFTER the phase check and BEFORE the
         /// rejections: a grant we are going to act on stops the timeout, but a rejected one must
@@ -1529,6 +1552,7 @@ final class PodLoanWatchController {
                         self.pendingSeizeToken = nil
                         SportLog.event("seize", "seized loan ACTIVE — reunion token …\(String(token.uuidString.suffix(8))) persisted for the offer echo [seize]")
                     }
+                    self.sendOfflineStartNoticeIfDue(grant: grant)
                     self.loopManager.pumpManager = manager
                     self.loopManager.loanDoseRecorder = self
                     self.onLoanActiveChanged?(true)
@@ -3232,6 +3256,11 @@ final class PodLoanWatchController {
     func ingestGrantCarbsForTesting(_ grant: LoanGrant) { queue.sync { ingestGrantCarbs(grant) } }
     /// TEST SEAM: the final (released) stage, as finalizeHandback leaves it.
     func enterFinalStageForTesting() { queue.sync { handbackRequested = false; phase = .handingBack; finalOfferSent = true } }
+    /// TEST SEAM: the ACTIVE flip's push hook, for a grant that reached .active (a test cannot
+    /// take a real pod over).
+    func noteActiveForTesting(grant: LoanGrant) { queue.sync { sendOfflineStartNoticeIfDue(grant: grant) } }
+    /// TEST SEAM: a grant arriving the normal way (from the phone).
+    func receiveGrantForTesting(_ grant: LoanGrant) { queue.sync { handleGrant(grant) } }
     #endif
 
     private func sendMessage(_ message: LoanMessage, urgentOnly: Bool = false) {
@@ -3900,6 +3929,7 @@ extension LoanGrant {
                   integralRetrospectiveCorrectionEnabled: integralRetrospectiveCorrectionEnabled,
                   phoneClosedLoopEnabled: phoneClosedLoopEnabled, carbHistory: carbHistory,
                   glucoseHistory: glucoseHistory, predictionSnapshot: predictionSnapshot,
-                  lastLoopCompleted: lastLoopCompleted, lowBGWarningSettings: lowBGWarningSettings)
+                  lastLoopCompleted: lastLoopCompleted, lowBGWarningSettings: lowBGWarningSettings,
+                  phoneReach: phoneReach)
     }
 }

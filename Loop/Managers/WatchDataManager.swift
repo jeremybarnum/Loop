@@ -467,6 +467,9 @@ final class WatchDataManager: NSObject {
             isWatchReachable: { [weak self] in self?.watchSession?.isReachable ?? false },
             isBluetoothPoweredOff: { [weak self] in self?.deviceManager.bluetoothProvider.bluetoothState == .poweredOff },
             lastWatchContactAt: { [weak self] in self?.lockedLastWatchContact.value ?? nil },
+            phoneReach: { [weak self] in
+                Self.phoneReach(pushToken: self?.deviceManager.settingsManager.remotePushDeviceToken)
+            },
             listenForPodAdverts: { [weak self] epoch in self?.podAdvertListener.listen(epoch: epoch) },
             stopListeningForPodAdverts: { [weak self] epoch, reason in self?.podAdvertListener.stop(epoch: epoch, reason: reason) }
         ))
@@ -481,6 +484,57 @@ final class WatchDataManager: NSObject {
         }
         return controller
     }()
+
+    // MARK: - Sport Mode: the watch's push at an offline start
+
+    /// The phone's Apple push address for the grant: its device token, the push environment it
+    /// was signed for, and its bundle identifier as the topic. nil without a token (simulator,
+    /// registration failed, not yet registered): the watch then sends nothing.
+    static func phoneReach(pushToken: String?, bundle: Bundle = .main) -> PhoneReach? {
+        guard let token = pushToken, !token.isEmpty, let topic = bundle.bundleIdentifier else { return nil }
+        return PhoneReach(push: PhoneReach.ApplePush(token: token, environment: pushEnvironment, topic: topic))
+    }
+
+    /// "sandbox" for a build signed with a development profile (Xcode, devicectl), "production"
+    /// otherwise: an ad-hoc profile says production, and a TestFlight or App Store build carries
+    /// no embedded.mobileprovision at all. Read once; it cannot change while the app runs.
+    static let pushEnvironment: String = {
+        guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+              let data = try? Data(contentsOf: url) else {
+            return PhoneReach.ApplePush.production
+        }
+        return apsEnvironment(fromProvisioningProfile: data) == "development"
+            ? PhoneReach.ApplePush.sandbox : PhoneReach.ApplePush.production
+    }()
+
+    /// The `aps-environment` entitlement inside a provisioning profile (a signed envelope around
+    /// a plist; the plist is located by its markers and parsed alone).
+    static func apsEnvironment(fromProvisioningProfile data: Data) -> String? {
+        guard let start = data.range(of: Data("<?xml".utf8)),
+              let end = data.range(of: Data("</plist>".utf8), in: start.lowerBound..<data.endIndex) else { return nil }
+        let plistData = data.subdata(in: start.lowerBound..<end.upperBound)
+        guard let plist = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: nil) as? [String: Any],
+              let entitlements = plist["Entitlements"] as? [String: Any] else { return nil }
+        return entitlements["aps-environment"] as? String
+    }
+
+    /// The push arrived: hand it to the loan controller under a background task, so a phone
+    /// iOS just woke stays awake until the controller has acted (the yield releases the pod's
+    /// radio and clears the pending not-looping warnings).
+    func handleSportModeStartedNotice(_ notice: SportModeStartedNotice) {
+        var task: UIBackgroundTaskIdentifier = .invalid
+        let end = {
+            guard task != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(task)
+            task = .invalid
+        }
+        task = UIApplication.shared.beginBackgroundTask(withName: "SportModeStartedNotice") {
+            end()
+        }
+        podLoanController.handleOfflineStartNotice(notice) {
+            DispatchQueue.main.async { end() }
+        }
+    }
 
     /// ~30 s of continued execution across a reclaim, so tap-and-pocket completes ON SCHEDULE
     /// instead of freezing the ladder and orphaning the pod until the next foreground.

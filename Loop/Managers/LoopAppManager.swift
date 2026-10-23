@@ -384,6 +384,20 @@ class LoopAppManager: NSObject {
         guard let notification = notification else {
             return false
         }
+        // Sport Mode's own push ("Sport Mode started on the watch", sent by a cellular watch at an
+        // offline start) goes to the loan controller, never to the services' command parser.
+        if SportModeStartedNotice.isSportModePayload(notification) {
+            guard let notice = SportModeStartedNotice(userInfo: notification) else {
+                PhoneLog.event("push", "Sport Mode push with an unreadable payload — ignored [push]")
+                return true
+            }
+            guard let deviceDataManager = deviceDataManager else {
+                PhoneLog.event("push", "Sport Mode push e\(notice.loan) before the app finished launching — ignored [push]")
+                return true
+            }
+            deviceDataManager.handleSportModeStartedNotice(notice)
+            return true
+        }
         deviceDataManager?.servicesManager.handleRemoteNotification(notification)
         return true
     }

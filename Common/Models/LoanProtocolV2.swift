@@ -630,6 +630,13 @@ public struct LoanGrant: Codable, Equatable {
     /// takeover instead of resetting and double-warning minutes after the phone just fired.
     public let lowBGWarningSettings: LoanLowBGWarningSettings?
 
+    /// How the watch can reach this phone, and later the services, without the phone: today the
+    /// phone's Apple push address, which a cellular watch uses to say "Sport Mode started on the
+    /// watch" at an offline start. Rides in every grant, so the dormant grant the phone keeps
+    /// refreshing always carries the current push token. nil = an older phone, or no push token
+    /// yet: nothing is sent. An older watch ignores the key.
+    public let phoneReach: PhoneReach?
+
     public init(epoch: Int, expiresAt: Date, pumpManagerRawState: Data, podAddress: UInt32,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
                 doseHistory: [LoanDoseRecord], boundaryRecord: LoanDoseRecord?,
@@ -641,7 +648,8 @@ public struct LoanGrant: Codable, Equatable {
                 glucoseHistory: [LoanGlucoseRecord]? = nil,
                 predictionSnapshot: LoanPredictionSnapshot? = nil,
                 lastLoopCompleted: Date? = nil,
-                lowBGWarningSettings: LoanLowBGWarningSettings? = nil) {
+                lowBGWarningSettings: LoanLowBGWarningSettings? = nil,
+                phoneReach: PhoneReach? = nil) {
         self.epoch = epoch
         self.expiresAt = expiresAt
         self.pumpManagerRawState = pumpManagerRawState
@@ -659,7 +667,108 @@ public struct LoanGrant: Codable, Equatable {
         self.predictionSnapshot = predictionSnapshot
         self.lastLoopCompleted = lastLoopCompleted
         self.lowBGWarningSettings = lowBGWarningSettings
+        self.phoneReach = phoneReach
     }
+}
+
+/// How the watch can reach the phone (and, from the next batch, the services the phone uploads
+/// to) when the phone is not beside it. One container so it can grow without new grant fields:
+/// each member is optional, and a member that does not decode is dropped rather than failing the
+/// grant it rides in (a grant that will not decode strands an offline start).
+public struct PhoneReach: Codable, Equatable {
+    /// The phone app's Apple push address.
+    public struct ApplePush: Codable, Equatable {
+        public static let sandbox = "sandbox"
+        public static let production = "production"
+
+        /// The APNs device token, hex.
+        public let token: String
+        /// "sandbox" (a build installed from Xcode or devicectl) or "production" (TestFlight).
+        /// A String, not an enum: an unknown value must not fail the decode.
+        public let environment: String
+        /// The phone app's bundle identifier (the apns-topic).
+        public let topic: String
+
+        public init(token: String, environment: String, topic: String) {
+            self.token = token
+            self.environment = environment
+            self.topic = topic
+        }
+    }
+
+    public let push: ApplePush?
+
+    public init(push: ApplePush?) {
+        self.push = push
+    }
+
+    private enum CodingKeys: String, CodingKey { case push }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        push = try? c.decodeIfPresent(ApplePush.self, forKey: .push)
+    }
+}
+
+/// The notice a cellular watch pushes to the phone at an offline start: "Sport Mode started on the
+/// watch". The APNs payload is `{"aps":{"content-available":1},"sport-mode":{"event","loan","token",
+/// "sent-at"}}`; both sides build and read it here so the keys cannot drift. `token` is the dormant
+/// grant's seize token, a secret the phone issued: the phone acts only on a matching one, so the
+/// push key alone cannot fake a start.
+public struct SportModeStartedNotice: Equatable {
+    public static let payloadKey = "sport-mode"
+    public static let startedOnWatch = "started-on-watch"
+
+    public let event: String
+    /// The seized loan's epoch.
+    public let loan: Int
+    public let token: String
+    public let sentAt: Date
+
+    public init(event: String = SportModeStartedNotice.startedOnWatch, loan: Int, token: String, sentAt: Date) {
+        self.event = event
+        self.loan = loan
+        self.token = token
+        self.sentAt = sentAt
+    }
+
+    /// The whole APNs body (a silent push).
+    public var apnsPayload: [String: Any] {
+        ["aps": ["content-available": 1],
+         Self.payloadKey: ["event": event, "loan": loan, "token": token,
+                           "sent-at": Self.iso8601.string(from: sentAt)]]
+    }
+
+    /// Reads the notice out of a received push's userInfo. nil when the payload is not ours or is
+    /// incomplete.
+    public init?(userInfo: [AnyHashable: Any]) {
+        guard let body = userInfo[Self.payloadKey] as? [String: Any],
+              let event = body["event"] as? String,
+              let token = body["token"] as? String else { return nil }
+        let loan: Int
+        if let number = body["loan"] as? NSNumber {
+            loan = number.intValue
+        } else if let text = body["loan"] as? String, let value = Int(text) {
+            loan = value
+        } else {
+            return nil
+        }
+        guard let sentText = body["sent-at"] as? String,
+              let sentAt = Self.iso8601.date(from: sentText) ?? Self.iso8601Plain.date(from: sentText) else { return nil }
+        self.init(event: event, loan: loan, token: token, sentAt: sentAt)
+    }
+
+    /// True when the payload carries our key at all, decodable or not (so the services never see it).
+    public static func isSportModePayload(_ userInfo: [AnyHashable: Any]) -> Bool {
+        userInfo[payloadKey] != nil
+    }
+
+    private static let iso8601: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let iso8601Plain = ISO8601DateFormatter()
 }
 
 /// The phone's predicted-low warning configuration, snapshotted into the grant.
