@@ -80,6 +80,25 @@ final class LoanProtocolV2Tests: XCTestCase {
                             doseHistory: [], boundaryRecord: nil)
         guard case .grant(let g2) = try roundTrip(.grant(old)) else { return XCTFail("not a grant") }
         XCTAssertNil(g2.carbHistory)
+        XCTAssertNil(carb.createdByCurrentApp, "a record built without the flag carries none: the watch keeps it protected")
+    }
+
+    /// The phone's authorship flag rides the wire, so the watch can offer Delete only where the
+    /// phone would delete (2026-10-22, next-dev 2116be40).
+    func testGrantCarbAuthorshipRoundTrips() throws {
+        let now = Date(timeIntervalSince1970: 1_784_338_000.125)
+        let own = LoanCarbRecord(syncIdentifier: "own", provenanceIdentifier: "com.loopkit.Loop", syncVersion: 1,
+                                 startDate: now, grams: 20, absorptionTime: .hours(3), foodType: nil,
+                                 userCreatedDate: now, userUpdatedDate: nil, createdByCurrentApp: true)
+        let other = LoanCarbRecord(syncIdentifier: "other", provenanceIdentifier: "com.other.app", syncVersion: 1,
+                                   startDate: now, grams: 30, absorptionTime: .hours(3), foodType: nil,
+                                   userCreatedDate: now, userUpdatedDate: nil, createdByCurrentApp: false)
+        let grant = LoanGrant(epoch: 7, expiresAt: now.addingTimeInterval(300),
+                              pumpManagerRawState: Data([1]), podAddress: 0,
+                              therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
+                              doseHistory: [], boundaryRecord: nil, carbHistory: [own, other])
+        guard case .grant(let g) = try roundTrip(.grant(grant)) else { return XCTFail("not a grant") }
+        XCTAssertEqual(g.carbHistory?.map(\.createdByCurrentApp), [true, false])
     }
 
     func testGrantGlucoseHistoryRoundTrips() throws {

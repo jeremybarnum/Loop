@@ -55,6 +55,8 @@ final class LoanCarbListModel: ObservableObject {
         let entry: StoredCarbEntry
         let timeText: String
         let gramsText: String
+        /// Delete is offered only where the phone would delete too (PodLoanWatchController.canDeleteOnWatch).
+        var deletable: Bool = true
         static func == (a: Row, b: Row) -> Bool { a.id == b.id }
     }
 
@@ -95,7 +97,8 @@ final class LoanCarbListModel: ObservableObject {
                 Row(id: entry.syncIdentifier ?? "\(entry.startDate.timeIntervalSince1970)-\(entry.quantity.doubleValue(for: .gram()))",
                     entry: entry,
                     timeText: Self.timeFormatter.string(from: entry.startDate),
-                    gramsText: String(format: "%.0f g", entry.quantity.doubleValue(for: .gram())))
+                    gramsText: String(format: "%.0f g", entry.quantity.doubleValue(for: .gram())),
+                    deletable: session.loanController.canDeleteOnWatch(entry))
             }
             DispatchQueue.main.async { self.rows = rows }
         }
@@ -156,12 +159,14 @@ struct LoanCarbListView: View {
                             .font(.system(size: 14))
                             .foregroundColor(.secondary)
                     }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            model.delete(row)
-                        } label: {
-                            Label(NSLocalizedString("Delete", comment: "Watch carb list swipe action"),
-                                  systemImage: "trash")
+                    .swipeActions(edge: .trailing, allowsFullSwipe: row.deletable) {
+                        if row.deletable {
+                            Button(role: .destructive) {
+                                model.delete(row)
+                            } label: {
+                                Label(NSLocalizedString("Delete", comment: "Watch carb list swipe action"),
+                                      systemImage: "trash")
+                            }
                         }
                     }
                 }

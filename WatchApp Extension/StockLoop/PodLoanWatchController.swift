@@ -350,6 +350,12 @@ final class PodLoanWatchController {
     /// the drain is fully acked does finalizeHandback() stop dosing and send the
     /// final (released=true) offer. In-memory only: any relaunch ends the loan.
     private var handbackRequested = false
+    /// A watch bolus counts from the tap, not from the pod's acceptance (next-dev 8c4c778e). Between
+    /// the two it can wait up to a minute for the sensor's radio window and the pod's reconnect, and
+    /// an End accepted in that minute aborted the reconnect: the bolus was never sent (builds 227 and
+    /// 228, three times). Set and cleared on this queue, beside End's own check, so a bolus and an End
+    /// can never both go ahead. Once the pod accepts, its bolus state carries the rest.
+    private var watchBolusBeingSent = false
     /// A released, revoked or relaunch-ended loan whose final offer the phone has not yet
     /// acknowledged. While true the watch rests in the drain, offering it — whatever else
     /// happens (a refusal, a Start that times out) — because the phone stays loaned, with
@@ -2014,6 +2020,25 @@ final class PodLoanWatchController {
     /// grant wipes to zero, so phone-side deletions propagate. Safe because carbs are ONE-WAY
     /// phone→watch in v1: watch-entered carbs are not returned (see `loanDidRecordCarbs`), so the
     /// watch never legitimately holds a carb the phone doesn't. Full bidirectional sync is future work.
+    /// The copied carbs the phone's Loop wrote (by sync identifier), from the latest grant. The phone
+    /// deletes only its own entries, so the watch offers Delete only on these and on entries made on
+    /// the watch: deleting another app's entry here left the phone dosing for carbs the watch no
+    /// longer counted (next-dev 2116be40). Read from the carb list on the main thread.
+    private let phoneLoopCarbLock = NSLock()
+    private var phoneLoopCarbIDs: Set<String> = []
+
+    private func setPhoneLoopCarbIDs(_ ids: Set<String>) {
+        phoneLoopCarbLock.lock(); phoneLoopCarbIDs = ids; phoneLoopCarbLock.unlock()
+    }
+
+    /// True for an entry made on the watch, or copied from the phone and written by the phone's Loop.
+    func canDeleteOnWatch(_ entry: StoredCarbEntry) -> Bool {
+        if entry.createdByCurrentApp { return true }
+        guard let id = entry.syncIdentifier else { return false }
+        phoneLoopCarbLock.lock(); defer { phoneLoopCarbLock.unlock() }
+        return phoneLoopCarbIDs.contains(id)
+    }
+
     private func ingestGrantCarbs(_ grant: LoanGrant) {
         let phoneCOB = grant.predictionSnapshot?.cobGrams
         let phoneCOBStr = phoneCOB.map { String(format: "%.1f", $0) } ?? "n/a"
@@ -2021,6 +2046,7 @@ final class PodLoanWatchController {
         // decay, so a 98-second-old phone COB is legitimately a couple of grams under a fresh one.
         let snapshotAge = grant.predictionSnapshot.map { self.now().timeIntervalSince($0.snapshotAt) }
         let carbs = grant.carbHistory ?? []
+        setPhoneLoopCarbIDs(Set(carbs.filter { $0.createdByCurrentApp == true }.compactMap(\.syncIdentifier)))
         let objects: [SyncCarbObject] = carbs.map { c in
             SyncCarbObject(
                 absorptionTime: c.absorptionTime,
@@ -2212,10 +2238,29 @@ final class PodLoanWatchController {
 
     // MARK: - Hand-back (§3.2 HANDING_BACK)
 
+    /// A manual bolus is tapped: refused while an End is waiting (the pod is going home; bolus from
+    /// the iPhone once it has it, next-dev e6c51691), otherwise marked as being sent until
+    /// `endWatchBolus`. Serial with `beginHandback`'s check on this queue. Never call from `queue`.
+    func beginWatchBolus() -> Bool {
+        queue.sync {
+            guard !handbackRequested else {
+                SportLog.event("loan", "MANUAL BOLUS REFUSED — an End is waiting for the iPhone")
+                return false
+            }
+            watchBolusBeingSent = true
+            return true
+        }
+    }
+
+    /// The bolus was accepted by the pod, or failed: End's own pod check carries it from here.
+    func endWatchBolus() {
+        queue.async { self.watchBolusBeingSent = false }
+    }
+
     /// Request a hand-back WITHOUT giving up control. Phase stays .active —
-    /// dosing, boluses, and the G7 loop all continue; the journal drains via interim
-    /// offers. When the drain is fully acked, finalizeHandback() stops dosing and
-    /// sends the final offer. Cancelable until then.
+    /// dosing, boluses, and the G7 loop all continue (no new manual bolus once End is waiting);
+    /// the journal drains via interim offers. When the drain is fully acked, finalizeHandback()
+    /// stops dosing and sends the final offer. Cancelable until then.
     func beginHandback() {
         #if targetEnvironment(simulator)
         if defaults.bool(forKey: "sim.fakeLoanFlow") { simDriveHandback(); return }
@@ -2229,6 +2274,13 @@ final class PodLoanWatchController {
                 SportLog.event("loan", "End REFUSED — the watch's bolus is still being delivered (\(wait))")
                 self.issueProtocolAlert(title: "Couldn't End Sport Mode",
                                         body: "A bolus is still being delivered. Tap End again \(wait).")
+                return
+            }
+            // ...nor while one is still on its way to the pod (see watchBolusBeingSent).
+            if self.watchBolusBeingSent {
+                SportLog.event("loan", "End REFUSED — a watch bolus is still being sent to the pod")
+                self.issueProtocolAlert(title: "Couldn't End Sport Mode",
+                                        body: "A bolus is still being sent to the pod. Tap End again in a minute.")
                 return
             }
             self.reunionPromptActive = false   // a manual End answers the R40(f) prompt too
@@ -3012,6 +3064,7 @@ final class PodLoanWatchController {
     }
     /// TEST SEAM: fire the hand-back budget's expiry without waiting two minutes.
     func expireHandbackForTesting() { queue.sync { handbackTimedOut() } }
+    func ingestGrantCarbsForTesting(_ grant: LoanGrant) { queue.sync { ingestGrantCarbs(grant) } }
     /// TEST SEAM: the final (released) stage, as finalizeHandback leaves it.
     func enterFinalStageForTesting() { queue.sync { handbackRequested = false; phase = .handingBack; finalOfferSent = true } }
     #endif

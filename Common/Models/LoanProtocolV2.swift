@@ -812,10 +812,14 @@ public struct LoanCarbRecord: Codable, Equatable {
     public let foodType: String?
     public let userCreatedDate: Date?
     public let userUpdatedDate: Date?
+    /// Whether the phone's Loop wrote this entry (stock's own authorship flag). The phone deletes
+    /// only its own entries, so the watch offers Delete only on these (next-dev 2116be40). Nil from
+    /// an older phone: the entry stays protected.
+    public let createdByCurrentApp: Bool?
 
     public init(syncIdentifier: String?, provenanceIdentifier: String, syncVersion: Int?,
                 startDate: Date, grams: Double, absorptionTime: TimeInterval?, foodType: String?,
-                userCreatedDate: Date?, userUpdatedDate: Date?) {
+                userCreatedDate: Date?, userUpdatedDate: Date?, createdByCurrentApp: Bool? = nil) {
         self.syncIdentifier = syncIdentifier
         self.provenanceIdentifier = provenanceIdentifier
         self.syncVersion = syncVersion
@@ -825,6 +829,7 @@ public struct LoanCarbRecord: Codable, Equatable {
         self.foodType = foodType
         self.userCreatedDate = userCreatedDate
         self.userUpdatedDate = userUpdatedDate
+        self.createdByCurrentApp = createdByCurrentApp
     }
 }
 

@@ -277,7 +277,15 @@ final class WatchLoopManager {
         _manualBolusStartedAt = inFlight ? self.now() : nil
         _manualBolusPendingUnits = inFlight ? units : nil
         manualBolusLock.unlock()
+        if !inFlight { endLoanBolus?() }
     }
+
+    /// Wired by StockLoopSession to the loan controller: a manual bolus asks before anything is
+    /// sent (refused while an End is waiting) and reports when the pod has accepted it or it failed,
+    /// so an End cannot be accepted while the bolus is on its way (PodLoanWatchController
+    /// `watchBolusBeingSent`).
+    var beginLoanBolus: (() -> Bool)?
+    var endLoanBolus: (() -> Void)?
 
     /// DELIVERY WINDOW — the half of a manual bolus that is otherwise invisible.
     ///
@@ -3095,6 +3103,12 @@ final class WatchLoopManager {
                     self.setManualBolusInFlight(false)
                     DispatchQueue.main.async { completion(error) }
                 }
+            }
+            guard self.beginLoanBolus?() ?? true else {
+                DispatchQueue.main.async {
+                    completion(WatchLoopError.enactFailed("Sport Mode is ending. Bolus from the iPhone once it has the pod."))
+                }
+                return
             }
             self.setManualBolusInFlight(true, units: rounded)
             // The pod link is orphaned so the G7 can use the radio — reclaim it before the

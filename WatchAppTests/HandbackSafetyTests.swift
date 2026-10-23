@@ -15,6 +15,7 @@
 
 import XCTest
 import UserNotifications
+import HealthKit
 import LoopKit
 import LoopCore
 @testable import WatchApp_Extension
@@ -145,6 +146,72 @@ final class HandbackSafetyTests: XCTestCase {
 
         c.beginHandback()
         XCTAssertFalse(c.debugSnapshot().endDidNotGoThrough, "until the next End")
+    }
+
+    // MARK: 2c — a watch bolus counts from the tap (2026-10-22; builds 227/228, next-dev 8c4c778e, e6c51691)
+
+    /// A bolus on its way to the pod (waiting for the sensor's radio window and the pod's
+    /// reconnect) refuses End, and says so; once the pod has it, End's own check carries it.
+    func testEndIsRefusedWhileAWatchBolusIsStillBeingSent() {
+        let alerts = RecordingWristAlertScheduler()
+        WristAlerts.scheduler = alerts
+        defer { WristAlerts.scheduler = UNUserNotificationCenter.current() }
+        let c = makeLiveLoan()
+        c.isPhoneReachable = { true }
+        var sent: [[String: Any]] = []
+        c.send = { sent.append($0) }
+
+        XCTAssertTrue(c.beginWatchBolus(), "no End waiting: the bolus goes ahead")
+        c.beginHandback()
+        let snap = c.debugSnapshot()
+        XCTAssertFalse(snap.handbackPending, "End refused while the bolus is on its way")
+        XCTAssertTrue(offers(in: sent).isEmpty, "nothing offered: the pod stays with the bolus")
+        XCTAssertEqual(alerts.pending.last?.content.title, "Couldn't End Sport Mode")
+
+        c.endWatchBolus()
+        c.beginHandback()
+        XCTAssertTrue(c.debugSnapshot().handbackPending, "the bolus reached the pod: End goes ahead")
+    }
+
+    /// The other order: once End is waiting for the phone, a new watch bolus is refused, so the
+    /// hand-back can never cut one off on its way to the pod.
+    func testAWatchBolusIsRefusedWhileAnEndIsWaiting() {
+        let c = makeLiveLoan()
+        c.isPhoneReachable = { true }
+        c.send = { _ in }
+        c.beginHandback()
+        XCTAssertTrue(c.debugSnapshot().handbackPending, "precondition: End is waiting")
+        XCTAssertFalse(c.beginWatchBolus(), "refused: bolus from the iPhone once it has the pod")
+    }
+
+    // MARK: 2d — Delete only where the phone would delete (2026-10-22, next-dev 2116be40)
+
+    /// A carb copied from the phone is deletable on the watch only when the phone's Loop wrote it;
+    /// another app's entry (the phone refuses to delete it) and one from an older phone that sent
+    /// no flag stay protected. An entry made on the watch is always deletable.
+    func testTheWatchOffersDeleteOnlyWhereThePhoneWouldDelete() {
+        let c = makeLiveLoan()
+        let now = Date()
+        func record(_ id: String, _ flag: Bool?) -> LoanCarbRecord {
+            LoanCarbRecord(syncIdentifier: id, provenanceIdentifier: "phone", syncVersion: 1, startDate: now,
+                           grams: 20, absorptionTime: .hours(3), foodType: nil, userCreatedDate: now,
+                           userUpdatedDate: nil, createdByCurrentApp: flag)
+        }
+        let grant = LoanGrant(epoch: 7, expiresAt: now.addingTimeInterval(300), pumpManagerRawState: Data([1]),
+                              podAddress: 0, therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
+                              doseHistory: [], boundaryRecord: nil,
+                              carbHistory: [record("own", true), record("other", false), record("old", nil)])
+        c.ingestGrantCarbsForTesting(grant)
+
+        func copied(_ id: String) -> StoredCarbEntry {
+            StoredCarbEntry(startDate: now, quantity: HKQuantity(unit: .gram(), doubleValue: 20),
+                            provenanceIdentifier: "phone", syncIdentifier: id, createdByCurrentApp: false)
+        }
+        XCTAssertTrue(c.canDeleteOnWatch(copied("own")), "the phone's Loop wrote it: the phone deletes it too")
+        XCTAssertFalse(c.canDeleteOnWatch(copied("other")), "another app's entry: the phone would refuse")
+        XCTAssertFalse(c.canDeleteOnWatch(copied("old")), "no flag from an older phone: protected")
+        let madeOnWatch = StoredCarbEntry(startDate: now, quantity: HKQuantity(unit: .gram(), doubleValue: 15))
+        XCTAssertTrue(c.canDeleteOnWatch(madeOnWatch), "entered on the watch: deletable")
     }
 
     // MARK: 2b — a refused drain keeps offering (simulator P6, 2026-10-21)

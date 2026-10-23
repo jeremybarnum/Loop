@@ -269,6 +269,12 @@ final class StockLoopSession {
         stack.loopManager.releasePodAfterDose = { [weak self] in
             self?.loanController.releasePodAfterDose()
         }
+        stack.loopManager.beginLoanBolus = { [weak self] in
+            self?.loanController.beginWatchBolus() ?? true
+        }
+        stack.loopManager.endLoanBolus = { [weak self] in
+            self?.loanController.endWatchBolus()
+        }
 
         loanController.onLoanActiveChanged = { [weak self] active in
             guard let self = self else { return }
