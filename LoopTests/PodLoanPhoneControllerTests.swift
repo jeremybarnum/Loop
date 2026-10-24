@@ -113,7 +113,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                     "PodLoanPhoneController.lastHandledForeignSessionAt",
                     "PodLoanPhoneController.dormantSeizeToken",
                     "PodLoanPhoneController.watchSupportsSeize",
-                    "PodLoanPhoneController.inferredLoanYieldDisabled"] {
+                    "PodLoanPhoneController.inferredLoanYieldDisabled",
+                    "PodLoanPhoneController.yieldLoanEpoch"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
         backgroundTaskBegins = 0
@@ -124,6 +125,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         gapDeleteSucceeds = true
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         try? FileManager.default.removeItem(at: base.appendingPathComponent("PodLoanStagedRecordsV2.json"))
+        try? FileManager.default.removeItem(at: base.appendingPathComponent("PodLoanPushedRecordsV2.json"))
 
         sent = []
         sentExpectations = []
@@ -3679,5 +3681,271 @@ extension PodLoanPhoneControllerTests {
         let json = #"{"push":{"token":5}}"#
         let reach = try JSONDecoder().decode(PhoneReach.self, from: Data(json.utf8))
         XCTAssertNil(reach.push, "dropped, not thrown")
+    }
+}
+
+// MARK: - Push, phase 2: the offline start's records, filed while the phone stands aside
+//
+// Spec tests 1-5 (TELL_THE_PHONE_OVER_THE_INTERNET.md, "Phase 2 design"), plus a relaunch. Ruled
+// 2026-10-23 (option 2): on a matching push the phone keeps standing aside and only FILES the
+// records; they commit at a take-back of that loan, before its insulin check.
+extension PodLoanPhoneControllerTests {
+
+    private func recordsPush(loan: Int, token: String, events: [LoanEvent], tombstones: [UUID] = [],
+                             sentAt: Date = Date()) -> SportModeRecordsPush {
+        SportModeRecordsPush(loan: loan, token: token, sentAt: sentAt,
+                             batch: DoseRecordBatch(epoch: loan, events: events, tombstones: tombstones, sentAt: sentAt))
+    }
+
+    private func deliverRecords(_ push: SportModeRecordsPush, to controller: PodLoanPhoneController) {
+        let handled = expectation(description: "records push handled")
+        controller.handlePushedRecords(push) { handled.fulfill() }
+        wait(for: [handled], timeout: 5)
+        controller.queue.sync { }
+    }
+
+    private func bolus(seq: Int, units: Double, at date: Date) -> LoanEvent {
+        LoanEvent(id: UUID(), seq: seq, provenance: .confirmed,
+                  record: LoanDoseRecord(kind: .bolus, startDate: date, amount: units), loggedAt: date)
+    }
+
+    /// The phone stands aside for offline loan `loan` on the watch's start notice. Returns the
+    /// offline-start token.
+    private func standAside(_ controller: PodLoanPhoneController, loan: Int = 5) -> UUID {
+        let token = UUID(uuidString: UserDefaults.standard.string(forKey: "PodLoanPhoneController.dormantSeizeToken") ?? "")
+            ?? seizeCredentialOutstanding()
+        deliver(notice(loan: loan, token: token.uuidString), to: controller)
+        XCTAssertTrue(controller.yieldingToInferredLoan, "precondition: standing aside")
+        return token
+    }
+
+    /// Every bolus the phone wrote to its dose store, across every commit.
+    private func committedBoluses() -> [DoseEntry] {
+        lock.lock(); defer { lock.unlock() }
+        return addedDoses.flatMap { $0 }.filter { $0.type == .bolus }
+    }
+
+    // 1 · Filed while standing aside; still standing aside.
+    func testAPushedBatchIsFiledWhileThePhoneStandsAsideAndItKeepsStandingAside() {
+        let controller = makeController()
+        let token = standAside(controller, loan: 5)
+        let a = bolus(seq: 1, units: 1.0, at: Date().addingTimeInterval(-120))
+        let b = bolus(seq: 2, units: 0.5, at: Date().addingTimeInterval(-60))
+
+        deliverRecords(recordsPush(loan: 5, token: token.uuidString, events: [a, b]), to: controller)
+
+        XCTAssertEqual(controller.filedPushedRecordIDsForTesting()?.loan, 5)
+        XCTAssertEqual(controller.filedPushedRecordIDsForTesting()?.ids, [a.id, b.id])
+        XCTAssertTrue(controller.yieldingToInferredLoan, "still standing aside: the loan is not taken on")
+        XCTAssertEqual(controller.state, .owner, "no state change")
+        XCTAssertTrue(committedBoluses().isEmpty, "nothing committed until a take-back")
+        XCTAssertEqual(pauses(), [true], "nothing else happened")
+        lock.lock(); let messages = sent; lock.unlock()
+        XCTAssertTrue(messages.isEmpty, "no revoke, no question: no take-back started")
+
+        // A repeat changes nothing.
+        deliverRecords(recordsPush(loan: 5, token: token.uuidString, events: [a, b]), to: controller)
+        XCTAssertEqual(controller.filedPushedRecordIDsForTesting()?.ids, [a.id, b.id])
+    }
+
+    // 2 · Wrong token, other loan, no outstanding token, not standing aside, too old: dropped.
+    func testPushedBatchesThatDoNotMatchAreDropped() {
+        _ = seizeCredentialOutstanding()
+        let controller = makeController()
+        let event = bolus(seq: 1, units: 1.0, at: Date())
+        let outstanding = UserDefaults.standard.string(forKey: "PodLoanPhoneController.dormantSeizeToken")!
+
+        // Not standing aside (plain owner, credential outstanding): nothing changes for this phone.
+        deliverRecords(recordsPush(loan: 5, token: outstanding, events: [event]), to: controller)
+        XCTAssertNil(controller.filedPushedRecordIDsForTesting(), "not standing aside")
+
+        let token = standAside(controller, loan: 5)
+        deliverRecords(recordsPush(loan: 5, token: UUID().uuidString, events: [event]), to: controller)
+        XCTAssertNil(controller.filedPushedRecordIDsForTesting(), "wrong token")
+        deliverRecords(recordsPush(loan: 6, token: token.uuidString, events: [event]), to: controller)
+        XCTAssertNil(controller.filedPushedRecordIDsForTesting(), "another loan than the one it stands aside for")
+        deliverRecords(recordsPush(loan: 5, token: token.uuidString, events: [event],
+                                   sentAt: Date().addingTimeInterval(-.minutes(11))), to: controller)
+        XCTAssertNil(controller.filedPushedRecordIDsForTesting(), "older than ten minutes")
+        let mismatched = SportModeRecordsPush(loan: 5, token: token.uuidString, sentAt: Date(),
+                                              batch: DoseRecordBatch(epoch: 4, events: [event], tombstones: []))
+        deliverRecords(mismatched, to: controller)
+        XCTAssertNil(controller.filedPushedRecordIDsForTesting(), "a batch naming another loan inside")
+
+        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.dormantSeizeToken")
+        deliverRecords(recordsPush(loan: 5, token: token.uuidString, events: [event]), to: controller)
+        XCTAssertNil(controller.filedPushedRecordIDsForTesting(), "no outstanding offline-start credential")
+
+        XCTAssertTrue(controller.yieldingToInferredLoan, "dropping changes nothing else")
+        XCTAssertTrue(committedBoluses().isEmpty)
+    }
+
+    // 3 · The same records by push and by WatchConnectivity commit once.
+    func testTheSameRecordsByPushAndByWatchConnectivityCommitOnce() throws {
+        let controller = makeController()   // no watch contact: a pill tap takes the dead branch
+        let token = standAside(controller, loan: 5)
+        let a = bolus(seq: 1, units: 1.0, at: Date().addingTimeInterval(-300))
+        let b = bolus(seq: 2, units: 0.5, at: Date().addingTimeInterval(-240))
+        deliverRecords(recordsPush(loan: 5, token: token.uuidString, events: [a, b]), to: controller)
+        deliverRecords(recordsPush(loan: 5, token: token.uuidString, events: [a, b]), to: controller)   // a second copy
+        // The same record over WatchConnectivity while standing aside: dropped as before (the loan
+        // is not taken on), so it cannot commit here either.
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(DoseRecordBatch(epoch: 5, events: [a], tombstones: [])).transportDictionary())
+        controller.queue.sync { }
+        XCTAssertTrue(committedBoluses().isEmpty)
+
+        // The pill tap takes the pod back with the watch away: the pushed records commit.
+        controller.reclaimNow()
+        waitUntil(timeout: 5, "force landed") { controller.state == .owner && !MockPumpManager.testConnectionReleased }
+        waitUntil(timeout: 5, "pushed records committed") { self.committedBoluses().count == 2 }
+
+        // The watch comes back and hands the loan back over WatchConnectivity with the same records.
+        let c = bolus(seq: 3, units: 0.25, at: Date().addingTimeInterval(-60))
+        let offer = HandbackOffer(epoch: 5, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                                  events: [a, b, c], tombstones: [], recovered: true, released: true, seizeToken: token)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        waitUntil(timeout: 8, "the returning offer committed") { self.committedBoluses().count >= 3 }
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())   // a resend
+        settle()
+        controller.queue.sync { }
+
+        let ids = committedBoluses().compactMap(\.syncIdentifier)
+        XCTAssertEqual(committedBoluses().count, 3, "a, b and c once each, got \(ids)")
+        XCTAssertEqual(Set(ids).count, 3)
+        XCTAssertEqual(committedBoluses().reduce(0) { $0 + $1.programmedUnits }, 1.75, accuracy: 0.001)
+    }
+
+    // 4 · Pill tap while the watch is away: the pushed records commit, and the insulin check
+    //     finds them explained (no estimate for that insulin).
+    func testAPillTapWhileTheWatchIsAwayCommitsThePushedRecordsAndBooksNoEstimate() throws {
+        let t0 = Date().addingTimeInterval(-.minutes(30))
+        MockPumpManager.testOdometer = 50.0
+        pump.lastSync = t0                       // the phone's last reading of the pod: the window opens here
+        let controller = makeController()
+        let token = standAside(controller, loan: 5)
+        let watchBolus = bolus(seq: 1, units: 2.0, at: t0.addingTimeInterval(.minutes(5)))
+        deliverRecords(recordsPush(loan: 5, token: token.uuidString, events: [watchBolus]), to: controller)
+
+        // The pod delivered the watch's 2 U plus 30 minutes of the 1 U/h schedule.
+        MockPumpManager.testOdometer = 52.5
+        pump.lastSync = Date().addingTimeInterval(60)   // the reclaim's reading lands after the tap
+        controller.reclaimNow()
+        waitUntil(timeout: 8, "verdict") { self.diagMatching("reconcile[FORCE-RECLAIM]") != nil }
+        controller.queue.sync { }
+
+        XCTAssertNotNil(diagMatching("R37 audit CLEAN"), "the check found the insulin explained")
+        XCTAssertEqual(positiveVerdicts, 0, "nothing unexplained: got \(urgentNotices)")
+        lock.lock(); let booked = bookedGapDoses; lock.unlock()
+        XCTAssertTrue(booked.isEmpty, "no estimate for insulin the pushed records explain")
+        XCTAssertEqual(committedBoluses().count, 1)
+        XCTAssertEqual(committedBoluses().first?.programmedUnits ?? 0, 2.0, accuracy: 0.001)
+        XCTAssertNil(controller.filedPushedRecordIDsForTesting(), "the filing is spent")
+        XCTAssertFalse(controller.yieldingToInferredLoan)
+    }
+
+    /// The control for test 4: the same take-back with nothing pushed books the 2 U as an estimate.
+    func testAPillTapWithoutPushedRecordsBooksTheEstimate() throws {
+        let t0 = Date().addingTimeInterval(-.minutes(30))
+        MockPumpManager.testOdometer = 50.0
+        pump.lastSync = t0
+        let controller = makeController()
+        _ = standAside(controller, loan: 5)
+        MockPumpManager.testOdometer = 52.5
+        pump.lastSync = Date().addingTimeInterval(60)
+        controller.reclaimNow()
+        waitUntil(timeout: 8, "estimate booked") { self.lock.lock(); defer { self.lock.unlock() }; return !self.bookedGapDoses.isEmpty }
+        lock.lock(); let booked = bookedGapDoses; lock.unlock()
+        XCTAssertEqual(booked.first?.deliveredUnits ?? 0, 2.0, accuracy: 0.05)
+    }
+
+    // 5 · The watch returns and hands back: the pushed records and the offer commit once, and the
+    //     insulin check counts them.
+    func testTheWatchReturnsAndHandsBackPushedAndOfferedRecordsCommitOnce() throws {
+        let t0 = Date().addingTimeInterval(-.minutes(30))
+        MockPumpManager.testOdometer = 50.0
+        pump.lastSync = t0
+        let controller = makeController()
+        let token = standAside(controller, loan: 5)
+        let a = bolus(seq: 1, units: 1.0, at: t0.addingTimeInterval(.minutes(5)))
+        let b = bolus(seq: 2, units: 1.0, at: t0.addingTimeInterval(.minutes(10)))
+        deliverRecords(recordsPush(loan: 5, token: token.uuidString, events: [a, b]), to: controller)
+
+        // Back in range: the watch's final offer carries everything it has not had confirmed.
+        let c = bolus(seq: 3, units: 1.0, at: t0.addingTimeInterval(.minutes(15)))
+        MockPumpManager.testOdometer = 53.5      // 3 U of boluses + 30 minutes of schedule
+        pump.lastSync = Date().addingTimeInterval(60)
+        let offer = HandbackOffer(epoch: 5, handedBackAt: Date(), finalStatus: nil,
+                                  odometer: LoanOdometerSnapshot(deliveredAtStart: 50.0, deliveredLatest: 53.4, freshenSucceeded: false),
+                                  events: [a, b, c], tombstones: [], recovered: false, released: true, seizeToken: token)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        waitUntil(timeout: 8, "verdict") { self.diagMatching("reconcile[AUTHORITATIVE]") != nil }
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())   // a resend
+        settle()
+        controller.queue.sync { }
+
+        XCTAssertEqual(committedBoluses().count, 3, "a, b and c once each")
+        XCTAssertEqual(Set(committedBoluses().compactMap(\.syncIdentifier)).count, 3)
+        XCTAssertEqual(positiveVerdicts, 0, "explained: got \(urgentNotices)")
+        XCTAssertFalse(urgentNotices.contains("Insulin On Board May Be Overstated"), "got \(urgentNotices)")
+        XCTAssertNil(controller.filedPushedRecordIDsForTesting(), "the filing is spent")
+        XCTAssertEqual(controller.state, .owner)
+    }
+
+    /// Records the phone filed survive an app relaunch, and the take-back after it commits them.
+    func testFiledRecordsSurviveARelaunch() throws {
+        let first = makeController()
+        let token = standAside(first, loan: 5)
+        let a = bolus(seq: 1, units: 1.0, at: Date().addingTimeInterval(-120))
+        deliverRecords(recordsPush(loan: 5, token: token.uuidString, events: [a]), to: first)
+
+        let relaunched = makeController()
+        XCTAssertTrue(relaunched.yieldingToInferredLoan, "still standing aside after the relaunch")
+        XCTAssertEqual(relaunched.filedPushedRecordIDsForTesting()?.loan, 5)
+        XCTAssertEqual(relaunched.filedPushedRecordIDsForTesting()?.ids, [a.id])
+        // And it still files for the same loan.
+        let b = bolus(seq: 2, units: 0.5, at: Date().addingTimeInterval(-60))
+        deliverRecords(recordsPush(loan: 5, token: token.uuidString, events: [a, b]), to: relaunched)
+        XCTAssertEqual(relaunched.filedPushedRecordIDsForTesting()?.ids, [a.id, b.id])
+
+        relaunched.reclaimNow()
+        waitUntil(timeout: 8, "committed at the take-back") { self.committedBoluses().count == 2 }
+    }
+
+    /// A second offline start over the first (the watch folds the first loan's records into the
+    /// second, same IDs): the phone stands aside for the newer loan and files for it.
+    func testANewerOfflineStartMovesTheFilingToTheNewerLoan() {
+        let controller = makeController()
+        let token = standAside(controller, loan: 5)
+        let a = bolus(seq: 1, units: 1.0, at: Date().addingTimeInterval(-120))
+        deliverRecords(recordsPush(loan: 5, token: token.uuidString, events: [a]), to: controller)
+
+        deliver(notice(loan: 6, token: token.uuidString), to: controller)
+        XCTAssertNil(controller.filedPushedRecordIDsForTesting(), "the older loan's filing is dropped; its records come again under e6")
+        deliverRecords(recordsPush(loan: 6, token: token.uuidString, events: [a]), to: controller)
+        XCTAssertEqual(controller.filedPushedRecordIDsForTesting()?.loan, 6)
+        XCTAssertEqual(pauses(), [true], "still one stand-aside")
+    }
+
+    /// A granted loan supersedes any offline loan the phone filed records for: they are not staged
+    /// into the new loan's books.
+    func testAGrantedLoanDiscardsTheFilingInsteadOfCommittingIt() throws {
+        let controller = makeController()
+        let token = standAside(controller, loan: 5)
+        deliverRecords(recordsPush(loan: 5, token: token.uuidString, events: [bolus(seq: 1, units: 1.0, at: Date())]),
+                       to: controller)
+        _ = try establishLoan(controller)
+        XCTAssertNil(controller.filedPushedRecordIDsForTesting())
+        XCTAssertTrue(committedBoluses().isEmpty, "never committed into another loan")
+    }
+
+    /// The phone's side of the round trip: a payload as Apple delivers it reads back unchanged.
+    func testARecordsPushReadsBackAsAppleDeliversIt() throws {
+        let sentAt = Date(timeIntervalSince1970: 1_761_240_000.5)
+        let event = bolus(seq: 1, units: 1.25, at: sentAt.addingTimeInterval(-60))
+        let pushed = recordsPush(loan: 7, token: UUID().uuidString, events: [event], tombstones: [UUID()], sentAt: sentAt)
+        let userInfo = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(pushed.apnsBody)) as? [AnyHashable: Any])
+        XCTAssertTrue(SportModeStartedNotice.isSportModePayload(userInfo))
+        XCTAssertEqual(SportModeRecordsPush(userInfo: userInfo), pushed)
+        XCTAssertNil(SportModeRecordsPush(userInfo: notice(loan: 7, token: pushed.token).apnsPayload), "the start notice is not a records push")
     }
 }

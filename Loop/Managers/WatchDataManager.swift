@@ -518,22 +518,41 @@ final class WatchDataManager: NSObject {
         return entitlements["aps-environment"] as? String
     }
 
-    /// The push arrived: hand it to the loan controller under a background task, so a phone
-    /// iOS just woke stays awake until the controller has acted (the yield releases the pod's
-    /// radio and clears the pending not-looping warnings).
-    func handleSportModeStartedNotice(_ notice: SportModeStartedNotice) {
+    /// A Sport Mode push arrived: read which one it is and hand it to the loan controller under a
+    /// background task, so a phone iOS just woke stays awake until the controller has acted (the
+    /// yield releases the pod's radio and clears the pending not-looping warnings; filed records
+    /// are written to disk).
+    func handleSportModePush(_ userInfo: [AnyHashable: Any]) {
+        guard let header = SportModeStartedNotice(userInfo: userInfo) else {
+            PhoneLog.event("push", "Sport Mode push with an unreadable payload — ignored [push]")
+            return
+        }
+        if header.event == SportModeRecordsPush.recordsEvent {
+            guard let records = SportModeRecordsPush(userInfo: userInfo) else {
+                PhoneLog.event("push", "Sport Mode records push e\(header.loan) with an unreadable batch — ignored [push]")
+                return
+            }
+            withBackgroundTask("SportModeRecordsPush") { done in
+                podLoanController.handlePushedRecords(records, completion: done)
+            }
+            return
+        }
+        withBackgroundTask("SportModeStartedNotice") { done in
+            podLoanController.handleOfflineStartNotice(header, completion: done)
+        }
+    }
+
+    private func withBackgroundTask(_ name: String, _ work: (_ done: @escaping () -> Void) -> Void) {
         var task: UIBackgroundTaskIdentifier = .invalid
         let end = {
             guard task != .invalid else { return }
             UIApplication.shared.endBackgroundTask(task)
             task = .invalid
         }
-        task = UIApplication.shared.beginBackgroundTask(withName: "SportModeStartedNotice") {
+        task = UIApplication.shared.beginBackgroundTask(withName: name) {
             end()
         }
-        podLoanController.handleOfflineStartNotice(notice) {
-            DispatchQueue.main.async { end() }
-        }
+        work { DispatchQueue.main.async { end() } }
     }
 
     /// ~30 s of continued execution across a reclaim, so tap-and-pocket completes ON SCHEDULE

@@ -662,8 +662,38 @@ final class PodLoanWatchController {
     /// seize that never proved out). Queue-confined.
     private var offlineStartNoticeDue: (token: UUID, epoch: Int)?
 
-    /// Sends that push (production: the APNs key built in, URLSession). Injectable for tests.
-    lazy var offlineStartNoticeSender: OfflineStartNoticeSending = SportModePushSender.fromBundle()
+    /// The production sender: the APNs key built in, URLSession. One instance for both pushes, so
+    /// they share its signed provider token.
+    private lazy var pushSender = SportModePushSender.fromBundle()
+    /// Sends that push. Injectable for tests.
+    lazy var offlineStartNoticeSender: OfflineStartNoticeSending = pushSender
+    /// Sends the loan's records by push during an offline start (phase 2). Injectable for tests.
+    lazy var recordsPushSender: RecordsPushSending = pushSender
+    /// The battery level, 0...1, nil when unreadable. Read by the record-push cadence at every
+    /// consult. Injectable for tests.
+    var batteryLevel: () -> Float? = {
+        let device = WKInterfaceDevice.current()
+        device.isBatteryMonitoringEnabled = true
+        let level = device.batteryLevel
+        return level < 0 ? nil : level
+    }
+
+    /// Phase 2: an offline start whose records also go to the phone by push. Set at the ACTIVE
+    /// flip of an offline start only (with a key built in and a push address in the grant), never
+    /// for a granted loan. Queue-confined, memory-only: a relaunch ends the loan anyway.
+    private struct RecordsPushLoan {
+        let epoch: Int
+        let token: UUID
+        let push: PhoneReach.ApplePush
+        var lastPushAt: Date?
+        /// The event IDs and tombstones the last push carried: what is "new" is measured against it.
+        var pushedIDs: Set<UUID> = []
+        var criticalPushDone = false
+        /// The phone acknowledged this loan over WatchConnectivity: it has adopted the loan, takes
+        /// the records that way, and would refuse a pushed batch. Pushes stop.
+        var phoneAnswered = false
+    }
+    private var recordsPush: RecordsPushLoan?
 
     /// True while THIS loan attempt is seize-flavored, for the [seize] grep tag on ladder
     /// and abort lines. Two sources because the fold consumes the pending token early
@@ -754,6 +784,57 @@ final class PodLoanWatchController {
         offlineStartNoticeDue = nil
         let notice = SportModeStartedNotice(loan: grant.epoch, token: due.token.uuidString, sentAt: now())
         offlineStartNoticeSender.sendOfflineStartNotice(notice, reach: grant.phoneReach)
+        startRecordsPushIfPossible(token: due.token, grant: grant)
+    }
+
+    // MARK: - Phase 2: the offline start's records, by push
+
+    /// From this offline start's ACTIVE flip, its records also go to the phone by push — if a key
+    /// is built in and the grant carried the phone's push address. Said once, here, either way.
+    private func startRecordsPushIfPossible(token: UUID, grant: LoanGrant) {
+        guard recordsPushSender.isConfigured else {
+            recordsPush = nil
+            SportLog.event("push", "offline start e\(grant.epoch): records NOT pushed — no push key built into this app [push]")
+            return
+        }
+        guard let push = grant.phoneReach?.push else {
+            recordsPush = nil
+            SportLog.event("push", "offline start e\(grant.epoch): records NOT pushed — the phone's grant carried no push address [push]")
+            return
+        }
+        recordsPush = RecordsPushLoan(epoch: grant.epoch, token: token, push: push)
+        SportLog.event("push", "offline start e\(grant.epoch): records will also be pushed to the phone (device …\(push.token.suffix(6))) while it has not answered [push]")
+    }
+
+    /// Consulted wherever a batch is built: every loop cycle and whenever a record is written.
+    /// Asks the cadence policy, and pushes everything the phone has not confirmed when it says so.
+    /// Only during an offline start that set `recordsPush` up, and only until the phone answers.
+    private func considerRecordsPush(events: [LoanEvent], tombstones: [UUID]) {
+        guard var loan = recordsPush, !loan.phoneAnswered, phase == .active, epoch == loan.epoch,
+              defaults.string(forKey: DormantKeys.activeToken) == loan.token.uuidString else { return }
+        let current = Set(events.map(\.id)).union(tombstones)
+        let new = current.subtracting(loan.pushedIDs)
+        let significantKinds: Set<LoanDoseRecord.Kind> = [.bolus, .carb, .carbDeleted]
+        let significant = events.contains { new.contains($0.id) && significantKinds.contains($0.record.kind) }
+            || tombstones.contains { new.contains($0) }
+        let battery = batteryLevel()
+        let at = now()
+        let decision = SportModeRecordsPushCadence.decide(
+            battery: battery, hasUnconfirmed: !current.isEmpty, newSinceLastPush: !new.isEmpty,
+            significantSinceLastPush: significant, lastPushAt: loan.lastPushAt,
+            criticalPushDone: loan.criticalPushDone, now: at)
+        loan.criticalPushDone = decision.criticalPushDone
+        defer { recordsPush = loan }
+        guard decision.push else { return }
+        let pushes = SportModeRecordsPush.pushes(loan: loan.epoch, token: loan.token.uuidString, sentAt: at,
+                                                 events: events, tombstones: tombstones)
+        let carried = pushes.reduce(0) { $0 + $1.batch.events.count + $1.batch.tombstones.count }
+        let batteryText = battery.map { "\(Int(($0 * 100).rounded()))%" } ?? "?"
+        SportLog.event("push", "records push e\(loan.epoch): \(events.count) event(s), \(tombstones.count) tombstone(s) unconfirmed, \(new.count) new → \(pushes.count) push(es) — \(decision.reason) (battery \(batteryText))\(carried < current.count ? " — ** \(current.count - carried) record(s) too big for a push, left to WatchConnectivity **" : "") [push]")
+        guard !pushes.isEmpty else { return }
+        recordsPushSender.sendRecordsPushes(pushes, push: loan.push)
+        loan.lastPushAt = at
+        loan.pushedIDs = Set(pushes.flatMap { $0.batch.events.map(\.id) + $0.batch.tombstones })
     }
 
     func dismissSeize() {
@@ -2739,6 +2820,13 @@ final class PodLoanWatchController {
         }
         // The phone answered the offer: the End is not refused (control row 8).
         handbackAckedAt = now()
+        // Phase 2: an ack for an offline start means the phone has adopted it; its records travel
+        // over WatchConnectivity from here, and a pushed batch would only be refused.
+        if var loan = recordsPush, loan.epoch == ack.epoch, !loan.phoneAnswered {
+            loan.phoneAnswered = true
+            recordsPush = loan
+            SportLog.event("push", "records push e\(ack.epoch): the phone answered over WatchConnectivity — record pushes stop [push]")
+        }
         // The phone acks MAX-seq, but withholding (in-flight /
         // chase-pending events) creates seq GAPS a max-seq cursor can't represent —
         // an ack covering a later carb would skip a withheld command forever. The cap
@@ -2800,6 +2888,7 @@ final class PodLoanWatchController {
         HandbackStuckAlert.disarm()   // Hand-back completed cleanly
         onLoanActiveChanged?(false)
         defaults.removeObject(forKey: DormantKeys.activeToken)   // R40: seized loan (if any) is over
+        recordsPush = nil
         reunionPromptActive = false   // hygiene: no prompt can outlive its loan
         SportLog.event("loan", "CLOSED — records drained, pod released, cursor \(ack.committedCursor)")
     }
@@ -3261,6 +3350,23 @@ final class PodLoanWatchController {
     func noteActiveForTesting(grant: LoanGrant) { queue.sync { sendOfflineStartNoticeIfDue(grant: grant) } }
     /// TEST SEAM: a grant arriving the normal way (from the phone).
     func receiveGrantForTesting(_ grant: LoanGrant) { queue.sync { handleGrant(grant) } }
+    /// TEST SEAM (phase 2): a loan that reached .active — an offline start when `offlineStartToken`
+    /// is given (its reunion token persisted and its ACTIVE-flip hook run, as the takeover leaves
+    /// them), a granted loan otherwise — with the journal begun, so records can be written.
+    func installActiveLoanForTesting(grant: LoanGrant, offlineStartToken: UUID?) {
+        queue.sync {
+            try? journal.begin(epoch: grant.epoch)
+            epoch = grant.epoch
+            phase = .active
+            if let token = offlineStartToken {
+                defaults.set(token.uuidString, forKey: DormantKeys.activeToken)
+                offlineStartNoticeDue = (token, grant.epoch)
+            }
+            sendOfflineStartNoticeIfDue(grant: grant)
+        }
+    }
+    /// TEST SEAM: a HandbackAck from the phone.
+    func receiveAckForTesting(_ ack: HandbackAck) { queue.sync { handleAck(ack) } }
     #endif
 
     private func sendMessage(_ message: LoanMessage, urgentOnly: Bool = false) {
@@ -3449,19 +3555,26 @@ final class PodLoanWatchController {
         queue.async { self.streamRecords(renewal: true) }
     }
 
-    private func streamRecords(renewal: Bool = false) {
-        guard phase == .active, let epoch = epoch else { return }
-        // Events that are IN-FLIGHT (mint→classification) or
-        // whose verdict chase is LIVE stay out of the stream — the phone's commit set
-        // is drawn from its staged map, so streaming either would let an interim
-        // commit write a dose before an annul/refuted verdict can unwind it
-        // (tombstones only filter staged events). They flow on classification.
+    /// What a batch may carry: every record the phone has not confirmed, less the withheld ones.
+    /// Events that are IN-FLIGHT (mint→classification) or
+    /// whose verdict chase is LIVE stay out of the stream — the phone's commit set
+    /// is drawn from its staged map, so streaming either would let an interim
+    /// commit write a dose before an annul/refuted verdict can unwind it
+    /// (tombstones only filter staged events). They flow on classification.
+    private func streamableRecords() -> (events: [LoanEvent], tombstones: [UUID]) {
         var events = journal.unackedEvents()
         events.removeAll { inFlightEventIDs.contains($0.id) }
         if let pending = pendingUncertainEventID {
             events.removeAll { $0.id == pending }
         }
-        let tombstones = journal.pendingTombstones()
+        return (events, journal.pendingTombstones())
+    }
+
+    private func streamRecords(renewal: Bool = false) {
+        guard phase == .active, let epoch = epoch else { return }
+        let (events, tombstones) = streamableRecords()
+        // Phase 2: the same records, by push, when the cadence policy says so (offline start only).
+        considerRecordsPush(events: events, tombstones: tombstones)
         let empty = events.isEmpty && tombstones.isEmpty
         guard renewal || !empty else { return }
         // What the watch streams to the phone. (Removed the old "implied Σ" — a sum of temp

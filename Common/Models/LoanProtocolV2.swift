@@ -744,8 +744,13 @@ public struct SportModeStartedNotice: Equatable {
                  "sound": "default",
                  "interruption-level": "time-sensitive",
                  "content-available": 1],
-         Self.payloadKey: ["event": event, "loan": loan, "token": token,
-                           "sent-at": Self.iso8601.string(from: sentAt)]]
+         Self.payloadKey: headerFields]
+    }
+
+    /// The fields every Sport Mode push carries under `payloadKey` (this notice, and the record
+    /// pushes of `SportModeRecordsPush`), so the phone reads one header for both.
+    public var headerFields: [String: Any] {
+        ["event": event, "loan": loan, "token": token, "sent-at": Self.iso8601.string(from: sentAt)]
     }
 
     /// Reads the notice out of a received push's userInfo. nil when the payload is not ours or is
@@ -778,6 +783,144 @@ public struct SportModeStartedNotice: Equatable {
         return f
     }()
     private static let iso8601Plain = ISO8601DateFormatter()
+}
+
+/// Phase 2 of the internet backup: during an offline start (and only then) a cellular watch also
+/// pushes its loan's records to the distant phone, so a watch that dies away from the phone has
+/// already delivered them. The phone FILES them for that loan while it stands aside and commits
+/// them at the take-back, exactly as it would the same records over WatchConnectivity.
+///
+/// The APNs payload is a silent push: `{"aps":{"content-available":1},"sport-mode":{"event":
+/// "records","loan","token","sent-at","part","parts","batch"}}`. The header is the start notice's
+/// (same token: the dormant grant's seize token, so the push key alone cannot plant records);
+/// `batch` is a `DoseRecordBatch` as the loan protocol encodes it, zlib-compressed, base64. Both
+/// sides build and read it here so the keys cannot drift.
+///
+/// The phone cannot confirm a push, so each push carries everything of the loan the phone has not
+/// confirmed over WatchConnectivity. Apple refuses a payload over 4096 bytes, so a long loan is
+/// split (`pushes(...)`) into several pushes, each a complete batch for its subset: each one can
+/// be filed on its own, and `part`/`parts` are only for the logs.
+public struct SportModeRecordsPush: Equatable {
+    public static let recordsEvent = "records"
+    /// Apple's limit on the whole JSON body of a push.
+    public static let maxPayloadBytes = 4096
+
+    public let loan: Int
+    public let token: String
+    public let sentAt: Date
+    public let batch: DoseRecordBatch
+    public let part: Int
+    public let parts: Int
+
+    public init(loan: Int, token: String, sentAt: Date, batch: DoseRecordBatch, part: Int = 1, parts: Int = 1) {
+        self.loan = loan
+        self.token = token
+        self.sentAt = sentAt
+        self.batch = batch
+        self.part = part
+        self.parts = parts
+    }
+
+    /// The whole APNs body, or nil when the batch cannot be encoded.
+    public var apnsPayload: [String: Any]? {
+        guard let encoded = Self.encode(batch) else { return nil }
+        var body = SportModeStartedNotice(event: Self.recordsEvent, loan: loan, token: token, sentAt: sentAt).headerFields
+        body["part"] = part
+        body["parts"] = parts
+        body["batch"] = encoded
+        return ["aps": ["content-available": 1], SportModeStartedNotice.payloadKey: body]
+    }
+
+    /// The bytes sent to Apple (what its 4096-byte limit counts).
+    public var apnsBody: Data? {
+        apnsPayload.flatMap { try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) }
+    }
+
+    /// Reads a record push out of a received push's userInfo. nil when it is not a record push or
+    /// its batch does not decode.
+    public init?(userInfo: [AnyHashable: Any]) {
+        guard let header = SportModeStartedNotice(userInfo: userInfo), header.event == Self.recordsEvent,
+              let body = userInfo[SportModeStartedNotice.payloadKey] as? [String: Any],
+              let encoded = body["batch"] as? String,
+              let batch = Self.decode(encoded) else { return nil }
+        self.init(loan: header.loan, token: header.token, sentAt: header.sentAt, batch: batch,
+                  part: (body["part"] as? NSNumber)?.intValue ?? 1,
+                  parts: (body["parts"] as? NSNumber)?.intValue ?? 1)
+    }
+
+    /// JSON (the loan protocol's own coding) → zlib → base64.
+    public static func encode(_ batch: DoseRecordBatch) -> String? {
+        guard let json = try? LoanProtocol.encoder.encode(batch),
+              let compressed = try? (json as NSData).compressed(using: .zlib) else { return nil }
+        return (compressed as Data).base64EncodedString()
+    }
+
+    public static func decode(_ text: String) -> DoseRecordBatch? {
+        guard let data = Data(base64Encoded: text),
+              let json = try? (data as NSData).decompressed(using: .zlib) else { return nil }
+        return try? LoanProtocol.decoder.decode(DoseRecordBatch.self, from: json as Data)
+    }
+
+    /// Everything given, in as few pushes as fit under `maxBytes`, each a complete batch for its
+    /// share. Order is kept (events by seq, then tombstones), so the LAST push carries the newest
+    /// records: for a phone that is offline Apple keeps only the latest push, and the earlier
+    /// records went out in earlier, smaller pushes. A single record too big for a push on its own
+    /// (none is, by far) is left out; the caller compares counts and logs it.
+    public static func pushes(loan: Int, token: String, sentAt: Date, events: [LoanEvent], tombstones: [UUID],
+                              maxBytes: Int = maxPayloadBytes) -> [SportModeRecordsPush] {
+        enum Item { case event(LoanEvent), tombstone(UUID) }
+        let items: [Item] = events.sorted { $0.seq < $1.seq }.map(Item.event) + tombstones.map(Item.tombstone)
+        guard !items.isEmpty else { return [] }
+
+        func batch(_ group: ArraySlice<Item>) -> DoseRecordBatch {
+            var groupEvents: [LoanEvent] = []
+            var groupTombstones: [UUID] = []
+            for item in group {
+                switch item {
+                case .event(let e): groupEvents.append(e)
+                case .tombstone(let t): groupTombstones.append(t)
+                }
+            }
+            return DoseRecordBatch(epoch: loan, events: groupEvents, tombstones: groupTombstones, sentAt: sentAt)
+        }
+        // Measured with a three-digit part counter, so numbering the parts afterwards cannot
+        // push one over the limit.
+        func fits(_ group: ArraySlice<Item>) -> Bool {
+            let probe = SportModeRecordsPush(loan: loan, token: token, sentAt: sentAt, batch: batch(group), part: 999, parts: 999)
+            return (probe.apnsBody?.count ?? Int.max) <= maxBytes
+        }
+        func split(_ count: Int) -> [ArraySlice<Item>] {
+            let size = items.count / count, extra = items.count % count
+            var groups: [ArraySlice<Item>] = []
+            var start = 0
+            for index in 0..<count {
+                let length = size + (index < extra ? 1 : 0)
+                groups.append(items[start..<(start + length)])
+                start += length
+            }
+            return groups
+        }
+
+        var groups: [ArraySlice<Item>] = []
+        // Start from the fewest pushes the whole could possibly need (each push repeats the
+        // header, so this is a lower bound), then add one until every share fits.
+        let whole = SportModeRecordsPush(loan: loan, token: token, sentAt: sentAt, batch: batch(items[...]),
+                                         part: 999, parts: 999).apnsBody?.count ?? Int.max
+        var count = whole <= maxBytes ? 1 : min(items.count, max(1, whole / maxBytes + 1))
+        while count <= items.count {
+            let candidate = split(count)
+            if candidate.allSatisfy(fits) { groups = candidate; break }
+            count += 1
+        }
+        if groups.isEmpty {
+            // Only single items remain and some do not fit alone: keep the ones that do.
+            groups = split(items.count).filter(fits)
+        }
+        return groups.enumerated().map { index, group in
+            SportModeRecordsPush(loan: loan, token: token, sentAt: sentAt, batch: batch(group),
+                                 part: index + 1, parts: groups.count)
+        }
+    }
 }
 
 /// The phone's predicted-low warning configuration, snapshotted into the grant.

@@ -1826,7 +1826,9 @@ private final class PhoneOverrideHarness {
                                        "PodLoanPhoneController.committedIDs", "PodLoanPhoneController.loanStartedAt",
                                        // The insulin ledger's saved state (2026-10-22).
                                        "PodLoanPhoneController.ownReading", "PodLoanPhoneController.estimates",
-                                       "PodLoanPhoneController.adoptedJudgedEpoch"]
+                                       "PodLoanPhoneController.adoptedJudgedEpoch",
+                                       // Internet backup, phase 2: the loan the phone stands aside for.
+                                       "PodLoanPhoneController.yieldLoanEpoch"]
     private static var stagedFileURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("PodLoanStagedRecordsV2.json")
@@ -1890,5 +1892,7 @@ private final class PhoneOverrideHarness {
     private static func wipePersistedState() {
         for key in defaultsKeys { UserDefaults.standard.removeObject(forKey: key) }
         try? FileManager.default.removeItem(at: stagedFileURL)
+        try? FileManager.default.removeItem(at: stagedFileURL.deletingLastPathComponent()
+            .appendingPathComponent("PodLoanPushedRecordsV2.json"))
     }
 }

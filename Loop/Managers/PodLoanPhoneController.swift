@@ -1719,6 +1719,9 @@ final class PodLoanPhoneController {
         /// PHONE MIRROR: the yielded posture survives relaunch (the blackout it answers
         /// can include phone reboots).
         static let yieldingToInferredLoan = "PodLoanPhoneController.yieldingToInferredLoan"
+        /// The loan the phone stands aside for: the epoch the watch's word named when the yield
+        /// engaged (raised by word of a newer one). Pushed records are filed only for this loan.
+        static let yieldLoanEpoch = "PodLoanPhoneController.yieldLoanEpoch"
         /// One-shot repair flag for the residuals banked before the bank was scoped to clean
         /// hand-backs. Date-suffixed on purpose: this names a specific 2026-08-13 field-data
         /// repair, not a standing rule, so nobody reads it as a recurring purge.
@@ -1773,6 +1776,7 @@ final class PodLoanPhoneController {
         // PHONE MIRROR: restored BEFORE the podIsOnLoan re-pause below, so a relaunch
         // mid-yield re-enters the posture (flag folds into podIsOnLoan) automatically.
         self.yieldingToInferredLoan = UserDefaults.standard.bool(forKey: Keys.yieldingToInferredLoan)
+        self.yieldLoanEpoch = UserDefaults.standard.object(forKey: Keys.yieldLoanEpoch) as? Int
         self.committedCursor = UserDefaults.standard.object(forKey: Keys.cursor) as? Int ?? 0
         self.pendingRevoke = UserDefaults.standard.bool(forKey: Keys.pendingRevoke)
         self.loanStartedAt = UserDefaults.standard.object(forKey: Keys.loanStartedAt) as? Date
@@ -1782,6 +1786,7 @@ final class PodLoanPhoneController {
             self.committedIDs = []
         }
         loadStaged()
+        loadPushedFiling()
         // Epoch-guarded: a base persisted by some other loan must never anchor this one —
         // a wrong anchor turns the whole previous loan's delivery into "unexplained".
         if let d = UserDefaults.standard.dictionary(forKey: Keys.auditBase),
@@ -2274,6 +2279,9 @@ final class PodLoanPhoneController {
         staged = [:]
         stagedTombstones = []
         persistStaged()
+        // A granted loan supersedes any offline start this phone filed pushed records for; the
+        // watch's journal still holds them, and its own offer brings them home.
+        discardPushedFiling(why: "a new loan e\(epoch) was granted")
         loanStartedAt = handedOverAt
         UserDefaults.standard.set(handedOverAt, forKey: Keys.loanStartedAt)
 
@@ -2505,6 +2513,12 @@ final class PodLoanPhoneController {
         didSet { UserDefaults.standard.set(yieldingToInferredLoan, forKey: Keys.yieldingToInferredLoan) }
     }
 
+    /// The loan this phone stands aside for, while it does (nil otherwise, or after an upgrade from
+    /// a build that did not record it: pushed records are then refused). Persisted with the flag.
+    private(set) var yieldLoanEpoch: Int? {
+        didSet { UserDefaults.standard.set(yieldLoanEpoch, forKey: Keys.yieldLoanEpoch) }
+    }
+
     /// The newest loan traffic seen for an epoch AHEAD of ours, in ANY state — batches
     /// dropped mid-drain, holdsPod status reports. Fix for the 2026-08-31 ghost-drain
     /// theft: e269's batches arrived while the e268 ghost was closing (.reconciling, so
@@ -2527,7 +2541,11 @@ final class PodLoanPhoneController {
     /// phone no longer infers a loan from the pod's evidence (see the DETECTOR A
     /// REMOVED note below). Yield is deliberately cheap to enter: it doses nothing,
     /// claims nothing, and every exit is user-driven or evidence-driven.
-    private func engageInferredLoanYield(evidence: String) {
+    private func engageInferredLoanYield(evidence: String, loan: Int) {
+        if state == .owner, yieldingToInferredLoan {
+            noteYieldLoan(loan, evidence: evidence)
+            return
+        }
         guard state == .owner, !yieldingToInferredLoan else { return }
         guard !UserDefaults.standard.bool(forKey: Self.inferredLoanYieldDisabledKey) else {
             PhoneLog.event("mirror", "inferred-loan evidence (\(evidence)) but yield DISABLED by kill switch [mirror]")
@@ -2537,6 +2555,7 @@ final class PodLoanPhoneController {
         // watch's loan window runs from the anchor below.
         ownReading = nil
         yieldingToInferredLoan = true
+        yieldLoanEpoch = loan
         // First contact with this loan: the silence clock counts from here.
         holdRenewedAt = deps.now()
         holdLapseNoticedAt = nil
@@ -2607,6 +2626,7 @@ final class PodLoanPhoneController {
             return ignore("this phone is not plain owner (state=\(state.rawValue))")
         }
         guard !yieldingToInferredLoan else {
+            noteYieldLoan(notice.loan, evidence: "push: Sport Mode started on the watch e\(notice.loan)")
             return ignore("already standing aside")
         }
         // The same fresh evidence a holdsPod status report leaves, so a closing ghost drain
@@ -2615,7 +2635,168 @@ final class PodLoanPhoneController {
             newestForeignLoanEvidence = (notice.loan, deps.now())
         }
         PhoneLog.event("push", "\(line) — ACCEPTED: standing aside [push]")
-        engageInferredLoanYield(evidence: "push: Sport Mode started on the watch e\(notice.loan)")
+        engageInferredLoanYield(evidence: "push: Sport Mode started on the watch e\(notice.loan)", loan: notice.loan)
+    }
+
+    // MARK: - Push, phase 2: the offline start's records, filed while this phone stands aside
+    //
+    // Ruled 2026-10-23 (option 2): on a matching start notice the phone only stands aside, as it
+    // always has — it does not take on the offline loan (no state change, no dead-watch ladder, no
+    // automatic take-back). What the watch pushes for that loan is FILED here, apart from the staged
+    // set, and joins the staged set only at a take-back of that same loan: the retro-ack when the
+    // watch comes back and hands back (take-back a), or the pill tap while it is still away
+    // (take-back b). From there the records commit exactly as the same records over
+    // WatchConnectivity do — before the insulin check judges the window, so it finds that insulin
+    // explained.
+    //
+    // INVARIANT: each pushed record is committed at most once, only for the loan whose credential
+    // it carried.
+    //   · At most once: filed and staged sets are keyed by event ID, and every commit runs behind
+    //     the persisted `committedIDs` filter, which WatchConnectivity copies of the same records
+    //     meet too.
+    //   · Only for that loan: a batch is filed only when it carries the outstanding offline-start
+    //     token and names the loan this phone stands aside for; the filing joins the staged set
+    //     only at a take-back of that loan, and is discarded — never staged — when another loan
+    //     supersedes it.
+
+    /// The records filed for one offline loan, with when each copy was sent (a newer copy of the
+    /// same event wins; pushes can arrive out of order). Persisted in its own file, so a relaunch
+    /// keeps them, and apart from `staged`, so they cannot leak into another loan's commit.
+    private struct PushedRecordFiling: Codable {
+        struct Filed: Codable {
+            let event: LoanEvent
+            let sentAt: Date
+        }
+        let loan: Int
+        var events: [Filed]
+        var tombstones: [UUID]
+    }
+
+    private var pushedFiling: PushedRecordFiling?
+
+    /// The watch's word for a loan NEWER than the one this phone already stands aside for (a second
+    /// offline start over the first): stand aside for that one. The older loan's filing is dropped:
+    /// the watch folds the older loan's unconfirmed records into the newer loan, same IDs, so they
+    /// come again under its number.
+    private func noteYieldLoan(_ loan: Int, evidence: String) {
+        guard state == .owner, yieldingToInferredLoan, let standing = yieldLoanEpoch, loan > standing else { return }
+        yieldLoanEpoch = loan
+        PhoneLog.event("mirror", "still standing aside — now for e\(loan) (was e\(standing)) — \(evidence) [mirror]")
+        if let filing = pushedFiling, filing.loan < loan {
+            discardPushedFiling(why: "the watch moved on to e\(loan)")
+        }
+    }
+
+    /// A record push arrived. `completion` runs on the controller's queue once it is handled (the
+    /// caller's background task ends there).
+    func handlePushedRecords(_ push: SportModeRecordsPush, completion: @escaping () -> Void = {}) {
+        queue.async { [weak self] in
+            defer { completion() }
+            self?.queue_handlePushedRecords(push)
+        }
+    }
+
+    private func queue_handlePushedRecords(_ push: SportModeRecordsPush) {
+        let age = deps.now().timeIntervalSince(push.sentAt)
+        let line = String(format: "push: records e%d part %d/%d — %d event(s), %d tombstone(s) (token …%@, sent %.1fs ago)",
+                          push.loan, push.part, push.parts, push.batch.events.count, push.batch.tombstones.count,
+                          String(push.token.suffix(8)), age)
+        func drop(_ why: String) {
+            PhoneLog.event("push", "\(line) — DROPPED: \(why) [push]")
+        }
+        guard let outstanding = UserDefaults.standard.string(forKey: Keys.dormantSeizeToken),
+              let token = UUID(uuidString: push.token), token.uuidString == outstanding else {
+            return drop("token does not match the outstanding offline-start credential")
+        }
+        guard age <= Self.offlineStartNoticeMaxAge else {
+            return drop(String(format: "too old (%.0f s > %.0f s)", age, Self.offlineStartNoticeMaxAge))
+        }
+        guard state == .owner, yieldingToInferredLoan else {
+            return drop("this phone is not standing aside for an offline start (state=\(state.rawValue), yielding=\(yieldingToInferredLoan))")
+        }
+        guard let standing = yieldLoanEpoch, push.loan == standing else {
+            return drop("loan e\(push.loan) is not the loan this phone stands aside for (\(yieldLoanEpoch.map { "e\($0)" } ?? "unknown"))")
+        }
+        guard push.batch.epoch == push.loan else {
+            return drop("its batch names e\(push.batch.epoch)")
+        }
+
+        var filing = pushedFiling.flatMap { $0.loan == push.loan ? $0 : nil }
+            ?? PushedRecordFiling(loan: push.loan, events: [], tombstones: [])
+        var added = 0, updated = 0, unchanged = 0
+        for event in push.batch.events {
+            if let index = filing.events.firstIndex(where: { $0.event.id == event.id }) {
+                if filing.events[index].sentAt < push.sentAt, filing.events[index].event != event {
+                    filing.events[index] = .init(event: event, sentAt: push.sentAt)
+                    updated += 1
+                } else {
+                    unchanged += 1
+                }
+            } else {
+                filing.events.append(.init(event: event, sentAt: push.sentAt))
+                added += 1
+            }
+        }
+        let newTombstones = push.batch.tombstones.filter { !filing.tombstones.contains($0) }
+        filing.tombstones.append(contentsOf: newTombstones)
+        guard added + updated + newTombstones.count > 0 else {
+            return PhoneLog.event("push", "\(line) — nothing new; \(filing.events.count) event(s) filed for e\(push.loan) [push]")
+        }
+        pushedFiling = filing
+        persistPushedFiling()
+        PhoneLog.event("push", "\(line) — FILED for e\(push.loan): \(added) new, \(updated) updated, \(unchanged) already filed, \(newTombstones.count) new tombstone(s); \(filing.events.count) event(s) filed, committed at the take-back [push]")
+    }
+
+    /// A take-back of `loan`: its filed records join the staged set, from where the take-back's
+    /// own commit writes them (behind `committedIDs`) and its insulin check counts them. A filing
+    /// for an OLDER loan is spent (that loan is over; its records come home with the watch's own
+    /// offer); one for a NEWER loan is kept for that loan's take-back.
+    private func stageFiledPushedRecords(forLoan loan: Int, at context: String) {
+        guard let filing = pushedFiling else { return }
+        guard filing.loan == loan else {
+            if filing.loan < loan { discardPushedFiling(why: "\(context) — it is for e\(filing.loan)") }
+            return
+        }
+        // A copy already staged (from the watch itself) is at least as new as the filed one.
+        let fresh = filing.events.map(\.event).filter { staged[$0.id] == nil }
+        stage(events: fresh, tombstones: filing.tombstones)
+        let alreadyCommitted = fresh.filter { committedIDs.contains($0.id) }.count
+        pushedFiling = nil
+        persistPushedFiling()
+        PhoneLog.event("push", "pushed records for e\(loan) STAGED at the \(context): \(fresh.count) event(s) (\(alreadyCommitted) already committed), \(filing.tombstones.count) tombstone(s) — committed with this take-back, before its insulin check [push]")
+    }
+
+    private func discardPushedFiling(why: String) {
+        guard let filing = pushedFiling else { return }
+        pushedFiling = nil
+        persistPushedFiling()
+        PhoneLog.event("push", "pushed records for e\(filing.loan) DISCARDED (\(filing.events.count) event(s)) — \(why); the watch's journal still holds them [push]")
+    }
+
+    private var pushedFilingFileURL: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("PodLoanPushedRecordsV2.json")
+    }
+
+    private func persistPushedFiling() {
+        guard let filing = pushedFiling else {
+            try? FileManager.default.removeItem(at: pushedFilingFileURL)
+            return
+        }
+        if let data = try? LoanProtocol.encoder.encode(filing) {
+            try? data.write(to: pushedFilingFileURL, options: .atomic)
+        }
+    }
+
+    private func loadPushedFiling() {
+        guard let data = try? Data(contentsOf: pushedFilingFileURL),
+              let filing = try? LoanProtocol.decoder.decode(PushedRecordFiling.self, from: data) else { return }
+        pushedFiling = filing
+    }
+
+    /// Tests: the event IDs filed, and for which loan (nil when nothing is filed).
+    func filedPushedRecordIDsForTesting() -> (loan: Int, ids: Set<UUID>)? {
+        queue.sync { pushedFiling.map { ($0.loan, Set($0.events.map(\.event.id))) } }
     }
 
     /// An audit consumes its anchors. They describe ONE loan; left in place they let a later
@@ -2640,6 +2821,7 @@ final class PodLoanPhoneController {
     private func clearInferredLoanYield(reason: String) {
         guard yieldingToInferredLoan else { return }
         yieldingToInferredLoan = false
+        yieldLoanEpoch = nil
         deps.ownershipDidChange()
         PhoneLog.event("mirror", "inferred-loan yield CLEARED — \(reason) [mirror]")
     }
@@ -2839,7 +3021,7 @@ final class PodLoanPhoneController {
             let hasCredential = UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) != nil
             switch state {
             case .owner where hasCredential:
-                engageInferredLoanYield(evidence: "statusReport — watch holds the pod on e\(report.epoch)")
+                engageInferredLoanYield(evidence: "statusReport — watch holds the pod on e\(report.epoch)", loan: report.epoch)
             case .grantOffered where hasCredential:
                 // GHOST-GRANT ABANDON (field 2026-08-31 21:21): a queued request detonated at
                 // reunion and this phone granted e276 against a live seized e277 — then sat on
@@ -2853,7 +3035,7 @@ final class PodLoanPhoneController {
                 cancelNotification(id: NotificationID.t1)
                 handbackDiag(epoch, "ghost grant e\(epoch) ABANDONED — the watch answered holdsPod e\(report.epoch); yielding instead of waiting on a takeover that cannot come [mirror]")
                 state = .owner
-                engageInferredLoanYield(evidence: "statusReport — watch holds e\(report.epoch), ghost grant abandoned")
+                engageInferredLoanYield(evidence: "statusReport — watch holds e\(report.epoch), ghost grant abandoned", loan: report.epoch)
             case .reclaimPending:
                 // RE-AIM (same field episode, 21:24): the ladder's revoke named this phone's
                 // stale epoch, the watch refused it as matching no live session, and the ladder
@@ -2946,7 +3128,7 @@ final class PodLoanPhoneController {
             // phone went on to bolus the pod as its own.
             if state == .owner, batch.epoch > epoch,
                UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) != nil {
-                engageInferredLoanYield(evidence: "future-epoch batch e\(batch.epoch) at .owner (live seized loan streaming)")
+                engageInferredLoanYield(evidence: "future-epoch batch e\(batch.epoch) at .owner (live seized loan streaming)", loan: batch.epoch)
             }
             return
         }
@@ -3008,6 +3190,10 @@ final class PodLoanPhoneController {
             clearInferredLoanYield(reason: "retro-ack — the inferred loan is now the adopted loan e\(offer.epoch)")
             epoch = offer.epoch
             state = .loaned
+            // Take-back (a): the records the watch pushed for this loan while this phone stood
+            // aside join the staged set now, so this offer's commit — and its insulin check —
+            // count them.
+            stageFiledPushedRecords(forLoan: offer.epoch, at: "retro-ack of e\(offer.epoch)")
             holdRenewedAt = offer.handedBackAt
             holdLapseNoticedAt = nil
             // Where the adopted loan's window starts (next-dev 24419772, 738323ea): the LATEST
@@ -3632,7 +3818,7 @@ final class PodLoanPhoneController {
             UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
             clearAuditAnchors()   // the drained loan's anchors are spent; the yield below re-anchors for the live one
             PhoneLog.event("mirror", "drain e\(epoch) closed UNDER live e\(liveEpoch) — books committed, audit moot, custody NOT resumed [mirror]")
-            engageInferredLoanYield(evidence: "superseding loan e\(liveEpoch) streamed during the e\(epoch) drain")
+            engageInferredLoanYield(evidence: "superseding loan e\(liveEpoch) streamed during the e\(epoch) drain", loan: liveEpoch)
             return
         }
         (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
@@ -3747,6 +3933,13 @@ final class PodLoanPhoneController {
     func reclaimNow() {
         queue.async {
             guard self.podIsOnLoan else { return }
+            // Take-back (b): the records the watch pushed for the loan this phone stands aside
+            // for join the staged set BEFORE the yield clears, so whichever way this reclaim
+            // ends — the force's salvage and its insulin check, or the watch's drain adopted by
+            // the retro-ack — counts them.
+            if self.yieldingToInferredLoan, let loan = self.yieldLoanEpoch {
+                self.stageFiledPushedRecords(forLoan: loan, at: "pill tap while standing aside for e\(loan)")
+            }
             // PHONE MIRROR exit: the pill tap on an inferred loan takes the SAME road a
             // granted dead-watch loan takes — revoke (stale epoch, harmless), ladder,
             // force, schedule audit, gap booking. forceReclaimToOwner unpauses dosing.
