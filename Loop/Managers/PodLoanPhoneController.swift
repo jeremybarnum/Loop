@@ -2720,6 +2720,10 @@ final class PodLoanPhoneController {
         guard push.batch.epoch == push.loan else {
             return drop("its batch names e\(push.batch.epoch)")
         }
+        // A matching push is the watch's own word that it is alive and looping on this loan:
+        // it renews the silence clock as a WatchConnectivity batch does, by when it was SENT
+        // (Jeremy 2026-10-24). A repeat with nothing new still counts.
+        noteHoldRenewal(sentAt: push.sentAt)
 
         var filing = pushedFiling.flatMap { $0.loan == push.loan ? $0 : nil }
             ?? PushedRecordFiling(loan: push.loan, events: [], tombstones: [])

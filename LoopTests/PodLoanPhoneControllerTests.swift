@@ -3748,6 +3748,28 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(controller.filedPushedRecordIDsForTesting()?.ids, [a.id, b.id])
     }
 
+    /// A matching push proves the watch is alive: it renews the silence clock by when it was sent,
+    /// even when it carries nothing new. A dropped push renews nothing.
+    func testAMatchingRecordsPushRenewsTheSilenceClock() {
+        let controller = makeController()
+        let token = standAside(controller, loan: 5)
+        let before = controller.holdRenewedAt ?? .distantPast
+        let a = bolus(seq: 1, units: 1.0, at: Date().addingTimeInterval(-60))
+
+        // Real times taken at each step: the phone never moves the clock past its own now.
+        let sent = Date()
+        XCTAssertGreaterThanOrEqual(sent, before)
+        deliverRecords(recordsPush(loan: 5, token: token.uuidString, events: [a], sentAt: sent), to: controller)
+        XCTAssertEqual(controller.holdRenewedAt, sent)
+
+        let repeatSent = Date()
+        deliverRecords(recordsPush(loan: 5, token: token.uuidString, events: [a], sentAt: repeatSent), to: controller)
+        XCTAssertEqual(controller.holdRenewedAt, repeatSent, "nothing new, but still the watch's word that it is alive")
+
+        deliverRecords(recordsPush(loan: 5, token: UUID().uuidString, events: [a], sentAt: Date()), to: controller)
+        XCTAssertEqual(controller.holdRenewedAt, repeatSent, "a dropped push renews nothing")
+    }
+
     // 2 · Wrong token, other loan, no outstanding token, not standing aside, too old: dropped.
     func testPushedBatchesThatDoNotMatchAreDropped() {
         _ = seizeCredentialOutstanding()
