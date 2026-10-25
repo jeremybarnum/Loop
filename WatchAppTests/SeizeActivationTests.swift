@@ -11,6 +11,7 @@ import HealthKit
 import LoopKit
 import LoopCore
 import LoopAlgorithm
+import G7SensorKit
 @testable import WatchApp
 
 final class SeizeActivationTests: XCTestCase {
@@ -37,7 +38,8 @@ final class SeizeActivationTests: XCTestCase {
         super.tearDown()
     }
 
-    private func makeController() async -> PodLoanWatchController {
+    /// `readsCGM`: the watch has its own CGM reading (Read on Apple Watch), so it can start without the phone.
+    private func makeController(readsCGM: Bool = true) async -> PodLoanWatchController {
         let doseStore = await DoseStore(
             healthKitSampleStore: nil,
             cacheStore: cacheStore,
@@ -58,6 +60,7 @@ final class SeizeActivationTests: XCTestCase {
         )
         let manager = WatchLoopManager(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore,
                                        defaults: defaults, stateDirectory: journalDir)
+        if readsCGM { manager.noteCGMManager(G7CGMManager()) }
         return PodLoanWatchController(loopManager: manager,
                                       journal: LoanEventJournal(directory: journalDir),
                                       stateDirectory: journalDir)
@@ -178,6 +181,19 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertEqual(snap.seizeOfferIssuedAt.map { abs($0.timeIntervalSince(issuedAt)) < 1 }, true,
                        "the offer carries the credential's issue stamp, so its age can be shown")
         XCTAssertNil(snap.lastIdleNote, "the offer replaces the failure note")
+    }
+
+    /// A watch not reading the CGM has nothing to dose from: no offer, and the note says why.
+    func testTimedOutRequestOffersNoOfflineStartWithoutTheWatchsOwnCGM() async {
+        let controller = await makeController(readsCGM: false)
+        controller.send = { _ in }
+        controller.scheduler = { _, _, work in work.perform() }
+
+        controller.handleDormantGrant(fixtureDormant(issuedAt: Date().addingTimeInterval(-1200)))
+        controller.requestLoan(watchBuild: "seize-test")
+        let snap = controller.debugSnapshot()
+        XCTAssertNil(snap.seizeOfferIssuedAt, "credential stored, but no CGM on the watch: no offer")
+        XCTAssertEqual(snap.lastIdleNote?.contains("isn't reading the CGM"), true)
     }
 
     // MARK: - The request is the question

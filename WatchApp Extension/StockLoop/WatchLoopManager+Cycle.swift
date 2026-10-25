@@ -69,16 +69,14 @@ extension WatchLoopManager {
                 // Trim future basal
                 input.doses = input.doses.trimmed(to: loopBaseTime)
 
-                var dosingStrategy: AutomaticDosingStrategy = .automaticBolus
-
-                if FeatureFlags.dosingStrategySelectionEnabled {
-                    dosingStrategy = self.settingsProvider.settings.automaticDosingStrategy
-                }
+                let dosingStrategy = self.currentDosingStrategy
                 input.recommendationType = dosingStrategy.recommendationType
+                dosingDecision.algorithmExperiments = self.algorithmExperimentRecords(for: dosingStrategy)
 
                 try input.checkRecency(at: loopBaseTime, lastAddedPumpData: self.doseStore.lastAddedPumpData)
 
                 var output = LoopAlgorithm.run(input: input)
+                dosingDecision.algorithmExperiments = self.algorithmExperimentRecords(for: dosingStrategy, guardAndRunway: output.guardAndRunway)
                 self.loopRunState = AlgorithmDisplayState(input: input, output: output)
 
                 switch output.recommendationResult {
@@ -260,8 +258,7 @@ extension WatchLoopManager {
     ///   settings history before the grant);
     /// - the override history is this manager's `overrideHistory`, and the active override is
     ///   `scheduleOverride` while active (stock: `temporaryPresetsManager`);
-    /// - integral retrospective correction and the application-factor strategy follow the
-    ///   grant's flags, not this device's `UserDefaults`.
+    /// - the algorithm experiments follow the grant's flags, not this device's `UserDefaults`.
     /// No recency check lives here, as in stock: `loop()` checks after it fetches.
     func fetchData(
         for baseTime: Date? = nil,
@@ -283,11 +280,35 @@ extension WatchLoopManager {
             activeOverride: scheduleOverride.flatMap { $0.isActive(at: now()) ? $0 : nil },
             pumpInsulinType: pumpManager?.status.insulinType,
             insulinModel: insulinModel(for:),
-            useIntegralRetrospectiveCorrection: integralRetrospectiveCorrectionEnabled,
-            applicationFactorStrategy: glucoseBasedApplicationFactorEnabled
-                ? GlucoseBasedApplicationFactorStrategy()
-                : ConstantApplicationFactorStrategy(),
+            experiments: algorithmExperiments,
+            volatilityBaseline: guardAndRunwayEnabled ? volatilityBaseline : nil,
             carbAbsorptionModel: .piecewiseLinear)
+    }
+
+    /// As stock's `LoopDataManager`: automatic bolus, unless strategy selection is enabled.
+    var currentDosingStrategy: AutomaticDosingStrategy {
+        FeatureFlags.dosingStrategySelectionEnabled ? settingsProvider.settings.automaticDosingStrategy : .automaticBolus
+    }
+
+    /// Stock `LoopDataManager.algorithmExperiments(for:guardAndRunway:)`, from the grant's experiments.
+    func algorithmExperimentRecords(for dosingStrategy: AutomaticDosingStrategy, guardAndRunway: GuardAndRunwayOutput? = nil) -> [AlgorithmExperiment] {
+        AlgorithmExperiment.records(enabled: algorithmExperiments, dosingStrategy: dosingStrategy,
+                                    volatilityBaseline: guardAndRunwayEnabled ? volatilityBaseline : nil, guardAndRunway: guardAndRunway)
+    }
+
+    /// The grant's experiment flags as LoopAlgorithm's experiments, with the phone's volatility baseline.
+    private var algorithmExperiments: Set<ExperimentOption> {
+        var experiments: Set<ExperimentOption> = []
+        if integralRetrospectiveCorrectionEnabled {
+            experiments.insert(.integralRetrospectiveCorrection)
+        }
+        if glucoseBasedApplicationFactorEnabled {
+            experiments.insert(.glucoseBasedApplicationFactor)
+        }
+        if guardAndRunwayEnabled {
+            experiments.insert(.guardAndRunway)
+        }
+        return experiments
     }
 
     /// Stock `LoopDataManager.updateDisplayState`: the display run, fed with doses back a day,

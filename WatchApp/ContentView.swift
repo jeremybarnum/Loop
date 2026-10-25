@@ -10,6 +10,9 @@ import LoopKit
 import SwiftUI
 
 struct ContentView: View {
+    /// Clear of the pages Sport Mode adds after the chart.
+    static let sensorPage = 10
+
     @Environment(LoopDataManager.self) var loopManager
 
     @State private var presetToConfirm: SelectablePreset? = nil
@@ -50,6 +53,12 @@ struct ContentView: View {
                 if FeatureFlags.sportModeEnabled {
                     LoanDebugView()
                         .tag(Self.sportPage + 1)
+                }
+
+                // While the watch reads the CGM itself.
+                if WatchCGMHost.shared.isReadingDirectly {
+                    WatchSensorView()
+                        .tag(Self.sensorPage)
                 }
             }
             .tabViewStyle(.page)
