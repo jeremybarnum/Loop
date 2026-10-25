@@ -221,7 +221,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
         tableView.estimatedRowHeight = 74
 
         // Estimate an initial value
-        landscapeMode = UIScreen.main.bounds.size.width > UIScreen.main.bounds.size.height
+        landscapeMode = ActionTabBarMetrics.isCompactHeight
 
         addScenarioStepGestureRecognizers()
 
@@ -348,6 +348,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
         let backgroundContainerView = UIView()
         backgroundContainerView.backgroundColor = .systemBackground
         let statusBarBackgroundView = UIView(frame: CGRect(x: 0, y: 0, width: view.bounds.width, height: 0))
+        statusBarBackgroundView.autoresizingMask = .flexibleWidth
         self.statusBarBackgroundView = statusBarBackgroundView
         backgroundContainerView.addSubview(statusBarBackgroundView)
         tableView.backgroundView = backgroundContainerView
@@ -381,7 +382,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
         }
     }
 
-    // Toggles the display mode based on the screen aspect ratio. Should not be updated outside of reloadData().
+    // Charts only, for compact height (an iPhone in landscape). Should not be updated outside of reloadData().
     private var landscapeMode = false {
         didSet {
             setupPresetsStatusBar()
@@ -401,6 +402,12 @@ final class StatusTableViewController: LoopChartsTableViewController {
     
     private var shouldShowHUD: Bool {
         return !landscapeMode
+    }
+
+    // With a vertical status bar there is no top safe area inset, so keep the first row clear of the display corners.
+    private var cornerClearanceTopInset: CGFloat {
+        guard #available(iOS 26.0, *), let window = view.window else { return 0 }
+        return max(0, window.edgeInsets(for: .safeArea(cornerAdaptation: .vertical)).top - window.safeAreaInsets.top)
     }
 
     private var shouldShowStatus: Bool {
@@ -673,7 +680,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
         let statusRowMode = self.determineStatusRowMode()
 
         updateBannerAndHUDandStatusRows(statusRowMode: statusRowMode, newSize: currentContext.newSize, animated: animated)
-        tableView.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: ActionTabBarMetrics.tableContentInset, right: 0)
+        tableView.contentInset = UIEdgeInsets(top: shouldShowBannerWarning ? 0 : cornerClearanceTopInset, left: 0, bottom: ActionTabBarMetrics.tableContentInset, right: 0)
         
         redrawCharts()
 
@@ -842,8 +849,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
         self.presetsRowMode = determinePresetsRowMode()
         self.statusRowMode = statusRowMode
 
-        if let newSize = newSize {
-            landscapeMode = newSize.width > newSize.height
+        if newSize != nil {
+            landscapeMode = traitCollection.verticalSizeClass == .compact
         }
 
         let presetsIsVisible = self.shouldShowPresets
@@ -988,7 +995,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
         case .alertWarning:
             let cell = UITableViewCell()
             let alert = AlertPermissionsChecker.UnsafeNotificationPermissionAlert(permissions: alertPermissionsChecker.notificationCenterSettings)
-    
+            let fullBleedTopInset: CGFloat? = cornerClearanceTopInset > 0 ? cornerClearanceTopInset : nil
+
             cell.contentConfiguration = UIHostingConfiguration  {
                 if alertPermissionsChecker.showWarning {
                     if let alert {
@@ -1008,9 +1016,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
                                 .font(.headline)
                         }
                         .foregroundStyle(Color.white)
-                        .padding(8)
-                        .background(Color.critical.cornerRadius(10))
-                        .padding([.top, .horizontal], 8)
+                        .modifier(WarningBannerStyle(fullBleedTopInset: fullBleedTopInset))
                     }
                 } else {
                     HStack {
@@ -1031,15 +1037,13 @@ final class StatusTableViewController: LoopChartsTableViewController {
                             .font(.title)
                     }
                     .foregroundStyle(Color.white)
-                    .padding(8)
-                    .background(Color.critical.cornerRadius(10))
-                    .padding([.top, .horizontal], 8)
+                    .modifier(WarningBannerStyle(fullBleedTopInset: fullBleedTopInset))
                 }
             }
             .margins(.all, 0)
-            
-            cell.backgroundColor = .secondarySystemBackground
-            
+
+            cell.backgroundColor = fullBleedTopInset == nil ? .secondarySystemBackground : .critical
+
             return cell
         case .hud:
             let cell = tableView.dequeueReusableCell(withIdentifier: HUDViewTableViewCell.className, for: indexPath) as! HUDViewTableViewCell
@@ -1267,7 +1271,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
         case .charts:
             // Compute the height of the HUD, defaulting to 70
             let hudHeight = ceil(hudView?.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize).height ?? 74)
-            var availableSize = max(tableView.bounds.width, tableView.bounds.height)
+            var availableSize = landscapeMode ? max(tableView.bounds.width, tableView.bounds.height) : tableView.bounds.height
             availableSize -= (tableView.safeAreaInsets.top + tableView.safeAreaInsets.bottom + tableView.contentInset.bottom + hudHeight)
 
             switch ChartRow(rawValue: indexPath.row)! {
@@ -2363,5 +2367,25 @@ extension StatusTableViewController: ServicesViewModelDelegate {
 extension StatusTableViewController {
     override func scrollViewDidScroll(_ scrollView: UIScrollView) {
         updateStatusBar()
+    }
+}
+
+// Without a top status bar, the banner runs to the top edge and the display corners round it.
+private struct WarningBannerStyle: ViewModifier {
+    let fullBleedTopInset: CGFloat?
+
+    func body(content: Content) -> some View {
+        if let fullBleedTopInset {
+            content
+                .padding(.top, fullBleedTopInset)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 12)
+                .background(Color.critical)
+        } else {
+            content
+                .padding(8)
+                .background(Color.critical.cornerRadius(10))
+                .padding([.top, .horizontal], 8)
+        }
     }
 }

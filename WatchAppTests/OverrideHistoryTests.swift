@@ -70,7 +70,8 @@ final class OverrideHistoryTests: XCTestCase {
     /// A grant with complete settings. Its pump configuration is not a pump, so intake stops
     /// (and tears down) after the overrides are applied.
     private func grant(activeOverride: TemporaryScheduleOverride?, overrideHistory: [TemporaryScheduleOverride]? = nil,
-                       settingsHistory: LoanSettingsHistory? = nil, glucoseBasedApplicationFactor: Bool? = nil) -> LoanGrant {
+                       settingsHistory: LoanSettingsHistory? = nil, glucoseBasedApplicationFactor: Bool? = nil,
+                       guardAndRunway: Bool? = nil, volatilityBaseline: Double? = nil) -> LoanGrant {
         var settings = LoopSettings()
         settings.glucoseTargetRangeSchedule = GlucoseRangeSchedule(
             unit: .milligramsPerDeciliter,
@@ -88,6 +89,7 @@ final class OverrideHistoryTests: XCTestCase {
         return LoanGrant(epoch: 1, expiresAt: Date().addingTimeInterval(300), pumpConfiguration: Data([1, 2, 3]),
                          podAddress: 0, therapySettingsRaw: plist(settings.rawValue), settingsTimeZoneID: "GMT",
                          doseHistory: [], glucoseBasedApplicationFactorEnabled: glucoseBasedApplicationFactor,
+                         guardAndRunwayEnabled: guardAndRunway, volatilityBaseline: volatilityBaseline,
                          activeOverrideRaw: activeOverride.map { plist($0.rawValue) },
                          therapySettingsSupplementRaw: plist(supplement),
                          overrideHistoryRaw: overrideHistory.flatMap(LoanGrant.overrideHistoryRaw),
@@ -310,28 +312,54 @@ final class OverrideHistoryTests: XCTestCase {
     /// The phone's glucose-based application factor reaches the wrist's algorithm input, as
     /// integral retrospective correction does.
     func testTheApplicationFactorFollowsThePhonesExperimentToggle() async throws {
-        let factor = try await applicationFactor(afterGrantWith: true)
-        let range = LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: 100)...LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: 110)
-        let expected = GlucoseBasedApplicationFactorStrategy().calculateDosingFactor(
-            for: LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: 120), correctionRange: range)
-        XCTAssertEqual(factor, expected, accuracy: 0.0001)
+        let experiments = try await experiments(afterGrantWith: true)
+        XCTAssertTrue(experiments.contains(.glucoseBasedApplicationFactor))
     }
 
     /// An older phone sends no flag: the factor stays stock's constant.
     func testAGrantWithoutTheToggleKeepsTheConstantFactor() async throws {
-        let factor = try await applicationFactor(afterGrantWith: nil)
-        XCTAssertEqual(factor, LoopAlgorithm.defaultBolusPartialApplicationFactor, accuracy: 0.0001)
+        let experiments = try await experiments(afterGrantWith: nil)
+        XCTAssertFalse(experiments.contains(.glucoseBasedApplicationFactor))
     }
 
-    /// The factor in the first algorithm input after a grant, with glucose steady at 120 mg/dL.
-    private func applicationFactor(afterGrantWith flag: Bool?) async throws -> Double {
+    /// The phone's guard + runway reaches the wrist's algorithm input, with the phone's volatility baseline.
+    func testGuardAndRunwayFollowsThePhonesExperimentToggle() async throws {
+        let input = try await input(afterGrant: grant(activeOverride: nil, guardAndRunway: true, volatilityBaseline: 4.2))
+        XCTAssertTrue(input.experiments.contains(.guardAndRunway))
+        XCTAssertEqual(input.volatilityBaseline, 4.2)
+    }
+
+    /// The watch's dosing decisions record the experiments as the phone's do, guard + runway with its baseline.
+    func testTheWatchsDosingDecisionsRecordThePhonesExperiments() async throws {
         let c = await makeController(overrideHistory: StockLoopStack.makeOverrideHistory())
-        c.queue.sync { c.handleGrant(grant(activeOverride: nil, glucoseBasedApplicationFactor: flag)) }
-        XCTAssertEqual(c.loopManager.isGlucoseBasedApplicationFactorEnabled, flag ?? false)
+        c.queue.sync { c.handleGrant(grant(activeOverride: nil, glucoseBasedApplicationFactor: true, guardAndRunway: true, volatilityBaseline: 4.2)) }
+        let records = c.loopManager.dataAccessQueue.sync { c.loopManager.algorithmExperimentRecords(for: .tempBasalOnly) }
+        XCTAssertEqual(records.map(\.identifier), [ExperimentOption.guardAndRunway.rawValue],
+                       "the application factor is in effect only with automatic bolus, as on the phone")
+        XCTAssertEqual(records.first?.parameters, .object(["volatilityBaseline": .number(4.2)]))
+    }
+
+    /// An older phone sends no flag: guard + runway stays off, and a baseline alone is not used.
+    func testAGrantWithoutTheGuardAndRunwayToggleLeavesItOff() async throws {
+        let input = try await input(afterGrant: grant(activeOverride: nil, volatilityBaseline: 4.2))
+        XCTAssertFalse(input.experiments.contains(.guardAndRunway))
+        XCTAssertNil(input.volatilityBaseline)
+    }
+
+    /// The experiments in the first algorithm input after a grant.
+    private func experiments(afterGrantWith flag: Bool?) async throws -> Set<ExperimentOption> {
+        let input = try await input(afterGrant: grant(activeOverride: nil, glucoseBasedApplicationFactor: flag))
+        return input.experiments
+    }
+
+    /// The first algorithm input after a grant, with glucose steady for an hour.
+    private func input(afterGrant grant: LoanGrant) async throws -> StoredDataAlgorithmInput {
+        let c = await makeController(overrideHistory: StockLoopStack.makeOverrideHistory())
+        c.queue.sync { c.handleGrant(grant) }
+        XCTAssertEqual(c.loopManager.isGlucoseBasedApplicationFactorEnabled, grant.glucoseBasedApplicationFactorEnabled ?? false)
         await seedGlucose(c.loopManager, hours: 1)
         try await c.loopManager.recordPumpEvents([], lastReconciliation: Date(), replacePendingEvents: true)
-        let input = try await c.loopManager.fetchData(for: Date())
-        return try XCTUnwrap(input.automaticBolusApplicationFactor)
+        return try await c.loopManager.fetchData(for: Date())
     }
 
     /// An older phone sends no history: the snapshot is projected back, as before.

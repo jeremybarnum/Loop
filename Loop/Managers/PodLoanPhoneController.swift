@@ -65,6 +65,9 @@ final class PodLoanPhoneController {
         /// Diagnostic only; it lags, so it never gates a grant.
         var watchAppInstalled: () -> Bool = { true }
 
+        /// The CGM's Read on Apple Watch setting: Sport Mode doses from the watch's own reading.
+        var watchReadsCGM: () -> Bool = { true }
+
         /// Read and write: the reader tells a clear from the wrist whether there is anything to clear.
         var scheduleOverride: () -> TemporaryScheduleOverride? = { nil }
         /// Recorded in the override history at `changedAt`, when the wrist made the change.
@@ -73,6 +76,9 @@ final class PodLoanPhoneController {
         var noteWatchClosedLoop: (Bool) -> Void = { _ in }
 
         var lastLoopCompleted: () -> Date? = { nil }
+
+        /// The volatility baseline the phone's guard + runway uses; nil while it has none.
+        var volatilityBaseline: () -> Double? = { nil }
 
         var noteWatchLoopCompleted: (Date) -> Void = { _ in }
 

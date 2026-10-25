@@ -2,8 +2,8 @@
 //  LoopDataManager+PodLoanWatch.swift
 //  WatchApp Extension
 //
-//  Sport Mode on the watch's LoopDataManager: the phone relay context, the phone's CGM
-//  configuration, phone contexts that arrive during a loan, and overrides on the wrist's dosing.
+//  Sport Mode on the watch's LoopDataManager: the phone relay context, the watch's own CGM
+//  readings, phone contexts that arrive during a loan, and overrides on the wrist's dosing.
 //
 
 import Foundation
@@ -23,11 +23,16 @@ extension LoopDataManager {
         }
     }
 
-    /// Called from `updateContext(_:)`: the phone's CGM configuration rides in each context.
-    func podLoanAdoptCGMConfiguration(from context: WatchContext) {
-        guard !context.isWatchAuthored,
-              let configuration = context.cgmConfiguration.flatMap(SharedDeviceConfiguration.init(rawValue:)) else { return }
-        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.loopManager.adoptCGMConfiguration(configuration)
+    /// Called from `addDirectGlucose(_:)`: the watch's own reading also feeds Sport Mode's loop.
+    func podLoanNoteDirectGlucose(_ samples: [NewGlucoseSample]) {
+        guard let loopManager = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.loopManager else { return }
+        loopManager.noteCGMManager(WatchCGMHost.shared.cgmManager)
+        loopManager.ingestDirectGlucose(samples)
+    }
+
+    /// Called from `directGlucoseDidEnd()`: the watch let go of the sensor.
+    func podLoanNoteDirectGlucoseEnded() {
+        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.loopManager.noteCGMManager(nil)
     }
 
     /// While the wrist owns the alarms (taking over, live, handing back, draining, resuming) the
@@ -44,6 +49,9 @@ extension LoopDataManager {
     /// A phone context during a loan: the relayed reading is stored here, and offered to the wrist's
     /// loop and alarms.
     func podLoanAbsorbPhoneContextDuringLoan(_ context: WatchContext) {
+        // `WatchCGMHost.update(from:)` is not reached during a loan, so its sensor keeps reading
+        // whatever the phone shares; a context is still a wake for its acquisition.
+        WatchCGMHost.shared.recheckAcquisition()
         guard let newGlucoseSample = context.newGlucoseSample else { return }
         Task {
             try? await self.glucoseStore?.addGlucoseSamples([newGlucoseSample])

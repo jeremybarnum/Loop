@@ -45,6 +45,7 @@ extension ExtensionDelegate {
             await MainActor.run {
                 self.stockLoopSession = session
                 self.stockLoopSessionStarting = false
+                session?.stack.loopManager.noteCGMManager(WatchCGMHost.shared.cgmManager)
                 if session == nil {
                     // Sport Mode is unavailable; the rest of the watch app is not affected.
                     SportLog.event("session", "SPORT MODE UNAVAILABLE — stack did not assemble")
@@ -111,8 +112,6 @@ extension ExtensionDelegate {
         SportLog.event("lifecycle", "didBecomeActive [lifecycle-crumb]")
         NotificationCenter.default.post(name: Self.didBecomeActiveNotification, object: self)
         SensorSearchAlert.disarm()
-        // Looking at the watch is the one wake left with the phone away: the sensor's acquisition re-checks.
-        watchCGMRecheckAcquisition(stockLoopSession?.stack.loopManager.cgmManager)
         // In front, a complication reload costs no budget: refresh it on every open, so the face matches
         // the app after any look at it, even when an earlier budgeted request was never carried out.
         GlanceComplicationPublisher.publish(from: self, onOpen: true)
@@ -124,7 +123,7 @@ extension ExtensionDelegate {
         // Lifecycle breadcrumb.
         SportLog.event("lifecycle", "willResignActive [lifecycle-crumb]")
         NotificationCenter.default.post(name: Self.willResignActiveNotification, object: self)
-        if (stockLoopSession?.stack.loopManager.cgmManager as? G7CGMManager)?.isSearchingForSensor == true {
+        if (WatchCGMHost.shared.cgmManager as? G7CGMManager)?.isSearchingForSensor == true {
             SensorSearchAlert.arm()
         }
     }

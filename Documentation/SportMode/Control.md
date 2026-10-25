@@ -186,7 +186,9 @@ Each situation lists:
 - **Result:** query: the request is the query (watch → phone) → answer: a grant → action: phone releases the pod and holds its dosing; watch takes over (transfer G)
 - **Afterwards:** pod held by watch, by grant · time without looping: seconds · looper sees: watch: Sport Mode page; phone: banner "Sport Mode Active"
 - **Status:** built · **Code:** phone `+Grant`, watch `+Start`
-- **Why:** The looper chose the watch and the phone is there to hand over: the ordinary case.
+- **Why:** The looper chose the watch and the phone is there to hand over: the ordinary case. The watch doses from
+  its own reading of the sensor, which stock gives it only with the CGM's Read on Apple Watch setting on; with it
+  off, the phone refuses the Start and names the setting, rather than turning it on for the looper.
 
 ### 2. Start, phone away or dead
 
@@ -198,7 +200,8 @@ Each situation lists:
 - **Result:** query: the request (queued) → answer: silence after 10 s → action: prompt "Start without it?"; on the tap, the watch starts from its stored copy and checks the pod's total first
 - **Afterwards:** pod held by watch, started without the phone · time without looping: 10 s plus the tap · looper sees: watch: on screen, the offer
 - **Status:** built · **Code:** watch `+Start`, `+Seize`
-- **Why:** The looper asked for Sport Mode and the phone cannot grant it. Starting from the stored copy is entering a mode, which needs the looper's tap (rule 6), so the system offers it as the alternative to the refused Start (rule 7). The query's silence decides when to offer, not the reachability flag, which says only whether the phone's app can take a live message this second.
+- **Why:** The looper asked for Sport Mode and the phone cannot grant it. Starting from the stored copy is entering a mode, which needs the looper's tap (rule 6), so the system offers it as the alternative to the refused Start (rule 7). The query's silence decides when to offer, not the reachability flag, which says only whether the phone's app can take a live message this second. A watch not reading the sensor
+itself has nothing to dose from, so it offers nothing and says so.
 
 ### 3. Phone dies, no loan
 
@@ -490,7 +493,7 @@ The table above describes *holding*. A transfer is the pod moving between holder
 steps, where what goes wrong is always a step's message not arriving. One rule covers them: **a transfer that does
 not complete goes back to the state before it began, or to the resting state if that cannot be established.**
 
-**Nobody takes the pod while it is giving a bolus.** The pod gives a bolus by itself, at a fixed rate, once it has
+**Nobody takes the pod while it is giving a bolus, or while a command to it is unconfirmed.** The pod gives a bolus by itself, at a fixed rate, once it has
 accepted it, so a pod handed over mid-bolus would leave the record wrong on both sides. A Start while the phone's
 own bolus runs, and an End or a Take Back while the watch's runs, are refused with how long the bolus has left; the
 looper tries again after it. A bolus counts from the moment it is sent until it has finished or been cancelled, and
@@ -499,7 +502,9 @@ being handed back; with an End waiting, a bolus asked for on the watch is refuse
 iPhone once it has the pod. The
 phone saves a watch bolus only once it has finished, as Loop's own drivers report one: a record of a bolus still
 being given is acknowledged but kept back. A take-over on silence, where nobody can retry, waits for the pod to finish the bolus
-it reports. The pod has one connection, so the device reading it cannot be raced by a new bolus. An offline Start
+it reports. The pod has one connection, so the device reading it cannot be raced by a new bolus. A command whose answer never
+arrived (stock's "delivery is uncertain") holds a Start and an End the same way, since the copy handed over would leave
+out what the pod may have given; the next status read settles it. The phone's standing copy is not refreshed meanwhile. An offline Start
 cannot ask the phone and takes the pod whatever it is giving: the phone's records are trued up from the pod's
 delivered total when it is back with the pod.
 
@@ -511,12 +516,14 @@ delivered total when it is back with the pod.
 | G | ″ | phone | silence 30 s after that query | take back | phone | ″ | built |
 | G | ″ | phone | answer "taking over" | wait until the grant's lease ends (60 s), then query once more and take back on silence | the watch if it lands | ″ if it does not | built |
 | G | the phone's own bolus is still being given at the Start | phone | its pump's bolus state | deny the Start: "A bolus is still being given. Try again in N seconds." | phone | watch: on screen, the reason, with a haptic | built |
+| G | the pod has not confirmed the phone's last command at the Start | phone | its pump's "delivery is uncertain" | deny the Start: "The pod hasn't confirmed the last command yet. Try again in a minute." | phone | watch: on screen, the reason, with a haptic | built |
 | G | the takeover fails on the watch | watch, then phone | the watch reports failure | the phone takes back at once | phone | watch: on screen, the reason | built |
 | G | the looper cancels at the offline offer, and the grant arrives after that | watch | a grant for a Start no longer wanted | answer "takeover failed": Sport Mode is entered only by a tap, and the cancel withdrew it; a new Start asks afresh | phone | phone: takes the pod back at once, as above | built |
 | G | the grant is numbered at or below a loan the watch already knows | watch | a stale grant | answer "takeover failed" | phone | — | built |
 | G | the confirmation is lost | phone | the query is answered "I hold loan n" | treat the takeover as complete | watch | — | built |
 | **S** offline start | the pod does not answer within the lease | watch | no pod reading | back to rest | phone (as before) | watch: "Sport Mode start expired before the pod answered" | built |
 | **H** hand-back (watch → phone) | the watch's bolus is still being given at End | watch | its pump's bolus state | refuse the End: "A bolus is still being given. Try again in N seconds."; the loan continues | watch | watch: on screen over the bolus progress, with a haptic | built |
+| H | the pod has not confirmed the watch's last command at End | watch | its pump's "delivery is uncertain" | refuse the End: "The pod hasn't confirmed the last command yet. Try again in a minute."; the loan continues | watch | watch: on screen, with a haptic | built |
 | H | the phone is away at End | watch | silence 10 s after the offer | refuse (row 8) | watch | row 8 | built |
 | H | the phone acknowledged the first offer, later offers go unanswered | watch | no acknowledgement; resends every 15 s | keep resending, by every path, for the 2-min budget | watch, still looping | watch: "ending…" | built |
 | H | the final offer (sent after dosing stopped) is not acknowledged within the budget | watch | no acknowledgement | let the pod go and keep sending records; the phone takes the pod when they land, or when its overdue query is answered "I hold nothing" (counted as silence) | nobody until the phone takes it (seconds, or 6–11 min if every message was lost) | watch: notification "End Not Confirmed: the watch has stopped dosing… open Loop on the iPhone and tap the pod tile" | built. The transfer rule's second half: the watch cannot tell whether its final offer arrived, and resuming would dose beside a phone that may already be taking the pod, so the resting state it is |
@@ -544,6 +551,10 @@ Failures only a test can produce. They are logged when recognised; no warning is
 ---
 
 ## 8. Known limits and open questions
+
+- **The watch reads the sensor in its own slot, which Dexcom's watch app also uses.** Read on Apple Watch and
+  Dexcom's watch app together are expected to collide, so they are not supported together (untested). The Dexcom
+  app on the phone is unaffected.
 
 - **Row 15's warnings land on a watch nobody is wearing.** Nothing better is possible without the phone.
 - **A stop queued to a watch that is off** may be lost, or delivered once the watch's link to the phone has started.
