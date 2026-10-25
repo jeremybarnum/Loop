@@ -110,7 +110,8 @@ extension StoredDataAlgorithmInput {
             algorithmEffectsOptions: effectsOptions,
             useIntegralRetrospectiveCorrection: self.useIntegralRetrospectiveCorrection,
             useMidAbsorptionISF: true,
-            carbAbsorptionModel: self.carbAbsorptionModel.model
+            carbAbsorptionModel: self.carbAbsorptionModel.model,
+            experiments: experiments
         )
         return prediction.glucose
     }
@@ -187,8 +188,8 @@ extension StoredDataAlgorithmInput {
         activeOverride: TemporaryScheduleOverride?,
         pumpInsulinType: InsulinType?,
         insulinModel insulinModelForType: (InsulinType?) -> InsulinModel,
-        useIntegralRetrospectiveCorrection: Bool,
-        applicationFactorStrategy: ApplicationFactorStrategy,
+        experiments: Set<ExperimentOption>,
+        volatilityBaseline: Double?,
         carbAbsorptionModel: CarbAbsorptionModel,
         isolation: isolated (any Actor)? = #isolation
     ) async throws -> StoredDataAlgorithmInput {
@@ -367,19 +368,6 @@ extension StoredDataAlgorithmInput {
         }
 
 
-        let correctionRange = target.closestPrior(to: baseTime)?.value
-
-        let effectiveBolusApplicationFactor: Double?
-
-        if let latestGlucose = glucose.last {
-            effectiveBolusApplicationFactor = applicationFactorStrategy.calculateDosingFactor(
-                for: latestGlucose.quantity,
-                correctionRange: correctionRange!
-            )
-        } else {
-            effectiveBolusApplicationFactor = nil
-        }
-
         return StoredDataAlgorithmInput(
             glucoseHistory: glucose,
             doses: dosesWithModel,
@@ -392,12 +380,44 @@ extension StoredDataAlgorithmInput {
             suspendThreshold: suspendThreshold,
             maxBolus: maxBolus,
             maxBasalRate: maxBasalRate,
-            useIntegralRetrospectiveCorrection: useIntegralRetrospectiveCorrection,
+            useIntegralRetrospectiveCorrection: false,
             includePositiveVelocityAndRC: true,
             carbAbsorptionModel: carbAbsorptionModel,
             recommendationInsulinModel: recommendationInsulinModel,
             recommendationType: .manualBolus,
-            automaticBolusApplicationFactor: effectiveBolusApplicationFactor)
+            automaticBolusApplicationFactor: nil,
+            experiments: experiments,
+            volatilityBaseline: volatilityBaseline)
+    }
+}
+
+extension AlgorithmExperiment {
+    /// `LoopDataManager.algorithmExperiments(for:guardAndRunway:)`'s body, shared with the watch: the
+    /// enabled experiments as a dosing decision records them. Glucose based partial application only
+    /// affects automatic boluses, so it is in effect only with that strategy.
+    static func records(enabled: Set<ExperimentOption>, dosingStrategy: AutomaticDosingStrategy,
+                        volatilityBaseline: Double?, guardAndRunway: GuardAndRunwayOutput? = nil) -> [AlgorithmExperiment] {
+        enabled
+            .filter { $0 != .glucoseBasedApplicationFactor || dosingStrategy == .automaticBolus }
+            .sorted { $0.rawValue < $1.rawValue }
+            .map { experiment in
+                guard experiment == .guardAndRunway else {
+                    return AlgorithmExperiment(identifier: experiment.rawValue)
+                }
+                var parameters: [String: JSONValue] = [:]
+                if let volatilityBaseline {
+                    parameters["volatilityBaseline"] = .number(volatilityBaseline)
+                }
+                if let guardAndRunway {
+                    parameters["volatility"] = .number(guardAndRunway.volatility)
+                    parameters["bandApplied"] = .bool(guardAndRunway.bandApplied)
+                    parameters["bandGain"] = .number(guardAndRunway.bandGain)
+                    parameters["bandDepth"] = .number(guardAndRunway.bandDepth)
+                    parameters["runwayShift"] = .number(guardAndRunway.runwayShift)
+                    parameters["postLowRiseCutActive"] = .bool(guardAndRunway.postLowRiseCutActive)
+                }
+                return AlgorithmExperiment(identifier: experiment.rawValue, parameters: parameters.isEmpty ? nil : .object(parameters))
+            }
     }
 }
 

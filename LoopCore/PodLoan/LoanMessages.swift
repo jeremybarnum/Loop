@@ -184,6 +184,11 @@ public struct LoanGrant: Codable, Equatable {
 
     public let glucoseBasedApplicationFactorEnabled: Bool?
 
+    public let guardAndRunwayEnabled: Bool?
+
+    /// The phone's volatility baseline for guard + runway (LoopAlgorithm's `volatilityBaseline`).
+    public let volatilityBaseline: Double?
+
     public let phoneClosedLoopEnabled: Bool?
 
     public let carbHistory: [LoanCarbRecord]?
@@ -207,7 +212,7 @@ public struct LoanGrant: Codable, Equatable {
     /// The phone's settings over the last 24 h, up to the grant.
     public let settingsHistory: LoanSettingsHistory?
 
-    /// The phone's remote services that share their configuration (Nightscout), each a binary
+    /// The phone's remote services that share their configuration (Nightscout, Tidepool), each a binary
     /// property list of its `SharedDeviceConfiguration`, so the wrist uploads during the loan. They
     /// hold secrets: Start grants only, never the standing copy, never logged.
     public var serviceConfigurations: [Data]? = nil
@@ -223,6 +228,8 @@ public struct LoanGrant: Codable, Equatable {
                 supportsOverrideRecords: Bool? = nil,
                 integralRetrospectiveCorrectionEnabled: Bool? = nil,
                 glucoseBasedApplicationFactorEnabled: Bool? = nil,
+                guardAndRunwayEnabled: Bool? = nil,
+                volatilityBaseline: Double? = nil,
                 phoneClosedLoopEnabled: Bool? = nil,
                 carbHistory: [LoanCarbRecord]? = nil,
                 glucoseHistory: [LoanGlucoseRecord]? = nil,
@@ -243,6 +250,8 @@ public struct LoanGrant: Codable, Equatable {
         self.supportsOverrideRecords = supportsOverrideRecords
         self.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrectionEnabled
         self.glucoseBasedApplicationFactorEnabled = glucoseBasedApplicationFactorEnabled
+        self.guardAndRunwayEnabled = guardAndRunwayEnabled
+        self.volatilityBaseline = volatilityBaseline
         self.phoneClosedLoopEnabled = phoneClosedLoopEnabled
         self.carbHistory = carbHistory
         self.glucoseHistory = glucoseHistory

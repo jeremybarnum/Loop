@@ -26,9 +26,10 @@ extension PodLoanWatchController {
         queue.async {
             guard self.phase == .active, let pumpManager = self.pumpManager else { return }
             guard !self.handbackRequested else { return }
-            // Nobody takes the pod while it is giving a bolus (transfer H): End again after it.
-            if let bolus = self.bolusUnderWay(pumpManager) {
-                self.refuseEnd(bolus, at: "the tap")
+            // Nobody takes the pod while it is giving a bolus, or while a command to it is unconfirmed
+            // (transfer H): End again after it.
+            if let block = self.handOverBlock(pumpManager) {
+                self.refuseEnd(block, at: "the tap")
                 return
             }
             self.handbackRequested = true
@@ -72,15 +73,25 @@ extension PodLoanWatchController {
             ?? (loopManager.manualBolusStartedAt != nil ? LoanControl.BolusUnderWay(endsAt: nil) : nil)
     }
 
+    /// What stops this watch handing the pod back: its bolus, or a command the pod has not confirmed.
+    func handOverBlock(_ pumpManager: PumpManager) -> LoanControl.HandOverBlock? {
+        LoanControl.handOverBlock(bolus: bolusUnderWay(pumpManager), deliveryIsUncertain: pumpManager.status.deliveryIsUncertain)
+    }
+
     /// The End is refused and the loan continues: said on screen and felt.
-    private func refuseEnd(_ bolus: LoanControl.BolusUnderWay, at moment: String) {
+    private func refuseEnd(_ block: LoanControl.HandOverBlock, at moment: String) {
         handbackRequested = false
         resendWorkItem?.cancel()
         handbackDeadline = nil
         handbackStartedAt = nil
         HandbackStuckAlert.disarm()
-        handbackFailure = (now(), LoanControl.bolusRefusal(bolus, now: now()))
-        SportLog.event("loan", "HAND-BACK refused at \(moment) — a bolus is being given (ends \(bolus.endsAt.map { "in \(Int($0.timeIntervalSince(now()).rounded(.up))) s" } ?? "when the pod has it"))")
+        handbackFailure = (now(), LoanControl.refusal(block, now: now()))
+        switch block {
+        case .bolus(let bolus):
+            SportLog.event("loan", "HAND-BACK refused at \(moment) — a bolus is being given (ends \(bolus.endsAt.map { "in \(Int($0.timeIntervalSince(now()).rounded(.up))) s" } ?? "when the pod has it"))")
+        case .deliveryUncertain:
+            SportLog.event("loan", "HAND-BACK refused at \(moment) — the pod has not confirmed the watch's last command")
+        }
         playRefusal()
         notifyUI()
     }
@@ -172,9 +183,10 @@ extension PodLoanWatchController {
     /// Dosing stops and the released offer goes out. The interim resend is cancelled first. The
     /// running temp is left for the phone to cancel at its verified reclaim.
     func finalizeHandback() {
-        // A bolus started while the End waited for the phone: the End is refused, not finished.
-        if phase == .active, let manager = pumpManager, let bolus = bolusUnderWay(manager) {
-            refuseEnd(bolus, at: "the release")
+        // A bolus started, or a command went unconfirmed, while the End waited for the phone: the End
+        // is refused, not finished.
+        if phase == .active, let manager = pumpManager, let block = handOverBlock(manager) {
+            refuseEnd(block, at: "the release")
             return
         }
         resendWorkItem?.cancel()

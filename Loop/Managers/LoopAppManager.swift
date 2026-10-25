@@ -503,7 +503,8 @@ class LoopAppManager: NSObject {
                 closedLoop: settingsManager.dosingEnabled,
                 dosingStrategy: settingsManager.loopSettings.automaticDosingStrategy.analyticsValue,
                 integralRetrospectiveCorrection: UserDefaults.standard.integralRetrospectiveCorrectionEnabled,
-                glucoseBasedPartialApplication: UserDefaults.standard.glucoseBasedApplicationFactorEnabled
+                glucoseBasedPartialApplication: UserDefaults.standard.glucoseBasedApplicationFactorEnabled,
+                guardAndRunway: UserDefaults.standard.guardAndRunwayEnabled
             )
         }
         analyticsServicesManager.identifyState()
@@ -617,7 +618,11 @@ class LoopAppManager: NSObject {
         )
         
         viewModel.favoriteFoodInsightsDelegate = loopDataManager
-        
+        viewModel.insulinDeliveryHistory = { [weak loopDataManager] days in
+            guard let loopDataManager else { throw CancellationError() }
+            return try await loopDataManager.insulinDeliveryHistory(days: days)
+        }
+
         return viewModel
     }()
 

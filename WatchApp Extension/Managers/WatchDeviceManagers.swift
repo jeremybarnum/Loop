@@ -2,43 +2,19 @@
 //  WatchDeviceManagers.swift
 //  WatchApp Extension
 //
-//  The device managers the watch can be passed, by identifier: stock's static manager tables
-//  (staticPumpManagersByIdentifier), for managers built from another controller's exported
-//  configuration. The one place the watch names a device kit.
+//  The device managers the watch can be passed, by identifier, for managers built from another
+//  controller's exported configuration. The one place the watch names a device kit.
 //
 //  Copyright © 2026 LoopKit Authors. All rights reserved.
 //
 
 import LoopKit
-import OmnipodKit
 import G7SensorKit
 
 /// Keyed by each manager's `pluginIdentifier`, which is what its export carries.
-let watchPumpManagersByIdentifier: [String: (PumpManager & DeviceConfigurationSharing).Type] = [
-    "Omni": OmniPumpManager.self,
-]
-
 let watchCGMManagersByIdentifier: [String: (CGMManager & DeviceConfigurationSharing).Type] = [
     "G7CGMManager": G7CGMManager.self,
 ]
-
-/// A pump manager built from another controller's export and this watch's saved `localState`.
-func watchPumpManager(adopting configuration: SharedDeviceConfiguration, localState: [String: Any]?) -> PumpManager? {
-    watchPumpManagersByIdentifier[configuration.managerIdentifier]?.init(adopting: configuration, localState: localState)
-}
-
-/// Whether taking control of this export here would have to find the device first.
-func watchTakeControlNeedsSearch(adopting configuration: SharedDeviceConfiguration, localState: [String: Any]?) -> Bool {
-    let type = watchPumpManagersByIdentifier[configuration.managerIdentifier] as? ExclusiveDeviceControl.Type
-    return type?.takeControlNeedsSearch(adopting: configuration, localState: localState) ?? false
-}
-
-/// A pump manager restored from its saved `managerIdentifier` and `state`, as stock restores one.
-func watchPumpManager(rawValue: [String: Any]) -> PumpManager? {
-    guard let identifier = rawValue["managerIdentifier"] as? String,
-          let rawState = rawValue["state"] as? PumpManager.RawStateValue else { return nil }
-    return watchPumpManagersByIdentifier[identifier]?.init(rawState: rawState)
-}
 
 /// A CGM manager built from another controller's export and this watch's saved `localState`.
 func watchCGMManager(adopting configuration: SharedDeviceConfiguration, localState: [String: Any]?) -> CGMManager? {
@@ -56,6 +32,24 @@ func watchCGMManager(rawValue: [String: Any]) -> CGMManager? {
 /// callback can leave no connect standing and nothing to notice).
 func watchCGMRecheckAcquisition(_ manager: CGMManager?) {
     (manager as? G7CGMManager)?.recheckAcquisition()
+}
+
+/// What the watch's CGM needs from the user (a code, or the app kept open while it searches), and the
+/// notification posted when that changes.
+func watchCGMStatusNote(_ manager: CGMManager?) -> String? {
+    guard let g7 = manager as? G7CGMManager else { return nil }
+    return G7WatchDirectRead.needsCodeNote(for: g7.needsCodeForSensor) ?? G7WatchDirectRead.searchingNote(g7.isSearchingForSensor)
+}
+
+let watchCGMStatusDidChange = G7CGMManager.statusDidChange
+
+func watchCGMSensorName(_ manager: CGMManager?) -> String? {
+    (manager as? G7CGMManager)?.sensorName
+}
+
+/// When the watch last had a link to the sensor, readings or not (none during warmup).
+func watchCGMLastConnection(_ manager: CGMManager?) -> Date? {
+    (manager as? G7CGMManager)?.lastConnect ?? manager?.cgmManagerStatus.lastCommunicationDate
 }
 
 extension DeviceManager {

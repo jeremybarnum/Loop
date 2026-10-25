@@ -135,7 +135,7 @@ final class StockLoopSession {
 
                 RuntimeStateLog.startHeartbeat()
 
-                // Nightscout uploads, when the Start grant carried credentials.
+                // Uploads, when the Start grant carried service configurations.
                 LoanRemoteUploads.shared.begin(loopManager: self.stack.loopManager)
             } else {
                 // Normally already done by teardownPump.

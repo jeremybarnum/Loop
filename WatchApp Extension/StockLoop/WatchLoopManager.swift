@@ -373,10 +373,6 @@ final class WatchLoopManager {
     private(set) var loopState: WatchLoopState
     let loopStateLock = NSLock()
 
-    /// The CGM manager's `managerIdentifier` and `state`, and the configuration it was built from,
-    /// in a file as stock keeps a CGM manager, replaced whole.
-    var cgmManagerState: PersistedProperty<CGMManager.RawStateValue>
-
     /// Restores the last cycle, loop mode and correction model, and subscribes to phone context
     /// (except in the simulator, which has its own ingest).
     init(doseStore: DoseStore, glucoseStore: GlucoseStore, carbStore: CarbStore,
@@ -388,8 +384,6 @@ final class WatchLoopManager {
          defaults: UserDefaults = .standard, stateDirectory: URL? = nil) {
         self.defaults = defaults
         self.stateDirectory = stateDirectory
-        self.cgmManagerState = stateDirectory.map { PersistedProperty<CGMManager.RawStateValue>(key: "CGMManagerState", directory: $0) }
-            ?? PersistedProperty(key: "CGMManagerState")
         let stateStore = stateDirectory.map { PersistedProperty<[String: Any]>(key: "WatchLoopState", directory: $0) }
             ?? PersistedProperty(key: "WatchLoopState")
         let loopState = stateStore.wrappedValue.flatMap(WatchLoopState.init(rawValue:)) ?? WatchLoopState()
@@ -409,6 +403,8 @@ final class WatchLoopManager {
         self._closedLoopMirror = loopState.closedLoopEnabled
         self.integralRetrospectiveCorrectionEnabled = loopState.integralRetrospectiveCorrectionEnabled
         self.glucoseBasedApplicationFactorEnabled = loopState.glucoseBasedApplicationFactorEnabled
+        self.guardAndRunwayEnabled = loopState.guardAndRunwayEnabled
+        self.volatilityBaseline = loopState.volatilityBaseline
 
         // The store asks us for the scheduled basal it nets doses against; see the
         // `DoseStoreDelegate` conformance.
@@ -437,16 +433,24 @@ final class WatchLoopManager {
 
     // MARK: - Glucose sources
 
-    /// Built from the phone's configuration (or restored); the manager holds its delegate weakly.
+    /// The watch's CGM, which stock's `WatchCGMHost` builds and owns; held here for the dosing
+    /// records, which are written off the main queue.
     var cgmManager: CGMManager? {
         cgmLock.lock(); defer { cgmLock.unlock() }
         return _cgmManager
     }
-    let cgmLock = NSLock()
-    var _cgmManager: CGMManager?
-    /// The configuration `cgmManager` was built from, saved beside its state.
-    var cgmBuiltFrom: [String: Any]?
-    static let builtFromKey = "builtFromConfiguration"
+    private let cgmLock = NSLock()
+    private var _cgmManager: CGMManager?
+
+    /// `WatchCGMHost`'s manager, on each of its readings and when the stack starts. A new manager
+    /// seeds the stranded-sensor clock from its last link, so a relaunch does not reset it.
+    func noteCGMManager(_ manager: CGMManager?) {
+        cgmLock.lock()
+        let changed = manager !== _cgmManager
+        _cgmManager = manager
+        cgmLock.unlock()
+        if changed { seedLastDirectG7At(manager?.cgmManagerStatus.lastCommunicationDate) }
+    }
 
     /// Launch seed, so a relaunch does not reset the stranded-sensor clock; never moves it back.
     func seedLastDirectG7At(_ date: Date?) {
@@ -478,21 +482,28 @@ final class WatchLoopManager {
     }
 
     /// The phone's Algorithm Experiments. Applied on `dataAccessQueue`, ahead of the first prediction.
-    func setAlgorithmExperiments(integralRetrospectiveCorrection: Bool, glucoseBasedApplicationFactor: Bool) {
+    func setAlgorithmExperiments(integralRetrospectiveCorrection: Bool, glucoseBasedApplicationFactor: Bool,
+                                 guardAndRunway: Bool, volatilityBaseline: Double?) {
         updateLoopState {
             $0.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrection
             $0.glucoseBasedApplicationFactorEnabled = glucoseBasedApplicationFactor
+            $0.guardAndRunwayEnabled = guardAndRunway
+            $0.volatilityBaseline = volatilityBaseline
         }
         dataAccessQueue.async {
             self.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrection
             self.glucoseBasedApplicationFactorEnabled = glucoseBasedApplicationFactor
-            SportLog.event("loan", "retrospective correction: \(integralRetrospectiveCorrection ? "INTEGRAL" : "standard") · bolus application factor: \(glucoseBasedApplicationFactor ? "GLUCOSE-BASED" : "constant") (from grant)")
+            self.guardAndRunwayEnabled = guardAndRunway
+            self.volatilityBaseline = volatilityBaseline
+            SportLog.event("loan", "retrospective correction: \(integralRetrospectiveCorrection ? "INTEGRAL" : "standard") · bolus application factor: \(glucoseBasedApplicationFactor ? "GLUCOSE-BASED" : "constant") · guard + runway: \(guardAndRunway ? "ON, baseline \(volatilityBaseline.map { String(format: "%.2f", $0) } ?? "none")" : "off") (from grant)")
         }
     }
 
     /// Queue-owned.
     var integralRetrospectiveCorrectionEnabled = false
     var glucoseBasedApplicationFactorEnabled = false
+    var guardAndRunwayEnabled = false
+    var volatilityBaseline: Double?
 
     /// Stock glucose alerts, built from the phone's settings for a loan; nil between loans.
     @MainActor var glucoseAlerts: GlucoseAlertManager?
@@ -613,6 +624,8 @@ struct WatchLoopState: RawRepresentable {
     var closedLoopEnabled = false
     var integralRetrospectiveCorrectionEnabled = false
     var glucoseBasedApplicationFactorEnabled = false
+    var guardAndRunwayEnabled = false
+    var volatilityBaseline: Double?
     var lastLoopCompleted: Date?
     /// The override history's events, as LoopKit encodes them; read back only by a resume.
     var overrideEvents: Data?
@@ -623,6 +636,8 @@ struct WatchLoopState: RawRepresentable {
         closedLoopEnabled = rawValue["closedLoopEnabled"] as? Bool ?? false
         integralRetrospectiveCorrectionEnabled = rawValue["integralRetrospectiveCorrectionEnabled"] as? Bool ?? false
         glucoseBasedApplicationFactorEnabled = rawValue["glucoseBasedApplicationFactorEnabled"] as? Bool ?? false
+        guardAndRunwayEnabled = rawValue["guardAndRunwayEnabled"] as? Bool ?? false
+        volatilityBaseline = rawValue["volatilityBaseline"] as? Double
         lastLoopCompleted = rawValue["lastLoopCompleted"] as? Date
         overrideEvents = rawValue["overrideEvents"] as? Data
     }
@@ -630,7 +645,9 @@ struct WatchLoopState: RawRepresentable {
     var rawValue: [String: Any] {
         var raw: [String: Any] = ["closedLoopEnabled": closedLoopEnabled,
                                   "integralRetrospectiveCorrectionEnabled": integralRetrospectiveCorrectionEnabled,
-                                  "glucoseBasedApplicationFactorEnabled": glucoseBasedApplicationFactorEnabled]
+                                  "glucoseBasedApplicationFactorEnabled": glucoseBasedApplicationFactorEnabled,
+                                  "guardAndRunwayEnabled": guardAndRunwayEnabled]
+        raw["volatilityBaseline"] = volatilityBaseline
         raw["lastLoopCompleted"] = lastLoopCompleted
         raw["overrideEvents"] = overrideEvents
         return raw

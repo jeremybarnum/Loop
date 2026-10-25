@@ -281,9 +281,8 @@ final class LoanRemoteUploads {
 
     /// Whether a request made now can go out. watchOS refuses cellular to a backgrounded app's
     /// requests ("Interface type 'cellular' is prohibited by parameters") and leaves them waiting until a
-    /// timeout or a route change; the phone link and Wi-Fi are allowed in the background (measured on the
-    /// wrist, 2026-10-05/06; a running workout also lifted the refusal, and Sport Mode runs none). An
-    /// unknown route never holds.
+    /// timeout or a route change; the phone link and Wi-Fi are allowed in the background. An unknown route
+    /// never holds.
     static func mayUpload(inFront: Bool, route: Route) -> Bool {
         inFront || route != .cellularOnly
     }

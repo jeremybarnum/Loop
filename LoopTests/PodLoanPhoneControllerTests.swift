@@ -64,14 +64,13 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// How many times the phone enacted the post-return temp cancel, and its result.
     var cancelCalls = 0
     var cancelError: Error?
+    var glucoseUploadSkips: [Set<String>] = []
+    var decisionsUploadedBy: [Set<String>] = []
     /// What the phone's dose store returns.
     var phoneDoseHistory: [DoseEntry] = []
     /// Parks the grant's temp cancel so a test can look at the phone while it is in flight.
     var holdGrantCancel = false
     var parkedGrantCancel: ((Error?) -> Void)?
-    /// How many times the phone stopped automatic dosing over a reconciliation difference.
-    var glucoseUploadSkips: [Set<String>] = []
-    var decisionsUploadedBy: [Set<String>] = []
     var pump: MockPumpManager!
     var settings: LoopSettings!
     /// Captures for the dead-watch reclaim audit.
@@ -197,6 +196,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                         lastWatchContact: @escaping () -> Date? = { nil },
                         latestGlucose: (() -> Date?)? = nil,
                         now: @escaping () -> Date = { Date() },
+                        watchReadsCGM: @escaping () -> Bool = { true },
                         whenProtectedDataAvailable: @escaping (@escaping () -> Void) -> Void = { $0() }) -> PodLoanPhoneController {
         return PodLoanPhoneController(dependencies: .init(
             pumpManager: { [weak self] in self?.pump },
@@ -237,6 +237,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 self?.lock.lock(); self?.addedCarbs.append(entry); self?.lock.unlock()
                 completion(nil)
             },
+            watchReadsCGM: watchReadsCGM,
             scheduleOverride: { [weak self] in
                 guard let self = self else { return nil }
                 self.lock.lock(); defer { self.lock.unlock() }
@@ -1663,6 +1664,18 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed on the empty close")
     }
 
+    /// Sport Mode doses from the watch's own CGM reading: with Read on Apple Watch off, Start is refused
+    /// with the setting named, and the pod stays.
+    func testStartIsRefusedWhileTheWatchDoesNotReadTheCGM() throws {
+        let controller = makeController(watchReadsCGM: { false })
+        let sent = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+        wait(for: [sent], timeout: 5)
+        guard case .denied(let refusal)? = lastSent() else { return XCTFail("expected a refusal") }
+        XCTAssertTrue(refusal.reason.contains("Read on Apple Watch"), "the watch shows this reason as-is, so it must name the setting")
+        XCTAssertEqual(controller.state, .owner, "the phone keeps the pod")
+    }
+
     /// With this phone's Bluetooth off, the final offer is not acked.
     func testFinalOfferIsNotAcceptedWhileThisPhonesBluetoothIsOff() throws {
         var off = true
@@ -2327,6 +2340,24 @@ extension PodLoanPhoneControllerTests {
         XCTAssertNotNil(diagMatching("bolus is still being given"))
 
         pump.status.bolusState = .noBolus
+        establishLoan(controller)
+    }
+
+    /// Start while the pod has not confirmed this phone's last command (stock's `deliveryIsUncertain`):
+    /// denied, nothing released, and the Start once the command is settled goes through.
+    func testStartIsDeniedWhileThePodHasNotConfirmedACommand() throws {
+        let controller = makeController()
+        pump.status.deliveryIsUncertain = true
+        controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+        waitUntil(timeout: 5, "denied") { if case .denied? = self.lastSent() { return true }; return false }
+
+        guard case .denied(let denied)? = lastSent() else { return XCTFail("expected a denial") }
+        XCTAssertTrue(denied.reason.contains("hasn't confirmed"), denied.reason)
+        XCTAssertEqual(controller.state, .owner)
+        XCTAssertFalse(MockPumpManager.testConnectionReleased, "the pump was never released")
+        XCTAssertNotNil(diagMatching("has not confirmed"))
+
+        pump.status.deliveryIsUncertain = false
         establishLoan(controller)
     }
 

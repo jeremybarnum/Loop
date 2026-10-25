@@ -133,6 +133,9 @@ extension WatchDataManager {
             },
 
             watchAppInstalled: { WCSession.isSupported() && WCSession.default.isWatchAppInstalled },
+            watchReadsCGM: { [weak self] in
+                (self?.deviceManager.cgmManager as? DeviceConfigurationSharing)?.isConfigurationSharingEnabled == true
+            },
             // Without the reader, a clear from the wrist could never switch the phone's override off.
             scheduleOverride: { [weak self] in
                 // A change still on its way to main is the current one.
@@ -153,6 +156,9 @@ extension WatchDataManager {
             lastLoopCompleted: { [weak self] in
 
                 self?.loopDataManager.lastLoopCompleted
+            },
+            volatilityBaseline: { [weak self] in
+                self?.loopDataManager.volatilityBaseline?.value
             },
             noteWatchLoopCompleted: { [weak self] date in
                 DispatchQueue.main.async {

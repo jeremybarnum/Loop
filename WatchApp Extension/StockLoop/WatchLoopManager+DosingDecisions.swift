@@ -44,6 +44,7 @@ extension WatchLoopManager {
 
         if let output = displayState.output {
             var dosingDecision = StoredDosingDecision(date: now(), reason: "updateRemoteRecommendation")
+            dosingDecision.algorithmExperiments = algorithmExperimentRecords(for: currentDosingStrategy, guardAndRunway: output.guardAndRunway)
             dosingDecision.predictedGlucose = output.predictedGlucose
             dosingDecision.insulinOnBoard = displayState.activeInsulin
             dosingDecision.carbsOnBoard = displayState.activeCarbs
@@ -135,6 +136,7 @@ extension WatchLoopManager {
 
         dosingDecision.carbEntry = storedCarbEntry
         dosingDecision.manualBolusRequested = units
+        dosingDecision.algorithmExperiments = algorithmExperimentRecords(for: currentDosingStrategy)
 
         dosingDecision.date = now
         dosingDecision.settings = StoredDosingDecision.Settings(settingsProvider.settings)
