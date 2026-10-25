@@ -76,6 +76,20 @@ extension PodLoanPhoneController {
         beginGrant()
     }
 
+    /// Denies the Start while the pod must not change hands; true when it did.
+    func refusesHandOver(_ pump: PumpManager) -> Bool {
+        let status = pump.status
+        guard let block = LoanControl.handOverBlock(bolus: status.bolusState.underWay, deliveryIsUncertain: status.deliveryIsUncertain) else { return false }
+        switch block {
+        case .bolus(let bolus):
+            handbackDiag(epoch, "grant REFUSED — this phone's bolus is still being given (ends \(bolus.endsAt.map { "in \(Int($0.timeIntervalSince(deps.now()).rounded(.up))) s" } ?? "when the pod has it"))")
+        case .deliveryUncertain:
+            handbackDiag(epoch, "grant REFUSED — the pod has not confirmed this phone's last command")
+        }
+        deny(LoanControl.refusal(block, now: deps.now()))
+        return true
+    }
+
     /// Refuse, with a reason the glance can show.
     func deny(_ reason: String) {
         os_log("Loan denied: %{public}@", log: log, type: .default, reason)
@@ -105,12 +119,9 @@ extension PodLoanPhoneController {
             reclaimPodConnection()
         }
 
-        // Nobody takes the pod while it is giving a bolus (transfer G): the looper tries again after it.
-        if let bolus = pump.status.bolusState.underWay {
-            handbackDiag(epoch, "grant REFUSED — this phone's bolus is still being given (ends \(bolus.endsAt.map { "in \(Int($0.timeIntervalSince(deps.now()).rounded(.up))) s" } ?? "when the pod has it"))")
-            deny(LoanControl.bolusRefusal(bolus, now: deps.now()))
-            return
-        }
+        // Nobody takes the pod while it is giving a bolus, or while a command to it is unconfirmed
+        // (transfer G): the looper tries again after it.
+        if refusesHandOver(pump) { return }
 
         // Refuse until the last reclaim's pod round-trip has verified.
         if let started = reclaimStartedAt,
@@ -166,6 +177,8 @@ extension PodLoanPhoneController {
 
         // Above anything the watch knows: a loan it started alone may have run past this phone's count.
         let releaseEpoch = max(epoch, watchKnownEpoch ?? 0) + 1
+        // Checked again at the release, after the temp cancel.
+        if refusesHandOver(pump) { return }
         handbackDiag(releaseEpoch, "GRANT — releasing pod BLE (wasReleased=\(control.isControlReleased))")
         control.releaseControl()
         deps.pumpControlChanged(true)
@@ -381,6 +394,9 @@ extension PodLoanPhoneController {
 
         guard settings.maximumBolus != nil, settings.maximumBasalRatePerHour != nil,
               settings.basalRateSchedule != nil else { return }
+        // Not while the pod has not confirmed a command: the copy would leave it out. The watch keeps
+        // the copy it has; the next refresh after the pod's status settles the command sends a new one.
+        guard deps.pumpManager()?.status.deliveryIsUncertain != true else { return }
 
         // The epoch rides the fingerprint, so a spent epoch is never reused.
         let fingerprint = standingCopyFingerprint(settings) + "|e\(epoch)"
