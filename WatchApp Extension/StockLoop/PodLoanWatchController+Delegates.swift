@@ -208,6 +208,8 @@ extension LoanGrant {
                   supportsOverrideRecords: supportsOverrideRecords,
                   integralRetrospectiveCorrectionEnabled: integralRetrospectiveCorrectionEnabled,
                   glucoseBasedApplicationFactorEnabled: glucoseBasedApplicationFactorEnabled,
+                  guardAndRunwayEnabled: guardAndRunwayEnabled,
+                  volatilityBaseline: volatilityBaseline,
                   phoneClosedLoopEnabled: phoneClosedLoopEnabled, carbHistory: carbHistory,
                   glucoseHistory: glucoseHistory,
                   activeOverrideRaw: activeOverrideRaw,

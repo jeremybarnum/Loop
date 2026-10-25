@@ -85,6 +85,9 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
             }
         })
 
+        // At launch, so a relaunch for the CGM's Bluetooth link finds its central.
+        _ = WatchCGMHost.shared
+
         session.activate()
     }
 
@@ -114,6 +117,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         // glucose we're missing.
         loopManager.requestContextUpdate()
         loopManager.requestGlucoseBackfillIfNecessary()
+        WatchCGMHost.shared.recheckAcquisition()
 
         podLoanDidBecomeActive()
     }
@@ -122,10 +126,9 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         podLoanWillResignActive()
     }
 
-    // Not always main: the Bluetooth task arrives on CoreBluetooth's queue (crash 2026-09-14).
     func handle(_ backgroundTasks: Set<WKRefreshBackgroundTask>) {
+        // watchOS can deliver a Bluetooth wake on CoreBluetooth's queue; everything below is main-only.
         guard Thread.isMainThread else {
-            // Silent hop: the task is delivered once per GATT event.
             DispatchQueue.main.async { self.handle(backgroundTasks) }
             return
         }
@@ -137,14 +140,17 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
             switch task {
             case is WKApplicationRefreshBackgroundTask:
                 log.default("Processing WKApplicationRefreshBackgroundTask")
-                break
+                WatchCGMHost.shared.recheckAcquisition()
+            case let task as WKBluetoothAlertRefreshBackgroundTask:
+                // A connect the system held for the CGM relaunched or woke the app: keep it running
+                // through the reading rather than completing the task at once.
+                log.default("Processing WKBluetoothAlertRefreshBackgroundTask")
+                holdBluetoothTask(task)
+                continue
             case let task as WKSnapshotRefreshBackgroundTask:
                 log.default("Processing WKSnapshotRefreshBackgroundTask")
                 task.setTaskCompleted(restoredDefaultState: false, estimatedSnapshotExpiration: Date(timeIntervalSinceNow: TimeInterval(minutes: 5)), userInfo: nil)
                 return  // Don't call the standard setTaskCompleted handler
-            case let task as WKBluetoothAlertRefreshBackgroundTask:
-                holdBluetoothTask(task)
-                continue  // completed on our own schedule
             case is WKURLSessionRefreshBackgroundTask:
                 break
             case let task as WKWatchConnectivityRefreshBackgroundTask:
@@ -172,11 +178,41 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
 
     private var pendingConnectivityTasks: [WKWatchConnectivityRefreshBackgroundTask] = []
 
-    // MARK: Bluetooth alert task — one held per wake (ExtensionDelegate+BluetoothWake.swift)
+    /// The one Bluetooth wake task held at a time, and every task completed, kept so a task handed over
+    /// again (WatchKit does, even in a later wake) is never completed twice, which throws.
+    private var heldBluetoothTask: WKBluetoothAlertRefreshBackgroundTask?
+    private var completedBluetoothTasks: [WKBluetoothAlertRefreshBackgroundTask] = []
 
-    var heldBluetoothTask: WKBluetoothAlertRefreshBackgroundTask?
-    var heldBluetoothTaskSince: Date?
-    var bluetoothDeliveriesThisWake = 0
+    /// Holds a Bluetooth wake 25 s, through the CGM's reading, or until the system expires it. Later
+    /// deliveries while one is held are completed on arrival.
+    private func holdBluetoothTask(_ task: WKBluetoothAlertRefreshBackgroundTask) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard task !== heldBluetoothTask else { return }
+        guard heldBluetoothTask == nil else {
+            completeBluetoothTask(task)
+            return
+        }
+        heldBluetoothTask = task
+        task.expirationHandler = { [weak self] in
+            DispatchQueue.main.async { self?.completeBluetoothTask(task) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 25) { [weak self] in
+            self?.completeBluetoothTask(task)
+        }
+    }
+
+    private func completeBluetoothTask(_ task: WKBluetoothAlertRefreshBackgroundTask) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        if task === heldBluetoothTask {
+            heldBluetoothTask = nil
+        }
+        guard !completedBluetoothTasks.contains(where: { $0 === task }) else { return }
+        completedBluetoothTasks.append(task)
+        if completedBluetoothTasks.count > 256 {
+            completedBluetoothTasks.removeFirst(64)
+        }
+        task.setTaskCompletedWithSnapshot(false)
+    }
 
     private func completePendingConnectivityTasksIfNeeded() {
         if WCSession.default.activationState == .activated && !WCSession.default.hasContentPending {
