@@ -208,6 +208,37 @@ final class G7RelayDedupTests: XCTestCase {
     }
 }
 
+/// During a loan the watch publishes its own context over the phone's last one. Stock's watch CGM
+/// reads the phone's sharing from every context, so the watch's must carry it, or the watch lets go
+/// of the sensor it doses from.
+final class WatchLoanContextTests: XCTestCase {
+    func testTheWatchsLoanContextKeepsThePhonesSensorSharingAndDropsItsDosingState() throws {
+        let phone = WatchContext(glucose: LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: 120),
+                                 displayGlucoseUnit: .milligramsPerDeciliter)
+        var sensor = G7CGMManagerState()
+        sensor.sensorID = "DXCMph"
+        sensor.pairingCode = "1234"
+        phone.cgmConfiguration = SharedDeviceConfiguration(managerIdentifier: "G7CGMManager", asOf: Date(), state: sensor.sharedState).rawValue
+        phone.iob = 3.2
+        phone.recommendedBolusDose = 1.5
+        phone.reservoir = 80
+
+        let watch = WatchContext()
+        watch.glucose = LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: 95)
+        watch.iob = 1.1
+
+        let published = try XCTUnwrap(WatchContext(rawValue: phone.rawValue))
+        published.overlayWatchState(from: watch)
+        XCTAssertNotNil(published.cgmConfiguration, "the phone's sensor sharing carries through")
+        XCTAssertEqual(published.displayGlucoseUnit, .milligramsPerDeciliter, "so does its display unit")
+        XCTAssertTrue(published.isWatchAuthored)
+        XCTAssertEqual(published.glucose?.doubleValue(for: .milligramsPerDeciliter), 95)
+        XCTAssertEqual(published.iob, 1.1)
+        XCTAssertNil(published.recommendedBolusDose, "the phone's dosing state does not survive")
+        XCTAssertNil(published.reservoir)
+    }
+}
+
 /// Stands in for `WatchCGMHost`: hands each reading to Sport Mode's loop.
 private nonisolated final class ForwardingCGMDelegate: CGMManagerDelegate {
     let wrist: WatchLoopManager
