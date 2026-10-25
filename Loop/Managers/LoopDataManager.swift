@@ -493,6 +493,7 @@ final class LoopDataManager: ObservableObject {
             try input.checkRecency(at: loopBaseTime, lastAddedPumpData: doseStore.lastAddedPumpData)
 
             var output = LoopAlgorithm.run(input: input)
+            dosingDecision.algorithmExperiments = algorithmExperiments(for: dosingStrategy, guardAndRunway: output.guardAndRunway)
 
             switch output.recommendationResult {
             case .success(let recommendation):
@@ -698,7 +699,7 @@ final class LoopDataManager: ObservableObject {
 
         if let output = displayState.output {
             var dosingDecision = StoredDosingDecision(date: now, reason: "updateRemoteRecommendation")
-            dosingDecision.algorithmExperiments = algorithmExperiments(for: currentDosingStrategy)
+            dosingDecision.algorithmExperiments = algorithmExperiments(for: currentDosingStrategy, guardAndRunway: output.guardAndRunway)
             dosingDecision.predictedGlucose = output.predictedGlucose
             dosingDecision.insulinOnBoard = displayState.activeInsulin
             dosingDecision.carbsOnBoard = displayState.activeCarbs
@@ -839,15 +840,27 @@ extension LoopDataManager {
     }
 
     /// Glucose based partial application only affects automatic boluses, so it is in effect only with that strategy
-    private func algorithmExperiments(for dosingStrategy: AutomaticDosingStrategy) -> [AlgorithmExperiment] {
+    private func algorithmExperiments(for dosingStrategy: AutomaticDosingStrategy, guardAndRunway: GuardAndRunwayOutput? = nil) -> [AlgorithmExperiment] {
         enabledAlgorithmExperiments
             .filter { $0 != .glucoseBasedApplicationFactor || dosingStrategy == .automaticBolus }
             .sorted { $0.rawValue < $1.rawValue }
             .map { experiment in
-                let parameters: JSONValue? = experiment == .guardAndRunway
-                    ? volatilityBaseline?.value.map { .object(["volatilityBaseline": .number($0)]) }
-                    : nil
-                return AlgorithmExperiment(identifier: experiment.rawValue, parameters: parameters)
+                guard experiment == .guardAndRunway else {
+                    return AlgorithmExperiment(identifier: experiment.rawValue)
+                }
+                var parameters: [String: JSONValue] = [:]
+                if let baseline = volatilityBaseline?.value {
+                    parameters["volatilityBaseline"] = .number(baseline)
+                }
+                if let guardAndRunway {
+                    parameters["volatility"] = .number(guardAndRunway.volatility)
+                    parameters["bandApplied"] = .bool(guardAndRunway.bandApplied)
+                    parameters["bandGain"] = .number(guardAndRunway.bandGain)
+                    parameters["bandDepth"] = .number(guardAndRunway.bandDepth)
+                    parameters["runwayShift"] = .number(guardAndRunway.runwayShift)
+                    parameters["postLowRiseCutActive"] = .bool(guardAndRunway.postLowRiseCutActive)
+                }
+                return AlgorithmExperiment(identifier: experiment.rawValue, parameters: parameters.isEmpty ? nil : .object(parameters))
             }
     }
 
