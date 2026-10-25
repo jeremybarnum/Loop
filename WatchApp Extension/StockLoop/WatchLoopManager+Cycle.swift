@@ -260,8 +260,7 @@ extension WatchLoopManager {
     ///   settings history before the grant);
     /// - the override history is this manager's `overrideHistory`, and the active override is
     ///   `scheduleOverride` while active (stock: `temporaryPresetsManager`);
-    /// - integral retrospective correction and the application-factor strategy follow the
-    ///   grant's flags, not this device's `UserDefaults`.
+    /// - the algorithm experiments follow the grant's flags, not this device's `UserDefaults`.
     /// No recency check lives here, as in stock: `loop()` checks after it fetches.
     func fetchData(
         for baseTime: Date? = nil,
@@ -283,11 +282,22 @@ extension WatchLoopManager {
             activeOverride: scheduleOverride.flatMap { $0.isActive(at: now()) ? $0 : nil },
             pumpInsulinType: pumpManager?.status.insulinType,
             insulinModel: insulinModel(for:),
-            useIntegralRetrospectiveCorrection: integralRetrospectiveCorrectionEnabled,
-            applicationFactorStrategy: glucoseBasedApplicationFactorEnabled
-                ? GlucoseBasedApplicationFactorStrategy()
-                : ConstantApplicationFactorStrategy(),
+            experiments: algorithmExperiments,
+            volatilityBaseline: nil,
             carbAbsorptionModel: .piecewiseLinear)
+    }
+
+    /// The grant's experiment flags as LoopAlgorithm's experiments. Guard + runway is not carried by
+    /// the grant, so the watch runs without it.
+    private var algorithmExperiments: Set<ExperimentOption> {
+        var experiments: Set<ExperimentOption> = []
+        if integralRetrospectiveCorrectionEnabled {
+            experiments.insert(.integralRetrospectiveCorrection)
+        }
+        if glucoseBasedApplicationFactorEnabled {
+            experiments.insert(.glucoseBasedApplicationFactor)
+        }
+        return experiments
     }
 
     /// Stock `LoopDataManager.updateDisplayState`: the display run, fed with doses back a day,

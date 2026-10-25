@@ -617,7 +617,11 @@ class LoopAppManager: NSObject {
         )
         
         viewModel.favoriteFoodInsightsDelegate = loopDataManager
-        
+        viewModel.insulinDeliveryHistory = { [weak loopDataManager] days in
+            guard let loopDataManager else { throw CancellationError() }
+            return try await loopDataManager.insulinDeliveryHistory(days: days)
+        }
+
         return viewModel
     }()
 

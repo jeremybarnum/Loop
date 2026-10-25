@@ -110,7 +110,8 @@ extension StoredDataAlgorithmInput {
             algorithmEffectsOptions: effectsOptions,
             useIntegralRetrospectiveCorrection: self.useIntegralRetrospectiveCorrection,
             useMidAbsorptionISF: true,
-            carbAbsorptionModel: self.carbAbsorptionModel.model
+            carbAbsorptionModel: self.carbAbsorptionModel.model,
+            experiments: experiments
         )
         return prediction.glucose
     }
@@ -187,8 +188,8 @@ extension StoredDataAlgorithmInput {
         activeOverride: TemporaryScheduleOverride?,
         pumpInsulinType: InsulinType?,
         insulinModel insulinModelForType: (InsulinType?) -> InsulinModel,
-        useIntegralRetrospectiveCorrection: Bool,
-        applicationFactorStrategy: ApplicationFactorStrategy,
+        experiments: Set<ExperimentOption>,
+        volatilityBaseline: Double?,
         carbAbsorptionModel: CarbAbsorptionModel,
         isolation: isolated (any Actor)? = #isolation
     ) async throws -> StoredDataAlgorithmInput {
@@ -367,19 +368,6 @@ extension StoredDataAlgorithmInput {
         }
 
 
-        let correctionRange = target.closestPrior(to: baseTime)?.value
-
-        let effectiveBolusApplicationFactor: Double?
-
-        if let latestGlucose = glucose.last {
-            effectiveBolusApplicationFactor = applicationFactorStrategy.calculateDosingFactor(
-                for: latestGlucose.quantity,
-                correctionRange: correctionRange!
-            )
-        } else {
-            effectiveBolusApplicationFactor = nil
-        }
-
         return StoredDataAlgorithmInput(
             glucoseHistory: glucose,
             doses: dosesWithModel,
@@ -392,12 +380,14 @@ extension StoredDataAlgorithmInput {
             suspendThreshold: suspendThreshold,
             maxBolus: maxBolus,
             maxBasalRate: maxBasalRate,
-            useIntegralRetrospectiveCorrection: useIntegralRetrospectiveCorrection,
+            useIntegralRetrospectiveCorrection: false,
             includePositiveVelocityAndRC: true,
             carbAbsorptionModel: carbAbsorptionModel,
             recommendationInsulinModel: recommendationInsulinModel,
             recommendationType: .manualBolus,
-            automaticBolusApplicationFactor: effectiveBolusApplicationFactor)
+            automaticBolusApplicationFactor: nil,
+            experiments: experiments,
+            volatilityBaseline: volatilityBaseline)
     }
 }
 
