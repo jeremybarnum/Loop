@@ -149,7 +149,7 @@ struct LoanDebugView: View {
     private func tick() {
         session?.loanController.refreshDebugSnapshot()
         snapshot = session?.loanController.mirroredDebugSnapshot ?? snapshot
-        cgm = (session?.stack.loopManager.cgmManager as? G7CGMManager).map(CGMHealth.init) ?? cgm
+        cgm = (WatchCGMHost.shared.cgmManager as? G7CGMManager).map(CGMHealth.init) ?? cgm
 
         RuntimeStateLog.mark("debug.tick")
         session?.stack.loopManager.refreshGlanceData()

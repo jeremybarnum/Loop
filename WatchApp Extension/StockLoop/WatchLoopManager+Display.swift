@@ -143,7 +143,7 @@ extension WatchLoopManager {
     /// The watch-authored context for the stock pages, only while a pod is held. As stock's
     /// `WatchDataManager.createWatchContext`: IOB, COB and the prediction come from the display
     /// run (`displayState`), and the recommended bolus from its own manual-bolus run, which
-    /// changes nothing displayed.
+    /// changes nothing displayed. Published over the phone's last context (`overlayWatchState`).
     func publishHUDContext() {
         guard pumpManager != nil else { return }
         let ctx = WatchContext()
@@ -194,10 +194,45 @@ extension WatchLoopManager {
         }
         DispatchQueue.main.async {
             guard let loopDataManager = ExtensionDelegate.sharedIfAvailable()?.loopManager else { return }
-            // The phone's display unit.
-            ctx.displayGlucoseUnit = loopDataManager.activeContext?.displayGlucoseUnit ?? ctx.displayGlucoseUnit
-            loopDataManager.updateContext(ctx)
+            let published = loopDataManager.activeContext.flatMap { WatchContext(rawValue: $0.rawValue) } ?? WatchContext()
+            published.overlayWatchState(from: ctx)
+            loopDataManager.updateContext(published)
             NotificationCenter.default.post(name: LoopDataManager.didUpdateContextNotification, object: loopDataManager)
         }
+    }
+}
+
+extension WatchContext {
+    /// The phone's context with the state of the watch holding the pod over it: every field the watch
+    /// has its own value for, an empty one included, so nothing of the phone's dosing state survives.
+    /// The rest stay the phone's, so what only the phone knows (its display unit, its CGM, whether the
+    /// watch may read the sensor) carries through a loan, as stock's consumers expect.
+    func overlayWatchState(from watch: WatchContext) {
+        creationDate = watch.creationDate
+        isWatchAuthored = true
+        isOnboardingCompleted = watch.isOnboardingCompleted
+        glucose = watch.glucose
+        glucoseCondition = watch.glucoseCondition
+        glucoseTrend = watch.glucoseTrend
+        glucoseTrendRate = watch.glucoseTrendRate
+        glucoseDate = watch.glucoseDate
+        glucoseIsDisplayOnly = watch.glucoseIsDisplayOnly
+        glucoseWasUserEntered = watch.glucoseWasUserEntered
+        glucoseSyncIdentifier = watch.glucoseSyncIdentifier
+        predictedGlucose = watch.predictedGlucose
+        loopLastRunDate = watch.loopLastRunDate
+        lastNetTempBasalDose = watch.lastNetTempBasalDose
+        lastNetTempBasalDate = watch.lastNetTempBasalDate
+        recommendedBolusDose = watch.recommendedBolusDose
+        insulinDeliveryState = watch.insulinDeliveryState
+        lastManualBolus = watch.lastManualBolus
+        potentialCarbEntry = watch.potentialCarbEntry
+        cob = watch.cob
+        iob = watch.iob
+        reservoir = watch.reservoir
+        reservoirPercentage = watch.reservoirPercentage
+        batteryPercentage = watch.batteryPercentage
+        isClosedLoop = watch.isClosedLoop
+        deviceIssue = watch.deviceIssue
     }
 }
