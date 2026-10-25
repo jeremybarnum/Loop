@@ -373,10 +373,6 @@ final class WatchLoopManager {
     private(set) var loopState: WatchLoopState
     let loopStateLock = NSLock()
 
-    /// The CGM manager's `managerIdentifier` and `state`, and the configuration it was built from,
-    /// in a file as stock keeps a CGM manager, replaced whole.
-    var cgmManagerState: PersistedProperty<CGMManager.RawStateValue>
-
     /// Restores the last cycle, loop mode and correction model, and subscribes to phone context
     /// (except in the simulator, which has its own ingest).
     init(doseStore: DoseStore, glucoseStore: GlucoseStore, carbStore: CarbStore,
@@ -388,8 +384,6 @@ final class WatchLoopManager {
          defaults: UserDefaults = .standard, stateDirectory: URL? = nil) {
         self.defaults = defaults
         self.stateDirectory = stateDirectory
-        self.cgmManagerState = stateDirectory.map { PersistedProperty<CGMManager.RawStateValue>(key: "CGMManagerState", directory: $0) }
-            ?? PersistedProperty(key: "CGMManagerState")
         let stateStore = stateDirectory.map { PersistedProperty<[String: Any]>(key: "WatchLoopState", directory: $0) }
             ?? PersistedProperty(key: "WatchLoopState")
         let loopState = stateStore.wrappedValue.flatMap(WatchLoopState.init(rawValue:)) ?? WatchLoopState()
@@ -437,16 +431,24 @@ final class WatchLoopManager {
 
     // MARK: - Glucose sources
 
-    /// Built from the phone's configuration (or restored); the manager holds its delegate weakly.
+    /// The watch's CGM, which stock's `WatchCGMHost` builds and owns; held here for the dosing
+    /// records, which are written off the main queue.
     var cgmManager: CGMManager? {
         cgmLock.lock(); defer { cgmLock.unlock() }
         return _cgmManager
     }
-    let cgmLock = NSLock()
-    var _cgmManager: CGMManager?
-    /// The configuration `cgmManager` was built from, saved beside its state.
-    var cgmBuiltFrom: [String: Any]?
-    static let builtFromKey = "builtFromConfiguration"
+    private let cgmLock = NSLock()
+    private var _cgmManager: CGMManager?
+
+    /// `WatchCGMHost`'s manager, on each of its readings and when the stack starts. A new manager
+    /// seeds the stranded-sensor clock from its last link, so a relaunch does not reset it.
+    func noteCGMManager(_ manager: CGMManager?) {
+        cgmLock.lock()
+        let changed = manager !== _cgmManager
+        _cgmManager = manager
+        cgmLock.unlock()
+        if changed { seedLastDirectG7At(manager?.cgmManagerStatus.lastCommunicationDate) }
+    }
 
     /// Launch seed, so a relaunch does not reset the stranded-sensor clock; never moves it back.
     func seedLastDirectG7At(_ date: Date?) {

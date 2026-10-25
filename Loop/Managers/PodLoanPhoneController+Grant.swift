@@ -94,6 +94,10 @@ extension PodLoanPhoneController {
             deny("This pump doesn't support Sport Mode.")
             return
         }
+        guard deps.watchReadsCGM() else {
+            deny("Sport Mode needs the watch to read the CGM. Turn on Read on Apple Watch in the CGM's settings on the iPhone.")
+            return
+        }
 
         // A grant supersedes an inferred loan; the radio comes back first.
         if yieldingToInferredLoan {

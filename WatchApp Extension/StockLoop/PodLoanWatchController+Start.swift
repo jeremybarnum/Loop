@@ -227,7 +227,8 @@ extension PodLoanWatchController {
             // Decided when the silence is known, with the copy as it is now: offer the offline start if this
             // watch holds a copy (its age is shown, not enforced), else say the phone did not answer.
             let dormant = self.storedDormantGrant()
-            let situation = LoanControl.Situation(device: .watch, trigger: .startTapped, watchHasStoredCopy: dormant != nil)
+            let situation = LoanControl.Situation(device: .watch, trigger: .startTapped, watchHasStoredCopy: dormant != nil,
+                                                  watchReadsCGM: self.loopManager.cgmManager != nil)
             guard case .query(_, let onSilence) = LoanControl.decide(situation) else { return }
             if case .prompt(.startWithoutPhone) = LoanControl.afterQuery(.silence, onSilence: onSilence), let dormant {
                 self.seizeOffer = (issuedAt: dormant.issuedAt, token: dormant.seizeToken)
@@ -237,6 +238,11 @@ extension PodLoanWatchController {
                 return
             }
 
+            if case .tell(.noResponseFromPhoneAndNoCGM) = LoanControl.afterQuery(.silence, onSilence: onSilence) {
+                self.lastIdleNote = NSLocalizedString("No answer from iPhone. The watch isn't reading the CGM, so Sport Mode can't start without the iPhone.", comment: "Glance: loan request timed out and the watch has no CGM of its own")
+                SportLog.event("loan", "REQUEST TIMED OUT — no grant in \(Int(timeout))s, and no CGM on the watch: no offline start offered")
+                return
+            }
             self.lastIdleNote = NSLocalizedString("No answer from iPhone. Open Loop on the iPhone and try again.", comment: "Glance: loan request timed out")
             SportLog.event("loan", "REQUEST TIMED OUT — no grant in \(Int(timeout))s (phone refused / busy / unreachable)")
         }

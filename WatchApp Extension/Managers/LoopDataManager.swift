@@ -151,7 +151,6 @@ extension LoopDataManager {
     func updateContext(_ context: WatchContext) {
         dispatchPrecondition(condition: .onQueue(.main))
 
-        podLoanAdoptCGMConfiguration(from: context)
         if podLoanAbsorbsPhoneContext(context) { return }
 
         if activeContext == nil || context.shouldReplace(activeContext!) {
@@ -174,6 +173,7 @@ extension LoopDataManager {
         if latestDirectGlucose.map({ latest.date > $0.date }) ?? true {
             latestDirectGlucose = latest
         }
+        podLoanNoteDirectGlucose(samples)
         Task {
             do {
                 _ = try await self.glucoseStore?.addGlucoseSamples(samples)
@@ -188,6 +188,7 @@ extension LoopDataManager {
 
     func directGlucoseDidEnd() {
         latestDirectGlucose = nil
+        podLoanNoteDirectGlucoseEnded()
     }
 
     /// The phone's context, with the watch's own reading in place of the phone's when it is newer.

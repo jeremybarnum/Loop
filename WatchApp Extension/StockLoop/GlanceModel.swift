@@ -353,8 +353,7 @@ final class GlanceViewModel: ObservableObject {
         // early. A refresh that skipped it would leave the page with no way to notice ageing.
         defer { armFreshnessBoundaryRepaint() }
 
-        let cgm = session.stack.loopManager.cgmManager as? G7CGMManager
-        let sensorNote = G7WatchDirectRead.needsCodeNote(for: cgm?.needsCodeForSensor) ?? G7WatchDirectRead.searchingNote(cgm?.isSearchingForSensor ?? false)
+        let sensorNote = WatchCGMHost.shared.statusNote
 
         switch snap.phase {
         case .idle:

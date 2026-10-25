@@ -22,8 +22,8 @@ final class LoanControlTests: XCTestCase {
                              sensorFresh: sensorFresh, offlineCopyOut: offlineCopyOut))
     }
 
-    private func watch(_ trigger: C.Trigger, storedCopy: Bool = false) -> C.Decision {
-        C.decide(C.Situation(device: .watch, trigger: trigger, watchHasStoredCopy: storedCopy))
+    private func watch(_ trigger: C.Trigger, storedCopy: Bool = false, readsCGM: Bool = true) -> C.Decision {
+        C.decide(C.Situation(device: .watch, trigger: trigger, watchHasStoredCopy: storedCopy, watchReadsCGM: readsCGM))
     }
 
     // Rows 1 and 2 · Start tapped on the watch. The request is the query; with no answer, the offline
@@ -31,6 +31,8 @@ final class LoanControlTests: XCTestCase {
     func testRows1And2_StartAsksThePhoneAndOffersTheOfflineStartOnSilence() {
         XCTAssertEqual(watch(.startTapped, storedCopy: true), .query(.onScreen, onSilence: .prompt(.startWithoutPhone)))
         XCTAssertEqual(watch(.startTapped, storedCopy: false), .query(.onScreen, onSilence: .tell(.noResponseFromPhone)))
+        XCTAssertEqual(watch(.startTapped, storedCopy: true, readsCGM: false), .query(.onScreen, onSilence: .tell(.noResponseFromPhoneAndNoCGM)),
+                       "a watch not reading the CGM has nothing to dose from, so no offline start is offered")
     }
 
     // Row 3 · Phone dead or away, no loan: the watch takes nothing (deliberate exception); each word from

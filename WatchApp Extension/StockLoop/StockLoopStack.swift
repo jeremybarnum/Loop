@@ -42,15 +42,6 @@ enum StockLoopStack {
             deviceLog: stores.deviceLog
         )
 
-        // The phone's next context brings a configuration if nothing was saved.
-        if let saved = loopManager.cgmManagerState.wrappedValue, let restored = watchCGMManager(rawValue: saved) {
-            loopManager.installCGMManager(restored, builtFrom: saved[WatchLoopManager.builtFromKey] as? [String: Any])
-            SportLog.event("cgm", "CGM manager RESTORED (\(restored.pluginIdentifier))")
-        } else {
-            SportLog.event("cgm", "no saved CGM manager — the phone's next context brings its configuration")
-        }
-        SportLog.event("session", "stack: cgm wired")
-
         return Stack(loopManager: loopManager)
     }
 

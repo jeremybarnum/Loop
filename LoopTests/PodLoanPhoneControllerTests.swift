@@ -194,6 +194,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                         lastWatchContact: @escaping () -> Date? = { nil },
                         latestGlucose: (() -> Date?)? = nil,
                         now: @escaping () -> Date = { Date() },
+                        watchReadsCGM: @escaping () -> Bool = { true },
                         whenProtectedDataAvailable: @escaping (@escaping () -> Void) -> Void = { $0() }) -> PodLoanPhoneController {
         return PodLoanPhoneController(dependencies: .init(
             pumpManager: { [weak self] in self?.pump },
@@ -234,6 +235,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 self?.lock.lock(); self?.addedCarbs.append(entry); self?.lock.unlock()
                 completion(nil)
             },
+            watchReadsCGM: watchReadsCGM,
             scheduleOverride: { [weak self] in
                 guard let self = self else { return nil }
                 self.lock.lock(); defer { self.lock.unlock() }
@@ -1607,6 +1609,18 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         // them), so an instant read here races it — wait for the value, then assert the shape.
         waitUntil(timeout: 5, "the loan still closes and dosing resumes") { !controller.holdsAutomaticDosing }
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed on the empty close")
+    }
+
+    /// Sport Mode doses from the watch's own CGM reading: with Read on Apple Watch off, Start is refused
+    /// with the setting named, and the pod stays.
+    func testStartIsRefusedWhileTheWatchDoesNotReadTheCGM() throws {
+        let controller = makeController(watchReadsCGM: { false })
+        let sent = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+        wait(for: [sent], timeout: 5)
+        guard case .denied(let refusal)? = lastSent() else { return XCTFail("expected a refusal") }
+        XCTAssertTrue(refusal.reason.contains("Read on Apple Watch"), "the watch shows this reason as-is, so it must name the setting")
+        XCTAssertEqual(controller.state, .owner, "the phone keeps the pod")
     }
 
     /// With this phone's Bluetooth off, the final offer is not acked.

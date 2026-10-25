@@ -311,7 +311,6 @@ final class WatchDataManager: NSObject {
         if let sharing = self.deviceManager.cgmManager as? DeviceConfigurationSharing, sharing.isConfigurationSharingEnabled {
             context.cgmConfiguration = sharing.exportConfiguration().rawValue
         }
-        podLoanShareCGMConfiguration(context)
 
         let settings = self.settingsManager.loopSettings
 

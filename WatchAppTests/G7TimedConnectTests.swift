@@ -131,16 +131,17 @@ final class G7RelayDedupTests: XCTestCase {
         let wrist = WatchLoopManager(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore,
                                      defaults: UserDefaults(suiteName: "G7RelayDedupTests-\(UUID().uuidString)")!,
                                      stateDirectory: dir)
-        let cgm = G7CGMManager()
         let now = Date()
         let held = reading(now.addingTimeInterval(-5 * 60), id: "held-\(UUID().uuidString)")
         _ = try await glucoseStore.addGlucoseSamples([held])
 
-        wrist.deviceQueue.sync { wrist.cgmManager(cgm, hasNew: .newData([held])) }
+        wrist.ingestDirectGlucose([held])
+        wrist.deviceQueue.sync { }
         try await Task.sleep(nanoseconds: 1_000_000_000)
         XCTAssertFalse(readingAskedForACycle(wrist), "the store already held it: no cycle")
 
-        wrist.deviceQueue.sync { wrist.cgmManager(cgm, hasNew: .newData([reading(now, id: "new-\(UUID().uuidString)")])) }
+        wrist.ingestDirectGlucose([reading(now, id: "new-\(UUID().uuidString)")])
+        wrist.deviceQueue.sync { }
         var tries = 0
         while !readingAskedForACycle(wrist), tries < 50 {
             tries += 1
@@ -172,7 +173,9 @@ final class G7RelayDedupTests: XCTestCase {
         let adopted = G7CGMManagerState.adopted(from: phone.sharedState)
         let sensor = G7Sensor(mode: .direct, credentials: adopted.sensorCredentials, bluetoothManager: TestBluetoothManager())
         let g7 = G7CGMManager(state: adopted, sensor: sensor)
-        wrist.installCGMManager(g7, builtFrom: nil)
+        // As `WatchCGMHost` hands each reading on, through `LoopDataManager.addDirectGlucose`.
+        let host = ForwardingCGMDelegate(wrist)
+        g7.cgmManagerDelegate = host
 
         // The phone's reading, relayed under the phone's name (G7CGMManager: activation hours,
         // sensor ID, sensor timestamp). The hours are computed as the kit does, minutes then
@@ -205,77 +208,25 @@ final class G7RelayDedupTests: XCTestCase {
     }
 }
 
-/// The phone's sensor settings ride in every context. The watch builds a new G7 manager only when
-/// they differ from the ones its current manager came from; a new manager has never connected, so
-/// it searches until the sensor is found, which is what the glance note and the alert report.
-final class WatchCGMAdoptionTests: XCTestCase {
-    private func makeWrist() async -> WatchLoopManager {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let cacheStore = PersistenceController(directoryURL: dir.appendingPathComponent("cache"))
-        let doseStore = await DoseStore(healthKitSampleStore: nil, cacheStore: cacheStore,
-                                        longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration,
-                                        provenanceIdentifier: "WatchCGMAdoptionTests")
-        let glucoseStore = await GlucoseStore(healthKitSampleStore: nil, cacheStore: cacheStore,
-                                              cacheLength: 4 * 60 * 60, provenanceIdentifier: "WatchCGMAdoptionTests")
-        let carbStore = CarbStore(healthKitSampleStore: nil, cacheStore: cacheStore,
-                                  cacheLength: 24 * 60 * 60, provenanceIdentifier: "WatchCGMAdoptionTests")
-        return WatchLoopManager(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore,
-                                defaults: UserDefaults(suiteName: "WatchCGMAdoptionTests-\(UUID().uuidString)")!,
-                                stateDirectory: dir)
+/// Stands in for `WatchCGMHost`: hands each reading to Sport Mode's loop.
+private nonisolated final class ForwardingCGMDelegate: CGMManagerDelegate {
+    let wrist: WatchLoopManager
+    init(_ wrist: WatchLoopManager) { self.wrist = wrist }
+
+    func cgmManager(_ manager: CGMManager, hasNew readingResult: CGMReadingResult) {
+        if case .newData(let samples) = readingResult { wrist.ingestDirectGlucose(samples) }
     }
-
-    /// As the phone's G7CGMManager exports it; `asOf` differs on every context.
-    private func phoneExport(sensorID: String, code: String) -> SharedDeviceConfiguration {
-        var phone = G7CGMManagerState()
-        phone.sensorID = sensorID
-        phone.activatedAt = Date(timeIntervalSince1970: 1_791_000_000)
-        phone.pairingCode = code
-        return SharedDeviceConfiguration(managerIdentifier: "G7CGMManager", asOf: Date(), state: phone.sharedState)
-    }
-
-    func testOnlyANewSensorRebuildsTheWatchsManager() async throws {
-        let wrist = await makeWrist()
-
-        wrist.adoptCGMConfiguration(phoneExport(sensorID: "DXCMph", code: "1234"))
-        let first = try XCTUnwrap(wrist.cgmManager as? G7CGMManager)
-        XCTAssertEqual(first.state.sensorID, "DXCMph")
-        XCTAssertTrue(first.state.configuredByAnotherController)
-        XCTAssertNil(first.state.peripheralIdentifier, "never connected, so it searches until the sensor is found")
-
-        wrist.adoptCGMConfiguration(phoneExport(sensorID: "DXCMph", code: "1234"))
-        XCTAssertTrue(wrist.cgmManager === first, "the same sensor in a later context kept the watch's own link")
-
-        wrist.adoptCGMConfiguration(phoneExport(sensorID: "DXCMqL", code: "5678"))
-        let second = try XCTUnwrap(wrist.cgmManager as? G7CGMManager)
-        XCTAssertFalse(second === first, "a new sensor rebuilt the manager")
-        XCTAssertEqual(second.state.sensorID, "DXCMqL")
-        XCTAssertNil(second.state.peripheralIdentifier, "the new sensor is searched for, not the old one's link")
-        XCTAssertNil(first.cgmManagerDelegate, "the old manager let go before the new one took over")
-    }
-
-    /// Each phone context with the same sensor is a wake that reaches the acquisition's re-check, so a
-    /// lost Bluetooth callback cannot leave the watch with no connect standing (2026-10-05: an hour).
-    func testEachPhoneContextRechecksTheSensorsAcquisition() async throws {
-        let wrist = await makeWrist()
-        let export = phoneExport(sensorID: "DXCMph", code: "1234")
-        let bluetooth = RecheckCountingBluetoothManager()
-        let adopted = G7CGMManagerState.adopted(from: export.state)
-        let g7 = G7CGMManager(state: adopted, sensor: G7Sensor(mode: .direct, credentials: adopted.sensorCredentials,
-                                                               bluetoothManager: bluetooth))
-        wrist.installCGMManager(g7, builtFrom: export.state)
-
-        wrist.adoptCGMConfiguration(phoneExport(sensorID: "DXCMph", code: "1234"))
-        wrist.adoptCGMConfiguration(phoneExport(sensorID: "DXCMph", code: "1234"))
-        XCTAssertEqual(bluetooth.rechecks, 2)
-        XCTAssertTrue(wrist.cgmManager === g7, "the same sensor kept its manager")
-    }
-}
-
-private final class RecheckCountingBluetoothManager: G7BluetoothManager {
-    var rechecks = 0
-    override func makeCentralManager(queue: DispatchQueue) -> CBCentralManager {
-        CBCentralManager(delegate: self, queue: queue)
-    }
-    override func recheckAcquisition() { rechecks += 1 }
+    func startDateToFilterNewData(for manager: CGMManager) -> Date? { nil }
+    func cgmManager(_ manager: CGMManager, hasNew events: [PersistedCgmEvent]) {}
+    func cgmManagerWantsDeletion(_ manager: CGMManager) async {}
+    func cgmManagerDidUpdateState(_ manager: CGMManager) {}
+    func credentialStoragePrefix(for manager: CGMManager) -> String { "test" }
+    func cgmManager(_ manager: CGMManager, didUpdate status: CGMManagerStatus) {}
+    func deviceManager(_ manager: DeviceManager, logEventForDeviceIdentifier deviceIdentifier: String?, type: DeviceLogEntryType, message: String, completion: ((Error?) -> Void)?) { completion?(nil) }
+    func issueAlert(_ alert: LoopKit.Alert) async {}
+    func retractAlert(identifier: LoopKit.Alert.Identifier) async {}
+    func doesIssuedAlertExist(identifier: LoopKit.Alert.Identifier) async throws -> Bool { false }
+    func lookupAllUnretracted(managerIdentifier: String) async throws -> [PersistedAlert] { [] }
+    func lookupAllUnacknowledgedUnretracted(managerIdentifier: String) async throws -> [PersistedAlert] { [] }
+    func recordRetractedAlert(_ alert: LoopKit.Alert, at date: Date) async throws {}
 }

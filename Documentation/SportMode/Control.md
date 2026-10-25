@@ -186,7 +186,9 @@ Each situation lists:
 - **Result:** query: the request is the query (watch → phone) → answer: a grant → action: phone releases the pod and holds its dosing; watch takes over (transfer G)
 - **Afterwards:** pod held by watch, by grant · time without looping: seconds · looper sees: watch: Sport Mode page; phone: banner "Sport Mode Active"
 - **Status:** built · **Code:** phone `+Grant`, watch `+Start`
-- **Why:** The looper chose the watch and the phone is there to hand over: the ordinary case.
+- **Why:** The looper chose the watch and the phone is there to hand over: the ordinary case. The watch doses from
+  its own reading of the sensor, which stock gives it only with the CGM's Read on Apple Watch setting on; with it
+  off, the phone refuses the Start and names the setting, rather than turning it on for the looper.
 
 ### 2. Start, phone away or dead
 
@@ -198,7 +200,8 @@ Each situation lists:
 - **Result:** query: the request (queued) → answer: silence after 10 s → action: prompt "Start without it?"; on the tap, the watch starts from its stored copy and checks the pod's total first
 - **Afterwards:** pod held by watch, started without the phone · time without looping: 10 s plus the tap · looper sees: watch: on screen, the offer
 - **Status:** built · **Code:** watch `+Start`, `+Seize`
-- **Why:** The looper asked for Sport Mode and the phone cannot grant it. Starting from the stored copy is entering a mode, which needs the looper's tap (rule 6), so the system offers it as the alternative to the refused Start (rule 7). The query's silence decides when to offer, not the reachability flag, which says only whether the phone's app can take a live message this second.
+- **Why:** The looper asked for Sport Mode and the phone cannot grant it. Starting from the stored copy is entering a mode, which needs the looper's tap (rule 6), so the system offers it as the alternative to the refused Start (rule 7). The query's silence decides when to offer, not the reachability flag, which says only whether the phone's app can take a live message this second. A watch not reading the sensor
+itself has nothing to dose from, so it offers nothing and says so.
 
 ### 3. Phone dies, no loan
 
@@ -544,6 +547,10 @@ Failures only a test can produce. They are logged when recognised; no warning is
 ---
 
 ## 8. Known limits and open questions
+
+- **The watch reads the sensor in its own slot, which Dexcom's watch app also uses.** Read on Apple Watch and
+  Dexcom's watch app together are expected to collide, so they are not supported together (untested). The Dexcom
+  app on the phone is unaffected.
 
 - **Row 15's warnings land on a watch nobody is wearing.** Nothing better is possible without the phone.
 - **A stop queued to a watch that is off** may be lost, or delivered once the watch's link to the phone has started.
