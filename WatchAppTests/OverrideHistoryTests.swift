@@ -329,6 +329,16 @@ final class OverrideHistoryTests: XCTestCase {
         XCTAssertEqual(input.volatilityBaseline, 4.2)
     }
 
+    /// The watch's dosing decisions record the experiments as the phone's do, guard + runway with its baseline.
+    func testTheWatchsDosingDecisionsRecordThePhonesExperiments() async throws {
+        let c = await makeController(overrideHistory: StockLoopStack.makeOverrideHistory())
+        c.queue.sync { c.handleGrant(grant(activeOverride: nil, glucoseBasedApplicationFactor: true, guardAndRunway: true, volatilityBaseline: 4.2)) }
+        let records = c.loopManager.dataAccessQueue.sync { c.loopManager.algorithmExperimentRecords(for: .tempBasalOnly) }
+        XCTAssertEqual(records.map(\.identifier), [ExperimentOption.guardAndRunway.rawValue],
+                       "the application factor is in effect only with automatic bolus, as on the phone")
+        XCTAssertEqual(records.first?.parameters, .object(["volatilityBaseline": .number(4.2)]))
+    }
+
     /// An older phone sends no flag: guard + runway stays off, and a baseline alone is not used.
     func testAGrantWithoutTheGuardAndRunwayToggleLeavesItOff() async throws {
         let input = try await input(afterGrant: grant(activeOverride: nil, volatilityBaseline: 4.2))

@@ -839,29 +839,9 @@ extension LoopDataManager {
         dosingStrategySelectionEnabled ? settingsProvider.settings.automaticDosingStrategy : .automaticBolus
     }
 
-    /// Glucose based partial application only affects automatic boluses, so it is in effect only with that strategy
     private func algorithmExperiments(for dosingStrategy: AutomaticDosingStrategy, guardAndRunway: GuardAndRunwayOutput? = nil) -> [AlgorithmExperiment] {
-        enabledAlgorithmExperiments
-            .filter { $0 != .glucoseBasedApplicationFactor || dosingStrategy == .automaticBolus }
-            .sorted { $0.rawValue < $1.rawValue }
-            .map { experiment in
-                guard experiment == .guardAndRunway else {
-                    return AlgorithmExperiment(identifier: experiment.rawValue)
-                }
-                var parameters: [String: JSONValue] = [:]
-                if let baseline = volatilityBaseline?.value {
-                    parameters["volatilityBaseline"] = .number(baseline)
-                }
-                if let guardAndRunway {
-                    parameters["volatility"] = .number(guardAndRunway.volatility)
-                    parameters["bandApplied"] = .bool(guardAndRunway.bandApplied)
-                    parameters["bandGain"] = .number(guardAndRunway.bandGain)
-                    parameters["bandDepth"] = .number(guardAndRunway.bandDepth)
-                    parameters["runwayShift"] = .number(guardAndRunway.runwayShift)
-                    parameters["postLowRiseCutActive"] = .bool(guardAndRunway.postLowRiseCutActive)
-                }
-                return AlgorithmExperiment(identifier: experiment.rawValue, parameters: parameters.isEmpty ? nil : .object(parameters))
-            }
+        AlgorithmExperiment.records(enabled: enabledAlgorithmExperiments, dosingStrategy: dosingStrategy,
+                                    volatilityBaseline: volatilityBaseline?.value, guardAndRunway: guardAndRunway)
     }
 
     /// The median σ5 over the last four weeks, for guard + runway's volatility band. Nil until there is a day of glucose.

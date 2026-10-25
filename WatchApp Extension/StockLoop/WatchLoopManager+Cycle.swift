@@ -69,16 +69,14 @@ extension WatchLoopManager {
                 // Trim future basal
                 input.doses = input.doses.trimmed(to: loopBaseTime)
 
-                var dosingStrategy: AutomaticDosingStrategy = .automaticBolus
-
-                if FeatureFlags.dosingStrategySelectionEnabled {
-                    dosingStrategy = self.settingsProvider.settings.automaticDosingStrategy
-                }
+                let dosingStrategy = self.currentDosingStrategy
                 input.recommendationType = dosingStrategy.recommendationType
+                dosingDecision.algorithmExperiments = self.algorithmExperimentRecords(for: dosingStrategy)
 
                 try input.checkRecency(at: loopBaseTime, lastAddedPumpData: self.doseStore.lastAddedPumpData)
 
                 var output = LoopAlgorithm.run(input: input)
+                dosingDecision.algorithmExperiments = self.algorithmExperimentRecords(for: dosingStrategy, guardAndRunway: output.guardAndRunway)
                 self.loopRunState = AlgorithmDisplayState(input: input, output: output)
 
                 switch output.recommendationResult {
@@ -285,6 +283,17 @@ extension WatchLoopManager {
             experiments: algorithmExperiments,
             volatilityBaseline: guardAndRunwayEnabled ? volatilityBaseline : nil,
             carbAbsorptionModel: .piecewiseLinear)
+    }
+
+    /// As stock's `LoopDataManager`: automatic bolus, unless strategy selection is enabled.
+    var currentDosingStrategy: AutomaticDosingStrategy {
+        FeatureFlags.dosingStrategySelectionEnabled ? settingsProvider.settings.automaticDosingStrategy : .automaticBolus
+    }
+
+    /// Stock `LoopDataManager.algorithmExperiments(for:guardAndRunway:)`, from the grant's experiments.
+    func algorithmExperimentRecords(for dosingStrategy: AutomaticDosingStrategy, guardAndRunway: GuardAndRunwayOutput? = nil) -> [AlgorithmExperiment] {
+        AlgorithmExperiment.records(enabled: algorithmExperiments, dosingStrategy: dosingStrategy,
+                                    volatilityBaseline: guardAndRunwayEnabled ? volatilityBaseline : nil, guardAndRunway: guardAndRunway)
     }
 
     /// The grant's experiment flags as LoopAlgorithm's experiments, with the phone's volatility baseline.
