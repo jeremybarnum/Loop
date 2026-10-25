@@ -180,6 +180,11 @@ public struct LoanGrant: Codable, Equatable {
 
     public let glucoseBasedApplicationFactorEnabled: Bool?
 
+    public let guardAndRunwayEnabled: Bool?
+
+    /// The phone's volatility baseline for guard + runway (LoopAlgorithm's `volatilityBaseline`).
+    public let volatilityBaseline: Double?
+
     public let phoneClosedLoopEnabled: Bool?
 
     public let carbHistory: [LoanCarbRecord]?
@@ -210,6 +215,8 @@ public struct LoanGrant: Codable, Equatable {
                 supportsOverrideRecords: Bool? = nil,
                 integralRetrospectiveCorrectionEnabled: Bool? = nil,
                 glucoseBasedApplicationFactorEnabled: Bool? = nil,
+                guardAndRunwayEnabled: Bool? = nil,
+                volatilityBaseline: Double? = nil,
                 phoneClosedLoopEnabled: Bool? = nil,
                 carbHistory: [LoanCarbRecord]? = nil,
                 glucoseHistory: [LoanGlucoseRecord]? = nil,
@@ -230,6 +237,8 @@ public struct LoanGrant: Codable, Equatable {
         self.supportsOverrideRecords = supportsOverrideRecords
         self.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrectionEnabled
         self.glucoseBasedApplicationFactorEnabled = glucoseBasedApplicationFactorEnabled
+        self.guardAndRunwayEnabled = guardAndRunwayEnabled
+        self.volatilityBaseline = volatilityBaseline
         self.phoneClosedLoopEnabled = phoneClosedLoopEnabled
         self.carbHistory = carbHistory
         self.glucoseHistory = glucoseHistory

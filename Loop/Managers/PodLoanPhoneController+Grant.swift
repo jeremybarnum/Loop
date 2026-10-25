@@ -295,6 +295,8 @@ extension PodLoanPhoneController {
                             // Not in the settings blob.
                             integralRetrospectiveCorrectionEnabled: UserDefaults.standard.integralRetrospectiveCorrectionEnabled,
                             glucoseBasedApplicationFactorEnabled: UserDefaults.standard.glucoseBasedApplicationFactorEnabled,
+                            guardAndRunwayEnabled: UserDefaults.standard.guardAndRunwayEnabled,
+                            volatilityBaseline: self.deps.volatilityBaseline(),
 
                             phoneClosedLoopEnabled: settings.dosingEnabled,
                             carbHistory: carbs,
@@ -342,6 +344,7 @@ extension PodLoanPhoneController {
         return [Self.settingsFingerprint(s), String(describing: activeOverride),
                 "\(UserDefaults.standard.integralRetrospectiveCorrectionEnabled)",
                 "\(UserDefaults.standard.glucoseBasedApplicationFactorEnabled)",
+                "\(UserDefaults.standard.guardAndRunwayEnabled)",
                 String(describing: deps.pumpManager()?.status.insulinType),
                 String(describing: glucoseAlertSettingsSeen)].joined(separator: "|")
     }

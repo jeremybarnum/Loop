@@ -455,7 +455,9 @@ extension PodLoanWatchController {
 
         // Not part of LoopSettings; without them the two devices predict and dose differently.
         loopManager.setAlgorithmExperiments(integralRetrospectiveCorrection: grant.integralRetrospectiveCorrectionEnabled ?? false,
-                                            glucoseBasedApplicationFactor: grant.glucoseBasedApplicationFactorEnabled ?? false)
+                                            glucoseBasedApplicationFactor: grant.glucoseBasedApplicationFactorEnabled ?? false,
+                                            guardAndRunway: grant.guardAndRunwayEnabled ?? false,
+                                            volatilityBaseline: grant.volatilityBaseline)
 
         // The loan inherits the phone's loop mode; an old phone defaults to open loop.
         loopManager.setClosedLoopEnabled(grant.phoneClosedLoopEnabled ?? false,

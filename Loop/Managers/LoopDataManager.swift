@@ -126,7 +126,7 @@ final class LoopDataManager: ObservableObject {
 
     private var lastManualBolusRecommendation: ManualBolusRecommendation?
 
-    private var volatilityBaseline: (value: Double?, date: Date)?
+    private(set) var volatilityBaseline: (value: Double?, date: Date)?
 
     private(set) var dosingStrategySelectionEnabled: Bool
 

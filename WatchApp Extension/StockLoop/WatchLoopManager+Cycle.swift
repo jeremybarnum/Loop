@@ -283,12 +283,11 @@ extension WatchLoopManager {
             pumpInsulinType: pumpManager?.status.insulinType,
             insulinModel: insulinModel(for:),
             experiments: algorithmExperiments,
-            volatilityBaseline: nil,
+            volatilityBaseline: guardAndRunwayEnabled ? volatilityBaseline : nil,
             carbAbsorptionModel: .piecewiseLinear)
     }
 
-    /// The grant's experiment flags as LoopAlgorithm's experiments. Guard + runway is not carried by
-    /// the grant, so the watch runs without it.
+    /// The grant's experiment flags as LoopAlgorithm's experiments, with the phone's volatility baseline.
     private var algorithmExperiments: Set<ExperimentOption> {
         var experiments: Set<ExperimentOption> = []
         if integralRetrospectiveCorrectionEnabled {
@@ -296,6 +295,9 @@ extension WatchLoopManager {
         }
         if glucoseBasedApplicationFactorEnabled {
             experiments.insert(.glucoseBasedApplicationFactor)
+        }
+        if guardAndRunwayEnabled {
+            experiments.insert(.guardAndRunway)
         }
         return experiments
     }

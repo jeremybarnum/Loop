@@ -149,6 +149,9 @@ extension WatchDataManager {
 
                 self?.loopDataManager.lastLoopCompleted
             },
+            volatilityBaseline: { [weak self] in
+                self?.loopDataManager.volatilityBaseline?.value
+            },
             noteWatchLoopCompleted: { [weak self] date in
                 DispatchQueue.main.async {
                     self?.loopDataManager.seedLastLoopCompleted(fromWatch: date)

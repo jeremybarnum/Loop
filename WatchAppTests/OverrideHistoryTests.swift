@@ -70,7 +70,8 @@ final class OverrideHistoryTests: XCTestCase {
     /// A grant with complete settings. Its pump configuration is not a pump, so intake stops
     /// (and tears down) after the overrides are applied.
     private func grant(activeOverride: TemporaryScheduleOverride?, overrideHistory: [TemporaryScheduleOverride]? = nil,
-                       settingsHistory: LoanSettingsHistory? = nil, glucoseBasedApplicationFactor: Bool? = nil) -> LoanGrant {
+                       settingsHistory: LoanSettingsHistory? = nil, glucoseBasedApplicationFactor: Bool? = nil,
+                       guardAndRunway: Bool? = nil, volatilityBaseline: Double? = nil) -> LoanGrant {
         var settings = LoopSettings()
         settings.glucoseTargetRangeSchedule = GlucoseRangeSchedule(
             unit: .milligramsPerDeciliter,
@@ -88,6 +89,7 @@ final class OverrideHistoryTests: XCTestCase {
         return LoanGrant(epoch: 1, expiresAt: Date().addingTimeInterval(300), pumpConfiguration: Data([1, 2, 3]),
                          podAddress: 0, therapySettingsRaw: plist(settings.rawValue), settingsTimeZoneID: "GMT",
                          doseHistory: [], glucoseBasedApplicationFactorEnabled: glucoseBasedApplicationFactor,
+                         guardAndRunwayEnabled: guardAndRunway, volatilityBaseline: volatilityBaseline,
                          activeOverrideRaw: activeOverride.map { plist($0.rawValue) },
                          therapySettingsSupplementRaw: plist(supplement),
                          overrideHistoryRaw: overrideHistory.flatMap(LoanGrant.overrideHistoryRaw),
@@ -320,15 +322,34 @@ final class OverrideHistoryTests: XCTestCase {
         XCTAssertFalse(experiments.contains(.glucoseBasedApplicationFactor))
     }
 
+    /// The phone's guard + runway reaches the wrist's algorithm input, with the phone's volatility baseline.
+    func testGuardAndRunwayFollowsThePhonesExperimentToggle() async throws {
+        let input = try await input(afterGrant: grant(activeOverride: nil, guardAndRunway: true, volatilityBaseline: 4.2))
+        XCTAssertTrue(input.experiments.contains(.guardAndRunway))
+        XCTAssertEqual(input.volatilityBaseline, 4.2)
+    }
+
+    /// An older phone sends no flag: guard + runway stays off, and a baseline alone is not used.
+    func testAGrantWithoutTheGuardAndRunwayToggleLeavesItOff() async throws {
+        let input = try await input(afterGrant: grant(activeOverride: nil, volatilityBaseline: 4.2))
+        XCTAssertFalse(input.experiments.contains(.guardAndRunway))
+        XCTAssertNil(input.volatilityBaseline)
+    }
+
     /// The experiments in the first algorithm input after a grant.
     private func experiments(afterGrantWith flag: Bool?) async throws -> Set<ExperimentOption> {
+        let input = try await input(afterGrant: grant(activeOverride: nil, glucoseBasedApplicationFactor: flag))
+        return input.experiments
+    }
+
+    /// The first algorithm input after a grant, with glucose steady for an hour.
+    private func input(afterGrant grant: LoanGrant) async throws -> StoredDataAlgorithmInput {
         let c = await makeController(overrideHistory: StockLoopStack.makeOverrideHistory())
-        c.queue.sync { c.handleGrant(grant(activeOverride: nil, glucoseBasedApplicationFactor: flag)) }
-        XCTAssertEqual(c.loopManager.isGlucoseBasedApplicationFactorEnabled, flag ?? false)
+        c.queue.sync { c.handleGrant(grant) }
+        XCTAssertEqual(c.loopManager.isGlucoseBasedApplicationFactorEnabled, grant.glucoseBasedApplicationFactorEnabled ?? false)
         await seedGlucose(c.loopManager, hours: 1)
         try await c.loopManager.recordPumpEvents([], lastReconciliation: Date(), replacePendingEvents: true)
-        let input = try await c.loopManager.fetchData(for: Date())
-        return input.experiments
+        return try await c.loopManager.fetchData(for: Date())
     }
 
     /// An older phone sends no history: the snapshot is projected back, as before.

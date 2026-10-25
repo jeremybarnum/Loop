@@ -77,6 +77,9 @@ final class PodLoanPhoneController {
 
         var lastLoopCompleted: () -> Date? = { nil }
 
+        /// The volatility baseline the phone's guard + runway uses; nil while it has none.
+        var volatilityBaseline: () -> Double? = { nil }
+
         var noteWatchLoopCompleted: (Date) -> Void = { _ in }
 
         var doseHistory: (_ start: Date, _ completion: @escaping ([DoseEntry]) -> Void) -> Void
