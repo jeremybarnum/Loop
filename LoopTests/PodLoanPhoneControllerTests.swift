@@ -898,6 +898,32 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertTrue(MockPumpManager.testConnectionReleased, "the dosing gate stays released")
     }
 
+    /// Standing aside while the pod driver keeps the pod (a command to it is unconfirmed): the phone
+    /// holds its dosing anyway and books nothing, and the next pump report, which follows an exchange
+    /// with the pod, asks the driver again; once it lets go, the pod is released.
+    func testStandingAsideHoldsDosingAndAsksAgainWhenTheDriverKeepsThePod() throws {
+        let controller = makeController()
+        MockPumpManager.testKeepsControl = true
+        controller.engageInferredLoanYield(evidence: "test: the watch started without this phone")
+        XCTAssertTrue(controller.yieldingToInferredLoan)
+        XCTAssertFalse(MockPumpManager.testConnectionReleased, "the driver kept the pod")
+        XCTAssertTrue(controller.holdsAutomaticDosing, "the phone does not dose beside the watch")
+
+        let reported = expectation(description: "pump report handled")
+        controller.checkOwnPumpTotal { reported.fulfill() }
+        wait(for: [reported], timeout: 5)
+        XCTAssertFalse(MockPumpManager.testConnectionReleased, "the command is still unconfirmed")
+        XCTAssertTrue(controller.holdsAutomaticDosing)
+
+        MockPumpManager.testKeepsControl = false     // the exchange settled the command
+        let settled = expectation(description: "next pump report handled")
+        controller.checkOwnPumpTotal { settled.fulfill() }
+        wait(for: [settled], timeout: 5)
+        XCTAssertTrue(MockPumpManager.testConnectionReleased, "the driver let go at the next report")
+        XCTAssertTrue(controller.holdsAutomaticDosing)
+        XCTAssertTrue(addedDoses.isEmpty, "nothing booked while standing aside")
+    }
+
     /// A re-Start while the pod is still returning is denied until the pod is back.
     func testGrantDeferredWhilePodStillReturningFromReclaim() throws {
         let controller = makeController()
