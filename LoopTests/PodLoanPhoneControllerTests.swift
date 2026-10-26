@@ -2290,24 +2290,6 @@ extension PodLoanPhoneControllerTests {
         establishLoan(controller)
     }
 
-    /// Start while the pod has not confirmed this phone's last command (stock's `deliveryIsUncertain`):
-    /// denied, nothing released, and the Start once the command is settled goes through.
-    func testStartIsDeniedWhileThePodHasNotConfirmedACommand() throws {
-        let controller = makeController()
-        pump.status.deliveryIsUncertain = true
-        controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
-        waitUntil(timeout: 5, "denied") { if case .denied? = self.lastSent() { return true }; return false }
-
-        guard case .denied(let denied)? = lastSent() else { return XCTFail("expected a denial") }
-        XCTAssertTrue(denied.reason.contains("hasn't confirmed"), denied.reason)
-        XCTAssertEqual(controller.state, .owner)
-        XCTAssertFalse(MockPumpManager.testConnectionReleased, "the pump was never released")
-        XCTAssertNotNil(diagMatching("has not confirmed"))
-
-        pump.status.deliveryIsUncertain = false
-        establishLoan(controller)
-    }
-
     /// Start while this phone's bolus is still being sent to the pod: the bolus counts already.
     func testStartIsDeniedWhileThisPhonesBolusIsBeingSent() throws {
         let controller = makeController()

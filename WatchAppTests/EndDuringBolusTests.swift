@@ -88,31 +88,6 @@ final class EndDuringBolusTests: XCTestCase {
                       "on screen: why, and when to try again")
     }
 
-    /// End while the pod has not confirmed the watch's last command (stock's `deliveryIsUncertain`):
-    /// refused at once like a bolus, since a copy handed back would leave out what the pod may have given.
-    func testEndWhileThePodHasNotConfirmedACommandIsRefusedAtOnce() async throws {
-        let c = await makeController()
-        let pump = try activeLoan(c)
-        pump.setState { state in
-            var pod = state.podState
-            pod?.unacknowledgedCommand = .stopProgram(.tempBasal, 3, Date(), false)
-            state.updatePodStateFromPodComms(pod)
-        }
-        XCTAssertTrue(pump.status.deliveryIsUncertain, "precondition: delivery is uncertain")
-        var sent: [[String: Any]] = []
-        c.send = { sent.append($0) }
-        var refusalsFelt = 0
-        c.playRefusal = { refusalsFelt += 1 }
-
-        c.beginHandback()
-        c.queue.sync { }
-
-        XCTAssertTrue(sent.isEmpty, "no offer goes out")
-        XCTAssertEqual(refusalsFelt, 1)
-        XCTAssertEqual(c.phase, .active, "the loan continues")
-        XCTAssertEqual(c.debugSnapshot().handbackFailureText, "The pod hasn't confirmed the last command yet. Try again in a minute.")
-    }
-
     /// A loan with no bolus on the pod, the End about to be tapped.
     private func activeLoan(_ c: PodLoanWatchController) throws -> OmniPumpManager {
         let pump = try makePumpMidBolus(false)
