@@ -319,6 +319,10 @@ public enum LoanControl {
         public init(endsAt: Date?) { self.endsAt = endsAt }
     }
 
+    /// What the looper is told when the pod driver keeps the pod at a Start or an End because a command
+    /// to it is unconfirmed (it refuses `releaseControl()`).
+    public static let unconfirmedCommandRefusal = NSLocalizedString("The pod hasn't confirmed the last command yet. Try again in a minute.", comment: "Start or End refused: the pod driver keeps the pod while a command to it is unconfirmed")
+
     /// What the looper is told when a Start, an End or a Take Back meets a bolus under way.
     public static func bolusRefusal(_ bolus: BolusUnderWay, now: Date) -> String {
         guard let endsAt = bolus.endsAt else {

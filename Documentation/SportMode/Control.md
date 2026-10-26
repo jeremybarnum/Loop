@@ -506,6 +506,12 @@ it reports. The pod has one connection, so the device reading it cannot be raced
 cannot ask the phone and takes the pod whatever it is giving: the phone's records are trued up from the pod's
 delivered total when it is back with the pod.
 
+**Nor while a command to it is unconfirmed.** A command the pod has not confirmed (its answer lost, or still being
+sent) can be settled only by the device that sent it, and the copy of the pump's state handed over leaves it out.
+The pod driver keeps the pod while one is open: a Start or an End is refused with "The pod hasn't confirmed the last
+command yet. Try again in a minute.", and the device keeps looping, which settles the command at its next exchange
+with the pod. Where the driver is not asked, §8 says what happens.
+
 | Transfer | Step that fails | Who notices | What it sees | What it does | Pod held by | Looper sees | Status |
 |---|---|---|---|---|---|---|---|
 | **G** grant (phone → watch) | the request is lost | watch | silence 10 s after the request | prompt "Start without it?" if it has a stored copy, else "No response from iPhone" | phone | watch: on screen | built |
@@ -514,12 +520,14 @@ delivered total when it is back with the pod.
 | G | ″ | phone | silence 30 s after that query | take back | phone | ″ | built |
 | G | ″ | phone | answer "taking over" | wait until the grant's lease ends (60 s), then query once more and take back on silence | the watch if it lands | ″ if it does not | built |
 | G | the phone's own bolus is still being given at the Start | phone | its pump's bolus state | deny the Start: "A bolus is still being given. Try again in N seconds." | phone | watch: on screen, the reason, with a haptic | built |
+| G | a command to the pod is unconfirmed at the Start | phone | its pod driver keeps the pod when asked to let it go | deny the Start: "The pod hasn't confirmed the last command yet. Try again in a minute."; the phone loops again | phone | watch: on screen, the reason, with a haptic | built |
 | G | the takeover fails on the watch | watch, then phone | the watch reports failure | the phone takes back at once | phone | watch: on screen, the reason | built |
 | G | the looper cancels at the offline offer, and the grant arrives after that | watch | a grant for a Start no longer wanted | answer "takeover failed": Sport Mode is entered only by a tap, and the cancel withdrew it; a new Start asks afresh | phone | phone: takes the pod back at once, as above | built |
 | G | the grant is numbered at or below a loan the watch already knows | watch | a stale grant | answer "takeover failed" | phone | — | built |
 | G | the confirmation is lost | phone | the query is answered "I hold loan n" | treat the takeover as complete | watch | — | built |
 | **S** offline start | the pod does not answer within the lease | watch | no pod reading | back to rest | phone (as before) | watch: "Sport Mode start expired before the pod answered" | built |
 | **H** hand-back (watch → phone) | the watch's bolus is still being given at End | watch | its pump's bolus state | refuse the End: "A bolus is still being given. Try again in N seconds."; the loan continues | watch | watch: on screen over the bolus progress, with a haptic | built |
+| H | a command to the pod is unconfirmed once dosing has stopped at End | watch | its pod driver keeps the pod when asked to let it go | refuse the End: "The pod hasn't confirmed the last command yet. Try again in a minute."; the watch loops again | watch | watch: on screen, with a haptic | built |
 | H | the phone is away at End | watch | silence 10 s after the offer | refuse (row 8) | watch | row 8 | built |
 | H | the phone acknowledged the first offer, later offers go unanswered | watch | no acknowledgement; resends every 15 s | keep resending, by every path, for the 2-min budget | watch, still looping | watch: "ending…" | built |
 | H | the final offer (sent after dosing stopped) is not acknowledged within the budget | watch | no acknowledgement | let the pod go and keep sending records; the phone takes the pod when they land, or when its overdue query is answered "I hold nothing" (counted as silence) | nobody until the phone takes it (seconds, or 6–11 min if every message was lost) | watch: notification "End Not Confirmed: the watch has stopped dosing… open Loop on the iPhone and tap the pod tile" | built. The transfer rule's second half: the watch cannot tell whether its final offer arrived, and resuming would dose beside a phone that may already be taking the pod, so the resting state it is |
@@ -552,6 +560,18 @@ Failures only a test can produce. They are logged when recognised; no warning is
   Dexcom's watch app together are expected to collide, so they are not supported together (untested). The Dexcom
   app on the phone is unaffected.
 
+- **An unconfirmed command where the pod driver is not asked.** The driver refuses to let the pod go at a Start or
+  an End (§6), but two cases never ask it. In both the command's own record is lost, and the insulin check counts
+  what the pod delivered beyond the records as a bolus, so dosing errs low.
+  - *The stored copy for a Start without the phone.* The phone refreshes the watch's copy of the pump while it loops;
+    a refresh made while a command is unconfirmed leaves the command out, and a Start from that copy does not know
+    it. The watch's takeover check books the difference.
+  - *A device told to stand aside while it holds an unconfirmed command.* The watch drops its pod driver when it
+    stands aside, so its command goes nowhere. The phone keeps its driver: told of a loan the watch started without
+    it (row 17) while a command is unconfirmed, it keeps the pod and goes on looping beside the watch until the
+    looper ends Sport Mode or takes the pod back. Each device books the other's insulin, so dosing errs low, but both
+    dose, for a time nothing bounds.
+  - Open: what letting the pod go should do with an unconfirmed command, discussed with the pod driver's reviewer.
 - **Row 15's warnings land on a watch nobody is wearing.** Nothing better is possible without the phone.
 - **A stop queued to a watch that is off** may be lost, or delivered once the watch's link to the phone has started.
   Row 12 does not depend on it: the returning watch asks.

@@ -156,7 +156,7 @@ extension PodLoanPhoneController {
         }
     }
 
-    /// One-way from here: odometer origin, link released, epoch advanced.
+    /// One-way once the driver lets the link go: odometer origin, link released, epoch advanced.
     private func continueGrant(settings: LoopSettings, loanSettings: LoopSettings,
                                pump: PumpManager, control: ExclusiveDeviceControl) {
                 let handedOverAt = deps.now()
@@ -168,6 +168,12 @@ extension PodLoanPhoneController {
         let releaseEpoch = max(epoch, watchKnownEpoch ?? 0) + 1
         handbackDiag(releaseEpoch, "GRANT — releasing pod BLE (wasReleased=\(control.isControlReleased))")
         control.releaseControl()
+        // The pod driver keeps the pod while a command to it is unconfirmed: the Start is refused.
+        guard control.isControlReleased else {
+            handbackDiag(releaseEpoch, "grant REFUSED — the pod driver kept the pod: a command to it is unconfirmed")
+            deny(LoanControl.unconfirmedCommandRefusal)
+            return
+        }
         deps.pumpControlChanged(true)
 
         // New epoch, empty dedup state, this loan's anchors: one save, before the grant goes out.

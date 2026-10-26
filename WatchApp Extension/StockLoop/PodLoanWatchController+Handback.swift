@@ -72,13 +72,18 @@ extension PodLoanWatchController {
 
     /// The End is refused and the loan continues: said on screen and felt.
     private func refuseEnd(_ bolus: LoanControl.BolusUnderWay, at moment: String) {
+        refuseEnd(saying: LoanControl.bolusRefusal(bolus, now: now()),
+                  why: "a bolus is being given (ends \(bolus.endsAt.map { "in \(Int($0.timeIntervalSince(now()).rounded(.up))) s" } ?? "when the pod has it"))", at: moment)
+    }
+
+    private func refuseEnd(saying message: String, why: String, at moment: String) {
         handbackRequested = false
         resendWorkItem?.cancel()
         handbackDeadline = nil
         handbackStartedAt = nil
         HandbackStuckAlert.disarm()
-        handbackFailure = (now(), LoanControl.bolusRefusal(bolus, now: now()))
-        SportLog.event("loan", "HAND-BACK refused at \(moment) — a bolus is being given (ends \(bolus.endsAt.map { "in \(Int($0.timeIntervalSince(now()).rounded(.up))) s" } ?? "when the pod has it"))")
+        handbackFailure = (now(), message)
+        SportLog.event("loan", "HAND-BACK refused at \(moment) — \(why)")
         playRefusal()
         notifyUI()
     }
@@ -197,6 +202,17 @@ extension PodLoanWatchController {
     private func finalizeHandback(releasing manager: PumpManager) {
         // A second trigger while the first waited for the loop.
         guard phase == .active else { return }
+        // Dosing has stopped: the pod is let go here, before the final offer. The driver keeps it while
+        // a command to it is unconfirmed; then the End is refused and the loop doses again.
+        if let control = manager as? ExclusiveDeviceControl {
+            control.releaseControl()
+            guard control.isControlReleased else {
+                loopManager.dataAccessQueue.async { [loopManager] in loopManager.pumpManager = manager }
+                refuseEnd(saying: LoanControl.unconfirmedCommandRefusal,
+                          why: "the pod driver kept the pod: a command to it is unconfirmed", at: "the release")
+                return
+            }
+        }
         handbackRequested = false
         phase = .handingBack
 
