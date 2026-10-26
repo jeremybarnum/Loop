@@ -125,10 +125,10 @@ extension LoopDataManager {
         }
 
         let mgdL = LoopUnit.milligramsPerDeciliter
-        let isfUnit = LoopUnit.milligramsPerDeciliterPerInternationalUnit
         let basal = Self.orefSchedule(basalSchedule.items.map { ($0.startTime, $0.value) }, timeZone: basalSchedule.timeZone)
+        // The sensitivity schedule's unit is the glucose unit (mg/dL or mmol/L), per unit of insulin.
         let sensitivity = Self.orefSchedule(sensitivitySchedule.items.map {
-            ($0.startTime, LoopQuantity(unit: sensitivitySchedule.unit, doubleValue: $0.value).doubleValue(for: isfUnit))
+            ($0.startTime, LoopQuantity(unit: sensitivitySchedule.unit, doubleValue: $0.value).doubleValue(for: mgdL))
         }, timeZone: sensitivitySchedule.timeZone)
         let carbRatio = Self.orefSchedule(carbRatioSchedule.items.map { ($0.startTime, $0.value) }, timeZone: carbRatioSchedule.timeZone)
         let lows = Self.orefSchedule(targetSchedule.items.map {
