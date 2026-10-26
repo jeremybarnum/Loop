@@ -309,31 +309,7 @@ public enum LoanControl {
         return started < tookOver
     }
 
-    // MARK: - Nobody takes the pod while it is giving a bolus, or while a command to it is unconfirmed
-
-    /// What stops the pod changing hands: a bolus under way, or delivery the pod has not confirmed (a
-    /// command whose answer never arrived, stock's `deliveryIsUncertain`). A copy of the pod's state
-    /// handed over meanwhile would leave out insulin the pod may have given. A Start and an End are
-    /// refused, and the phone's standing copy is not refreshed; a Take Back is refused for a bolus.
-    public enum HandOverBlock: Equatable {
-        case bolus(BolusUnderWay)
-        case deliveryUncertain
-    }
-
-    public static func handOverBlock(bolus: BolusUnderWay?, deliveryIsUncertain: Bool) -> HandOverBlock? {
-        if let bolus { return .bolus(bolus) }
-        return deliveryIsUncertain ? .deliveryUncertain : nil
-    }
-
-    /// What the looper is told when a Start or an End meets a hand-over block.
-    public static func refusal(_ block: HandOverBlock, now: Date) -> String {
-        switch block {
-        case .bolus(let bolus):
-            return bolusRefusal(bolus, now: now)
-        case .deliveryUncertain:
-            return NSLocalizedString("The pod hasn't confirmed the last command yet. Try again in a minute.", comment: "Start or End refused while the pod has not confirmed a command")
-        }
-    }
+    // MARK: - Nobody takes the pod while it is giving a bolus
 
     /// A bolus under way: from the moment it is sent until it has finished or been cancelled. A
     /// Start, an End and a Take Back are refused meanwhile (transfers G, H and T).
@@ -342,6 +318,10 @@ public enum LoanControl {
         public let endsAt: Date?
         public init(endsAt: Date?) { self.endsAt = endsAt }
     }
+
+    /// What the looper is told when the pod driver keeps the pod at a Start or an End because a command
+    /// to it is unconfirmed (it refuses `releaseControl()`).
+    public static let unconfirmedCommandRefusal = NSLocalizedString("The pod hasn't confirmed the last command yet. Try again in a minute.", comment: "Start or End refused: the pod driver keeps the pod while a command to it is unconfirmed")
 
     /// What the looper is told when a Start, an End or a Take Back meets a bolus under way.
     public static func bolusRefusal(_ bolus: BolusUnderWay, now: Date) -> String {

@@ -5,7 +5,8 @@
 //  Copyright © 2026 LoopKit Authors. All rights reserved.
 //
 //  Nobody takes the pod while it is giving a bolus (control document, rows G and H): the watch's
-//  End is refused on the spot while its own bolus is being given, and a refusal is felt. Hosted with a real DASH manager, which
+//  End is refused on the spot while its own bolus is being given, and a refusal is felt. Nor while a
+//  command to it is unconfirmed: the pod driver keeps the pod, and the End is refused. Hosted with a real DASH manager, which
 //  needs the host app's bluetooth-central background mode.
 //
 
@@ -88,31 +89,6 @@ final class EndDuringBolusTests: XCTestCase {
                       "on screen: why, and when to try again")
     }
 
-    /// End while the pod has not confirmed the watch's last command (stock's `deliveryIsUncertain`):
-    /// refused at once like a bolus, since a copy handed back would leave out what the pod may have given.
-    func testEndWhileThePodHasNotConfirmedACommandIsRefusedAtOnce() async throws {
-        let c = await makeController()
-        let pump = try activeLoan(c)
-        pump.setState { state in
-            var pod = state.podState
-            pod?.unacknowledgedCommand = .stopProgram(.tempBasal, 3, Date(), false)
-            state.updatePodStateFromPodComms(pod)
-        }
-        XCTAssertTrue(pump.status.deliveryIsUncertain, "precondition: delivery is uncertain")
-        var sent: [[String: Any]] = []
-        c.send = { sent.append($0) }
-        var refusalsFelt = 0
-        c.playRefusal = { refusalsFelt += 1 }
-
-        c.beginHandback()
-        c.queue.sync { }
-
-        XCTAssertTrue(sent.isEmpty, "no offer goes out")
-        XCTAssertEqual(refusalsFelt, 1)
-        XCTAssertEqual(c.phase, .active, "the loan continues")
-        XCTAssertEqual(c.debugSnapshot().handbackFailureText, "The pod hasn't confirmed the last command yet. Try again in a minute.")
-    }
-
     /// A loan with no bolus on the pod, the End about to be tapped.
     private func activeLoan(_ c: PodLoanWatchController) throws -> OmniPumpManager {
         let pump = try makePumpMidBolus(false)
@@ -164,6 +140,37 @@ final class EndDuringBolusTests: XCTestCase {
         XCTAssertFalse(c.debugSnapshot().handbackPending)
         XCTAssertEqual(refusalsFelt, 1)
         XCTAssertTrue(c.debugSnapshot().handbackFailureText?.contains("bolus") == true)
+    }
+
+    /// A command to the pod unconfirmed at the release: the pod driver keeps the pod, the End is refused,
+    /// no final offer goes out, and the watch's loop has the pod again.
+    func testAnUnconfirmedCommandAtTheReleaseRefusesTheEnd() async throws {
+        let c = await makeController()
+        let pump = try activeLoan(c)
+        pump.setState { state in
+            var pod = state.podState
+            pod?.unacknowledgedCommand = .stopProgram(.tempBasal, 3, Date(), false)
+            state.updatePodStateFromPodComms(pod)
+        }
+        var sent: [[String: Any]] = []
+        c.send = { sent.append($0) }
+        var refusalsFelt = 0
+        c.playRefusal = { refusalsFelt += 1 }
+        c.queue.sync { c.handbackRequested = true }      // the End is waiting for the phone
+
+        c.queue.sync { c.finalizeHandback() }            // the drain is complete
+        c.loopManager.dataAccessQueue.sync { }
+        c.queue.sync { }
+        c.loopManager.dataAccessQueue.sync { }
+
+        XCTAssertFalse(pump.isControlReleased, "the driver kept the pod")
+        XCTAssertEqual(c.phase, .active, "the loan continues")
+        XCTAssertTrue(c.pumpManager === pump, "the watch still holds the pod")
+        XCTAssertTrue(c.loopManager.pumpManager === pump, "the watch's loop doses again")
+        XCTAssertTrue(sent.isEmpty, "no final offer")
+        XCTAssertFalse(c.debugSnapshot().handbackPending)
+        XCTAssertEqual(refusalsFelt, 1)
+        XCTAssertEqual(c.debugSnapshot().handbackFailureText, LoanControl.unconfirmedCommandRefusal)
     }
 
     /// Nobody starts a bolus while the pod is being handed back: with an End waiting, the watch
