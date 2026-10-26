@@ -38,7 +38,8 @@ extension PodLoanPhoneController {
             }
         }
 
-        // Dosing authority and the radio go together: the release is what holds the phone's dosing.
+        // Dosing authority and the radio go together. The yield holds dosing even if the pod driver
+        // keeps the pod; each pump report then asks it again (`letGoAgainIfKept`).
         (deps.pumpManager() as? ExclusiveDeviceControl)?.releaseControl()
         deps.pumpControlChanged(true)
 
@@ -49,6 +50,19 @@ extension PodLoanPhoneController {
 
         // No notice: the looper started this loan on the watch; the banner shows it (control row 17).
         PhoneLog.event("mirror", "YIELDING to an inferred loan — \(evidence); pill=Pod on Watch, dosing paused, pod BLE released, exits: pill tap / watch revival / the watch's records; on conflict the phone yields [mirror]")
+    }
+
+    /// Standing aside, the pod driver keeps the pod while a command to it is unconfirmed. A pump report
+    /// follows an exchange with the pod, which settles the command: ask the driver again.
+    func letGoAgainIfKept() {
+        guard let control = deps.pumpManager() as? ExclusiveDeviceControl, !control.isControlReleased else { return }
+        control.releaseControl()
+        guard control.isControlReleased else {
+            PhoneLog.event("mirror", "standing aside: the pod driver still keeps the pod (a command to it is unconfirmed); dosing stays held")
+            return
+        }
+        deps.pumpControlChanged(true)
+        PhoneLog.event("mirror", "standing aside: the pod driver has let go of the pod")
     }
 
     /// The stop message can be lost on the way to a watch that was off. Anything the watch sends
