@@ -309,6 +309,8 @@ extension PodLoanPhoneController {
                             overrideHistoryRaw: overrideHistoryData,
                             settingsHistory: settingsHistory)
                         grant.orefContext = try? JSONEncoder().encode(OrefStatus.loanContext())
+                        // Her predicted-low warning settings, with the last warning time (the snooze anchor).
+                        grant.lowBGWarningSettings = UserDefaults.standard.lowBGWarningSettings
                         completion(grant)
                     }
                     }

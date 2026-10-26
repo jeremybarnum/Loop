@@ -20,6 +20,7 @@ struct AlertManagementView: View {
     @ObservedObject private var alertMuter: AlertMuter
     private let glucoseAlertManager: GlucoseAlertManager?
     private let alertStore: AlertStore?
+    private let alertIssuer: AlertIssuer?
 
     enum Sheet: Hashable, Identifiable {
         case durationSelection
@@ -68,11 +69,13 @@ struct AlertManagementView: View {
     public init(checker: AlertPermissionsChecker,
                 alertMuter: AlertMuter = AlertMuter(),
                 glucoseAlertManager: GlucoseAlertManager? = nil,
-                alertStore: AlertStore? = nil) {
+                alertStore: AlertStore? = nil,
+                alertIssuer: AlertIssuer? = nil) {
         self.checker = checker
         self.alertMuter = alertMuter
         self.glucoseAlertManager = glucoseAlertManager
         self.alertStore = alertStore
+        self.alertIssuer = alertIssuer
     }
 
     var body: some View {
@@ -85,6 +88,7 @@ struct AlertManagementView: View {
             if FeatureFlags.missedMealNotifications {
                 missedMealAlertSection
             }
+            LowBGWarningSettingsSection(alertIssuer: alertIssuer)
             if let alertStore {
                 historySection(alertStore: alertStore)
             }

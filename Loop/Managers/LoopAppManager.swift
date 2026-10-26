@@ -443,6 +443,11 @@ class LoopAppManager: NSObject {
         deviceDataManager.glucoseAlertManager.alertsHandledElsewhere = { [weak deviceDataManager] in
             deviceDataManager?.podLoanWatchOwnsAlerts ?? false
         }
+        // The predicted-low warning: delivered through the alert manager; the watch owns it during a loan.
+        loopDataManager.lowGlucoseWarningAlerter = LowGlucoseWarningAlerter(alertIssuer: alertManager, defaults: .standard)
+        loopDataManager.lowGlucoseWarningStandsDown = { [weak deviceDataManager] in
+            deviceDataManager?.podLoanWatchOwnsAlerts ?? false
+        }
         mealDetectionManager.alertsHandledElsewhere = { [weak deviceDataManager] in
             deviceDataManager?.podLoanWatchOwnsAlerts ?? false
         }

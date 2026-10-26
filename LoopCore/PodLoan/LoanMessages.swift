@@ -220,6 +220,10 @@ public struct LoanGrant: Codable, Equatable {
     /// app's `OrefLoanContext`). Nil from a phone without oref: the watch doses with Loop's algorithm.
     public var orefContext: Data? = nil
 
+    /// The phone's predicted-low warning settings, with the time of its last warning, so the watch warns
+    /// the same way during the loan and the snooze holds across the start. Nil: no warning on the watch.
+    public var lowBGWarningSettings: LowBGWarningSettings? = nil
+
     public init(epoch: Int, expiresAt: Date, pumpConfiguration: Data, podAddress: UInt32,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
                 doseHistory: [LoanDoseRecord],
@@ -330,6 +334,9 @@ public struct HandbackOffer: Codable, Equatable {
     /// in full before releasing ("Glucose", "DosingDecision"): the phone skips those, and uploads
     /// the rest itself. Released offers only; nil from an older watch.
     public let uploadsConfirmed: [String: [String]]?
+
+    /// When the watch last issued a predicted-low warning, so the snooze holds across the hand-back.
+    public var lastLowBGWarningAt: Date? = nil
 
     public init(epoch: Int, handedBackAt: Date, finalStatus: LoanPodStatus?,
                 odometer: LoanOdometerSnapshot?, events: [LoanEvent], tombstones: [UUID],

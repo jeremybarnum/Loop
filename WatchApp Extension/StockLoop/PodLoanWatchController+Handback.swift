@@ -241,7 +241,7 @@ extension PodLoanWatchController {
                                             deliveredAtStartAt: persisted.deliveredAtTakeoverAt)
         }
         let offerEvents = journal.unackedEvents()
-        let offer = HandbackOffer(
+        var offer = HandbackOffer(
             epoch: epoch,
             handedBackAt: self.now(),
             finalStatus: pumpManager.map { _ in currentPodStatus() },
@@ -259,6 +259,8 @@ extension PodLoanWatchController {
 
             lastLoopCompleted: loopManager.lastLoopCompleted,
             uploadsConfirmed: phase != .active ? uploadsConfirmed : nil)
+        // The predicted-low warning's snooze anchor goes home with the pod.
+        offer.lastLowBGWarningAt = loopManager.defaults.lowBGWarningLastNotificationTime
         if offer.released == true, finalOfferSentAt == nil { finalOfferSentAt = self.now() }
         handbackResendCount += 1
 

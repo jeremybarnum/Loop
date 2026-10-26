@@ -410,6 +410,7 @@ final class WatchLoopManager {
         self.integralRetrospectiveCorrectionEnabled = loopState.integralRetrospectiveCorrectionEnabled
         self.glucoseBasedApplicationFactorEnabled = loopState.glucoseBasedApplicationFactorEnabled
         self.orefContext = Self.decodeOrefContext(loopState.orefContext)
+        self.lowBGWarningSettings = Self.decodeLowBGWarningSettings(loopState.lowBGWarningSettings)
 
         // The store asks us for the scheduled basal it nets doses against; see the
         // `DoseStoreDelegate` conformance.
@@ -497,6 +498,12 @@ final class WatchLoopManager {
 
     /// The phone's dosing-algorithm choice for this loan (nil: Loop's algorithm). Queue-owned.
     var orefContext: OrefLoanContext?
+
+    /// The phone's predicted-low warning settings for this loan (nil: no warning). Queue-owned.
+    var lowBGWarningSettings: LowBGWarningSettings?
+
+    /// Delivers the predicted-low warning through this manager's alert issuing.
+    @MainActor lazy var lowGlucoseWarningAlerter = LowGlucoseWarningAlerter(alertIssuer: self, defaults: defaults)
 
     /// Stock glucose alerts, built from the phone's settings for a loan; nil between loans.
     @MainActor var glucoseAlerts: GlucoseAlertManager?
@@ -622,6 +629,8 @@ struct WatchLoopState: RawRepresentable {
     var overrideEvents: Data?
     /// The grant's `orefContext`, so a resumed loan doses with the same algorithm.
     var orefContext: Data?
+    /// The grant's predicted-low warning settings, so a resumed loan warns the same way.
+    var lowBGWarningSettings: Data?
 
     init() {}
 
@@ -632,6 +641,7 @@ struct WatchLoopState: RawRepresentable {
         lastLoopCompleted = rawValue["lastLoopCompleted"] as? Date
         overrideEvents = rawValue["overrideEvents"] as? Data
         orefContext = rawValue["orefContext"] as? Data
+        lowBGWarningSettings = rawValue["lowBGWarningSettings"] as? Data
     }
 
     var rawValue: [String: Any] {
@@ -641,6 +651,7 @@ struct WatchLoopState: RawRepresentable {
         raw["lastLoopCompleted"] = lastLoopCompleted
         raw["overrideEvents"] = overrideEvents
         raw["orefContext"] = orefContext
+        raw["lowBGWarningSettings"] = lowBGWarningSettings
         return raw
     }
 }

@@ -436,6 +436,9 @@ final class PodLoanWatchController {
             let loopManager = self.loopManager
             Task { await loopManager.retractStandingAlerts(managerIdentifier: pumpIdentifier) }
         }
+        // The predicted-low warning is the phone's again: withdraw one still showing here.
+        let warningLoopManager = self.loopManager
+        Task { @MainActor in await warningLoopManager.lowGlucoseWarningAlerter.standDown() }
         pumpControl?.releaseControl()
         // Still the driver's delegate: the release lets a command under way finish, and its report
         // must find one (the driver treats none as impossible). The callbacks ignore a released driver.

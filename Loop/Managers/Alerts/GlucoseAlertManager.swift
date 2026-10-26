@@ -11,6 +11,7 @@
 
 import Combine
 import Foundation
+import LoopCore
 import LoopAlgorithm
 import LoopKit
 import os.log
@@ -580,12 +581,15 @@ final class GlucoseAlertManager: ObservableObject {
             predictedLowInEpisode = saved.predictedLowInEpisode
         }
 
+        // The predicted-low warning (LoopCore/LowGlucoseWarning) replaces this predicted-low alert.
+        if !LowBGWarningSettings.replacesGlucoseAlertsPredictedLow {
         NotificationCenter.default.publisher(for: .LoopCycleCompleted)
             .sink { [weak self] notification in
                 guard let predicted = (notification.object as? LoopDataManager)?.predictedGlucose else { return }
                 Task { @MainActor in await self?.evaluatePredictedGlucose(predicted) }
             }
             .store(in: &cancellables)
+        }
     }
 
     // MARK: - Test support

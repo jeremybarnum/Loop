@@ -152,6 +152,9 @@ extension PodLoanPhoneController {
                 handbackDiag(offer.epoch, "loop mode INHERITED from the wrist — phone will resume \(watchClosed ? "CLOSED" : "OPEN")")
             }
 
+            // The predicted-low warning's snooze anchor comes home with the pod.
+            UserDefaults.standard.adoptLowBGWarningLastNotificationTime(offer.lastLowBGWarningAt)
+
             if let watchLoop = offer.lastLoopCompleted {
                 deps.noteWatchLoopCompleted(watchLoop)
                 handbackDiag(offer.epoch, String(format: "loop recency INHERITED from the wrist — last cycle %.0fs ago", deps.now().timeIntervalSince(watchLoop)))

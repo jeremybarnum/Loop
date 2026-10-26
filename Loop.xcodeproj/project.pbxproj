@@ -212,6 +212,9 @@
 		43A51E1F1EB6D62A000736CC /* CarbAbsorptionViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A51E1E1EB6D62A000736CC /* CarbAbsorptionViewController.swift */; };
 		43A51E211EB6DBDD000736CC /* LoopChartsTableViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A51E201EB6DBDD000736CC /* LoopChartsTableViewController.swift */; };
 		43A567691C94880B00334FAC /* LoopDataManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A567681C94880B00334FAC /* LoopDataManager.swift */; };
+		0F0AEF000000000000000041 /* LoopDataManager+LowGlucoseWarning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000040 /* LoopDataManager+LowGlucoseWarning.swift */; };
+		0F0AEF000000000000000043 /* LowBGWarningSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000042 /* LowBGWarningSettingsSection.swift */; };
+		0F0AEF000000000000000045 /* WatchLoopManager+LowGlucoseWarning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000044 /* WatchLoopManager+LowGlucoseWarning.swift */; };
 		0F0AEF000000000000000011 /* OrefAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000010 /* OrefAdapter.swift */; };
 		0F0AEF000000000000000012 /* OrefAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000010 /* OrefAdapter.swift */; };
 		0F0AEF000000000000000014 /* WatchLoopManager+Oref.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000013 /* WatchLoopManager+Oref.swift */; };
@@ -306,6 +309,8 @@
 		5C7A1E01302D82A800A03F53 /* StockRunsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C7A1E00302D82A800A03F53 /* StockRunsTests.swift */; };
 		5CD53E8B45B61D0DF32D19BA /* OverrideHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8564B298B7F91A5B62826D45 /* OverrideHistoryTests.swift */; };
 		5E12EA02302D82A800A03F53 /* SeizeActivationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E12EA01302D82A800A03F53 /* SeizeActivationTests.swift */; };
+		0F0AEF000000000000000051 /* LowGlucoseWarningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000050 /* LowGlucoseWarningTests.swift */; };
+		0F0AEF000000000000000053 /* ObservedAbsorptionWarningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000052 /* ObservedAbsorptionWarningTests.swift */; };
 		5E12EA72302D82A800A03F53 /* WakeResumeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E12EA71302D82A800A03F53 /* WakeResumeTests.swift */; };
 		5E12EA730000000000000049 /* PodReturnsWithUnknownDeliveryStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E12EA740000000000000049 /* PodReturnsWithUnknownDeliveryStateTests.swift */; };
 		5E12EA750000000000000050 /* PodLoanPhoneController+Hold.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E12EA760000000000000050 /* PodLoanPhoneController+Hold.swift */; };
@@ -329,6 +334,16 @@
 		7CC4501AABA3438A9291A003 /* LoanTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0861EE8E371426287E4542F /* LoanTransport.swift */; };
 		10A9A914BD17EC84686043E4 /* LoanControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B9F934244F9400F3C1960EB /* LoanControl.swift */; };
 		79A30E1F01447B98C7792AEF /* LoanControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B9F934244F9400F3C1960EB /* LoanControl.swift */; };
+		0F0AEF000000000000000021 /* LowBGWarningSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000020 /* LowBGWarningSettings.swift */; };
+		0F0AEF000000000000000022 /* LowBGWarningSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000020 /* LowBGWarningSettings.swift */; };
+		0F0AEF000000000000000024 /* LowGlucoseWarning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000023 /* LowGlucoseWarning.swift */; };
+		0F0AEF000000000000000025 /* LowGlucoseWarning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000023 /* LowGlucoseWarning.swift */; };
+		0F0AEF000000000000000027 /* ObservedAbsorption.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000026 /* ObservedAbsorption.swift */; };
+		0F0AEF000000000000000028 /* ObservedAbsorption.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000026 /* ObservedAbsorption.swift */; };
+		0F0AEF000000000000000030 /* LowGlucoseWarning+Assess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000029 /* LowGlucoseWarning+Assess.swift */; };
+		0F0AEF000000000000000031 /* LowGlucoseWarning+Assess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000029 /* LowGlucoseWarning+Assess.swift */; };
+		0F0AEF000000000000000033 /* LowGlucoseWarningAlerter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000032 /* LowGlucoseWarningAlerter.swift */; };
+		0F0AEF000000000000000034 /* LowGlucoseWarningAlerter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000032 /* LowGlucoseWarningAlerter.swift */; };
 		5021CA8C264146C9DFF33E9D /* PluginPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE102E23D8C1C1291EF66387 /* PluginPickerView.swift */; };
 		7D23667D21250C7E0028B67D /* LocalizedString.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D23667C21250C7E0028B67D /* LocalizedString.swift */; };
 		7E69CFFC2A16A77E00203CBD /* ResetLoopManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E69CFFB2A16A77E00203CBD /* ResetLoopManager.swift */; };
@@ -1174,6 +1189,9 @@
 		43A51E1E1EB6D62A000736CC /* CarbAbsorptionViewController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = CarbAbsorptionViewController.swift; sourceTree = "<group>"; };
 		43A51E201EB6DBDD000736CC /* LoopChartsTableViewController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoopChartsTableViewController.swift; sourceTree = "<group>"; };
 		43A567681C94880B00334FAC /* LoopDataManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; lineEnding = 0; path = LoopDataManager.swift; sourceTree = "<group>"; xcLanguageSpecificationIdentifier = xcode.lang.swift; };
+		0F0AEF000000000000000040 /* LoopDataManager+LowGlucoseWarning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LoopDataManager+LowGlucoseWarning.swift"; sourceTree = "<group>"; };
+		0F0AEF000000000000000042 /* LowBGWarningSettingsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LowBGWarningSettingsSection.swift; path = Loop/Views/LowBGWarningSettingsSection.swift; sourceTree = SOURCE_ROOT; };
+		0F0AEF000000000000000044 /* WatchLoopManager+LowGlucoseWarning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchLoopManager+LowGlucoseWarning.swift"; path = "WatchApp Extension/StockLoop/WatchLoopManager+LowGlucoseWarning.swift"; sourceTree = SOURCE_ROOT; };
 		0F0AEF000000000000000010 /* OrefAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrefAdapter.swift; sourceTree = "<group>"; };
 		0F0AEF000000000000000001 /* OrefDosing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrefDosing.swift; sourceTree = "<group>"; };
 		43A8EC6E210E622600A81379 /* CGMBLEKitUI.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = CGMBLEKitUI.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -1277,6 +1295,8 @@
 		5744C796822627F1C74D802F /* WatchLoopManager+Display.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchLoopManager+Display.swift"; path = "WatchApp Extension/StockLoop/WatchLoopManager+Display.swift"; sourceTree = SOURCE_ROOT; };
 		5C7A1E00302D82A800A03F53 /* StockRunsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockRunsTests.swift; sourceTree = "<group>"; };
 		5E12EA01302D82A800A03F53 /* SeizeActivationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeizeActivationTests.swift; sourceTree = "<group>"; };
+		0F0AEF000000000000000050 /* LowGlucoseWarningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LowGlucoseWarningTests.swift; sourceTree = "<group>"; };
+		0F0AEF000000000000000052 /* ObservedAbsorptionWarningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservedAbsorptionWarningTests.swift; sourceTree = "<group>"; };
 		5E12EA71302D82A800A03F53 /* WakeResumeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WakeResumeTests.swift; sourceTree = "<group>"; };
 		5E12EA740000000000000049 /* PodReturnsWithUnknownDeliveryStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodReturnsWithUnknownDeliveryStateTests.swift; sourceTree = "<group>"; };
 		5E12EA760000000000000050 /* PodLoanPhoneController+Hold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PodLoanPhoneController+Hold.swift"; path = "Loop/Managers/PodLoanPhoneController+Hold.swift"; sourceTree = SOURCE_ROOT; };
@@ -1716,6 +1736,11 @@
 		CCE6EF1F35CE03240C2E5376 /* PodLoanWatchController+SimulatorDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PodLoanWatchController+SimulatorDriver.swift"; path = "WatchApp Extension/StockLoop/PodLoanWatchController+SimulatorDriver.swift"; sourceTree = SOURCE_ROOT; };
 		D0861EE8E371426287E4542F /* LoanTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LoanTransport.swift; path = LoopCore/PodLoan/LoanTransport.swift; sourceTree = SOURCE_ROOT; };
 		4B9F934244F9400F3C1960EB /* LoanControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LoanControl.swift; path = LoopCore/PodLoan/LoanControl.swift; sourceTree = SOURCE_ROOT; };
+		0F0AEF000000000000000020 /* LowBGWarningSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LowBGWarningSettings.swift"; path = "LoopCore/LowGlucoseWarning/LowBGWarningSettings.swift"; sourceTree = SOURCE_ROOT; };
+		0F0AEF000000000000000023 /* LowGlucoseWarning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LowGlucoseWarning.swift"; path = "LoopCore/LowGlucoseWarning/LowGlucoseWarning.swift"; sourceTree = SOURCE_ROOT; };
+		0F0AEF000000000000000026 /* ObservedAbsorption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "ObservedAbsorption.swift"; path = "LoopCore/LowGlucoseWarning/ObservedAbsorption.swift"; sourceTree = SOURCE_ROOT; };
+		0F0AEF000000000000000029 /* LowGlucoseWarning+Assess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LowGlucoseWarning+Assess.swift"; path = "LoopCore/LowGlucoseWarning/LowGlucoseWarning+Assess.swift"; sourceTree = SOURCE_ROOT; };
+		0F0AEF000000000000000032 /* LowGlucoseWarningAlerter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LowGlucoseWarningAlerter.swift"; path = "LoopCore/LowGlucoseWarning/LowGlucoseWarningAlerter.swift"; sourceTree = SOURCE_ROOT; };
 		FBC4D5290F0F35E6B66B7227 /* LoanRecords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LoanRecords.swift"; path = "LoopCore/PodLoan/LoanRecords.swift"; sourceTree = SOURCE_ROOT; };
 		AF2FD5B2F0532AE1378EF7AD /* LoanControlTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LoanControlTests.swift; path = LoopTests/LoanControlTests.swift; sourceTree = SOURCE_ROOT; };
 		D1368A70B6E347BCB432DF4D /* LoanProtocolV2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LoanProtocolV2Tests.swift; path = LoopTests/LoanProtocolV2Tests.swift; sourceTree = SOURCE_ROOT; };
@@ -2470,6 +2495,8 @@
 				A9C62D862331703000535612 /* LoggingServicesManager.swift */,
 				A9D5C5B525DC6C6A00534873 /* LoopAppManager.swift */,
 				43A567681C94880B00334FAC /* LoopDataManager.swift */,
+				0F0AEF000000000000000040 /* LoopDataManager+LowGlucoseWarning.swift */,
+				0F0AEF000000000000000042 /* LowBGWarningSettingsSection.swift */,
 				0F0AEF000000000000000010 /* OrefAdapter.swift */,
 				0F0AEF000000000000000001 /* OrefDosing.swift */,
 				E9B355232935906B0076AB04 /* Missed Meal Detection */,
@@ -2771,6 +2798,7 @@
 				DC6E574D826158B33EE53EF6 /* WatchLoopManager+GlucoseAlerts.swift */,
 				F89D20C8E12BA79EEB440570 /* WatchLoopManager+Dosing.swift */,
 				C4975B7BB91A91CB21F89ED6 /* WatchLoopManager+Cycle.swift */,
+				0F0AEF000000000000000044 /* WatchLoopManager+LowGlucoseWarning.swift */,
 				0F0AEF000000000000000013 /* WatchLoopManager+Oref.swift */,
 				C940C6F431E6435B971D98B2 /* SportLog.swift */,
 				036B897A66F14CAA9CD5CAD0 /* PodLoanWatchController.swift */,
@@ -2798,6 +2826,11 @@
 				8FF10EA3BB7642DAE19471F6 /* LoanMessages.swift */,
 				CA25D2864BD992EA7BA12649 /* PersistedProperty+Directory.swift */,
 				4B9F934244F9400F3C1960EB /* LoanControl.swift */,
+				0F0AEF000000000000000020 /* LowBGWarningSettings.swift */,
+				0F0AEF000000000000000023 /* LowGlucoseWarning.swift */,
+				0F0AEF000000000000000026 /* ObservedAbsorption.swift */,
+				0F0AEF000000000000000029 /* LowGlucoseWarning+Assess.swift */,
+				0F0AEF000000000000000032 /* LowGlucoseWarningAlerter.swift */,
 				FBC4D5290F0F35E6B66B7227 /* LoanRecords.swift */,
 				FF6006BAC6EA4034BFD67C0E /* LoanBooksHarnessTests.swift */,
 				97C8F1C82896495CA6E8AF8F /* PodLoanPhoneControllerTests.swift */,
@@ -3084,6 +3117,8 @@
 				9A7CE018302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift */,
 				9A7CE019302D82A800A03F53 /* PodLoanTimerSeamTests.swift */,
 				5E12EA01302D82A800A03F53 /* SeizeActivationTests.swift */,
+				0F0AEF000000000000000050 /* LowGlucoseWarningTests.swift */,
+				0F0AEF000000000000000052 /* ObservedAbsorptionWarningTests.swift */,
 				891F7590AA92FC7B832160F3 /* LoanRemoteUploadsTests.swift */,
 				5E12EA71302D82A800A03F53 /* WakeResumeTests.swift */,
 				E489814AB551420DA40399A4 /* G7TimedConnectTests.swift */,
@@ -4096,6 +4131,8 @@
 				84F20DFD2D0B9C3A0089DF02 /* EditPresetDurationView.swift in Sources */,
 				89E267FC2292456700A3F2AF /* FeatureFlags.swift in Sources */,
 				43A567691C94880B00334FAC /* LoopDataManager.swift in Sources */,
+				0F0AEF000000000000000041 /* LoopDataManager+LowGlucoseWarning.swift in Sources */,
+				0F0AEF000000000000000043 /* LowBGWarningSettingsSection.swift in Sources */,
 				0F0AEF000000000000000011 /* OrefAdapter.swift in Sources */,
 				0F0AEF000000000000000002 /* OrefDosing.swift in Sources */,
 				C152B9F52C9C7D4A00ACBC06 /* AutomationHistoryEntry.swift in Sources */,
@@ -4355,6 +4392,7 @@
 				A9DE3D1E90432124BB5738B2 /* WatchLoopManager+GlucoseAlerts.swift in Sources */,
 				3DAF0D06E678E7616137C84A /* WatchLoopManager+Dosing.swift in Sources */,
 				344ABCF8A638888D8C0AC47B /* WatchLoopManager+Cycle.swift in Sources */,
+				0F0AEF000000000000000045 /* WatchLoopManager+LowGlucoseWarning.swift in Sources */,
 				0F0AEF000000000000000014 /* WatchLoopManager+Oref.swift in Sources */,
 				0F0AEF000000000000000012 /* OrefAdapter.swift in Sources */,
 				F06FDE1F67AF4011937B1529 /* SportLog.swift in Sources */,
@@ -4492,6 +4530,11 @@
 				10B149E9B807E4BF43BAC1ED /* LoanMessages.swift in Sources */,
 				D188AB9E674D4E223C7E62AC /* PersistedProperty+Directory.swift in Sources */,
 				10A9A914BD17EC84686043E4 /* LoanControl.swift in Sources */,
+				0F0AEF000000000000000021 /* LowBGWarningSettings.swift in Sources */,
+				0F0AEF000000000000000024 /* LowGlucoseWarning.swift in Sources */,
+				0F0AEF000000000000000027 /* ObservedAbsorption.swift in Sources */,
+				0F0AEF000000000000000030 /* LowGlucoseWarning+Assess.swift in Sources */,
+				0F0AEF000000000000000033 /* LowGlucoseWarningAlerter.swift in Sources */,
 				A72952445BE2F9825FE17298 /* LoanRecords.swift in Sources */,
 				C1ED6C822E7D8E3D002F91C2 /* AcknowledgeAlertUserInfo.swift in Sources */,
 				E9C00EF324C6222400628F35 /* LoopSettings.swift in Sources */,
@@ -4533,6 +4576,11 @@
 				1B377B11C88EA02BAD431175 /* LoanMessages.swift in Sources */,
 				A870F1D2BB7B0DD59A729C45 /* PersistedProperty+Directory.swift in Sources */,
 				79A30E1F01447B98C7792AEF /* LoanControl.swift in Sources */,
+				0F0AEF000000000000000022 /* LowBGWarningSettings.swift in Sources */,
+				0F0AEF000000000000000025 /* LowGlucoseWarning.swift in Sources */,
+				0F0AEF000000000000000028 /* ObservedAbsorption.swift in Sources */,
+				0F0AEF000000000000000031 /* LowGlucoseWarning+Assess.swift in Sources */,
+				0F0AEF000000000000000034 /* LowGlucoseWarningAlerter.swift in Sources */,
 				EE29D32ADAB50ABC07CDCEF6 /* LoanRecords.swift in Sources */,
 				C1ED6C832E7D8E3D002F91C2 /* AcknowledgeAlertUserInfo.swift in Sources */,
 				C1ED6C652E7C6E2F002F91C2 /* CarbBackfillRequestUserInfo.swift in Sources */,
@@ -4682,6 +4730,8 @@
 				9A7CE02C302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift in Sources */,
 				9A7CE02D302D82A800A03F53 /* PodLoanTimerSeamTests.swift in Sources */,
 				5E12EA02302D82A800A03F53 /* SeizeActivationTests.swift in Sources */,
+				0F0AEF000000000000000051 /* LowGlucoseWarningTests.swift in Sources */,
+				0F0AEF000000000000000053 /* ObservedAbsorptionWarningTests.swift in Sources */,
 				50A90B7175FCB80797EA9931 /* LoanRemoteUploadsTests.swift in Sources */,
 				5E12EA72302D82A800A03F53 /* WakeResumeTests.swift in Sources */,
 				BDE04F37312A4F6C86EC7872 /* G7TimedConnectTests.swift in Sources */,

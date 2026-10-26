@@ -407,6 +407,11 @@ final class LoopDataManager: ObservableObject {
     /// True while the pod is loaned out, or until a force reclaim's audit rules; injected at wiring — see `LoopDataManager+PodLoan.swift`.
     var isPumpConnectionReleased: () -> Bool = { false }
 
+    /// The predicted-low warning's delivery, and whether the phone stands down (the watch owns the
+    /// warning during a loan); injected at wiring — see `LoopDataManager+LowGlucoseWarning.swift`.
+    var lowGlucoseWarningAlerter: LowGlucoseWarningAlerter?
+    var lowGlucoseWarningStandsDown: () -> Bool = { false }
+
     /// Cancel the active temp basal if it was automatically issued
     func cancelActiveTempBasal(for reason: CancelActiveTempBasalReason) async throws {
         guard case .tempBasal(let dose) = deliveryDelegate?.basalDeliveryState, (dose.automatic ?? true) else { return }
@@ -574,6 +579,9 @@ final class LoopDataManager: ObservableObject {
         // decision (Nightscout's Loop pill + forecast source — paired with the just-stored
         // "loop" decision by NightscoutService). Runs for both success and error paths.
         await updateDisplayState(forceStoreRemoteRecommendation: true)
+
+        // The predicted-low warning, from the display run that just ended the cycle.
+        await evaluateLowGlucoseWarning()
 
         logger.default("Loop ended")
     }

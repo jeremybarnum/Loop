@@ -222,7 +222,12 @@ extension WatchLoopManager {
 
             // Stock's predicted-low alert reads `LoopDataManager.predictedGlucose`, the display
             // run's forecast, on both arms.
-            self.evaluatePredictedLowAlert(self.displayState.output?.predictedGlucose)
+            if LowBGWarningSettings.replacesGlucoseAlertsPredictedLow {
+                // Her predicted-low warning, from the same display run (WatchLoopManager+LowGlucoseWarning.swift).
+                self.evaluateLowGlucoseWarning()
+            } else {
+                self.evaluatePredictedLowAlert(self.displayState.output?.predictedGlucose)
+            }
         }
     }
 

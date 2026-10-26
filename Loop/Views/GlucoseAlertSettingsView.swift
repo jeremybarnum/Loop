@@ -8,6 +8,7 @@
 //
 
 import SwiftUI
+import LoopCore
 import AVFoundation
 import LoopAlgorithm
 import LoopKit
@@ -195,9 +196,12 @@ struct AlertProfileDetailView: View {
                 alertRow(title: "Urgent Low",
                          value: config.urgentLowEnabled ? formatGlucose(config.urgentLowThresholdMgDL, displayGlucosePreference) : "Off",
                          destination: GlucoseAlertDetailView.urgentLow(manager: manager, profileID: profileID, detail: self))
+                // Replaced by the predicted-low warning in Alert Management (LoopCore/LowGlucoseWarning).
+                if !LowBGWarningSettings.replacesGlucoseAlertsPredictedLow {
                 alertRow(title: "Predicted Low",
                          value: config.predictedLowEnabled ? "On" : "Off",
                          destination: GlucoseAlertDetailView.predictedLow(manager: manager, profileID: profileID, detail: self))
+                }
                 alertRow(title: "Low",
                          value: config.lowEnabled ? formatGlucose(config.lowThresholdMgDL, displayGlucosePreference) : "Off",
                          destination: GlucoseAlertDetailView.low(manager: manager, profileID: profileID, detail: self))

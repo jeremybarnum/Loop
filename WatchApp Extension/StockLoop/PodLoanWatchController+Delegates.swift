@@ -217,6 +217,7 @@ extension LoanGrant {
                   overrideHistoryRaw: overrideHistoryRaw,
                   settingsHistory: settingsHistory)
         grant.orefContext = orefContext
+        grant.lowBGWarningSettings = lowBGWarningSettings
         return grant
     }
 }
