@@ -112,6 +112,13 @@ extension PodLoanPhoneController {
         return grantInFlight
             || (deps.pumpManager() as? ExclusiveDeviceControl)?.isControlReleased == true
             || saved.phase == .reclaimPending || saved.pendingForceAudit != nil
+            || Self.watchLoopsThePod(saved)
+    }
+
+    /// The watch loops the pod: lent to it, or this phone standing aside for a loan it never granted.
+    /// Holds dosing even if the pod driver kept the pod when asked to let go.
+    static func watchLoopsThePod(_ saved: PodLoanPhoneState) -> Bool {
+        saved.phase == .grantOffered || saved.phase == .loaned || saved.yieldingToInferredLoan
     }
 
     /// Blocking; never from the controller's queue or a UI draw path.
@@ -184,6 +191,11 @@ extension PodLoanPhoneController {
     /// is owed: that closes the watch's window. `completion` fires once any booking is in the store.
     func checkOwnPumpTotal(completion: @escaping () -> Void = {}) {
         queue.async {
+            // The window is the watch's, judged when the pod comes back.
+            if Self.watchLoopsThePod(self.persisted) {
+                self.letGoAgainIfKept()
+                return completion()
+            }
             guard self.state == .owner, self.pendingHandbackAudit == nil,
                   let pump = self.deps.pumpManager() as? PumpDeliveryOdometer,
                   (pump as? ExclusiveDeviceControl)?.isControlReleased != true,

@@ -568,9 +568,10 @@ Failures only a test can produce. They are logged when recognised; no warning is
     it. The watch's takeover check books the difference.
   - *A device told to stand aside while it holds an unconfirmed command.* The watch drops its pod driver when it
     stands aside, so its command goes nowhere. The phone keeps its driver: told of a loan the watch started without
-    it (row 17) while a command is unconfirmed, it keeps the pod and goes on looping beside the watch until the
-    looper ends Sport Mode or takes the pod back. Each device books the other's insulin, so dosing errs low, but both
-    dose, for a time nothing bounds.
+    it (row 17) while a command is unconfirmed, its driver keeps the pod. The phone stands aside all the same: it
+    doses nothing while the watch loops, and asks the driver again after each exchange with the pod; the first one
+    settles the command, and the driver lets go. Until then the phone still reaches for the pod to read it, beside
+    the watch.
   - Open: what letting the pod go should do with an unconfirmed command, discussed with the pod driver's reviewer.
 - **Row 15's warnings land on a watch nobody is wearing.** Nothing better is possible without the phone.
 - **A stop queued to a watch that is off** may be lost, or delivered once the watch's link to the phone has started.
