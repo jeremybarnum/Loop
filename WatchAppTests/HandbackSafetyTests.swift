@@ -389,6 +389,28 @@ final class HandbackSafetyTests: XCTestCase {
         XCTAssertEqual(drain.odometer?.deliveredLatest, 10.5)
     }
 
+    // MARK: the hand-back never waits on the loop (R8, rig 2026-10-24: End 33.7 s)
+
+    /// A reading started a dose cycle just as End's drain was confirmed: the loop held its queue
+    /// waiting for the pod's reconnect, whose reads run on the loan queue, while the hand-back's
+    /// last step asked the loop for the running temp and waited too — until the enactor's 25 s
+    /// limit. The final offer must go out while the loop is still busy.
+    func testTheFinalOfferGoesOutWhileTheLoopIsBusy() {
+        let c = makeLiveLoan()
+        c.isPhoneReachable = { true }
+        let finalOffer = expectation(description: "the final offer")
+        c.send = { [weak self] dict in
+            guard let self, self.offers(in: [dict]).first?.offer.released == true else { return }
+            finalOffer.fulfill()
+        }
+        let loopBusy = DispatchSemaphore(value: 0)
+        defer { loopBusy.signal() }
+        c.loopManagerForTesting.occupyDataAccessQueueForTesting(until: loopBusy)
+
+        c.finalizeHandbackForTesting()
+        wait(for: [finalOffer], timeout: 5)
+    }
+
     func testThePodTotalsSurviveARelaunch() {
         let c = makeLiveLoan()
         c.setPodTotalsForTesting(start: 10.0, latest: 10.5)

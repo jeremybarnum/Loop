@@ -3346,6 +3346,9 @@ final class PodLoanWatchController {
     func ingestGrantCarbsForTesting(_ grant: LoanGrant) { queue.sync { ingestGrantCarbs(grant) } }
     /// TEST SEAM: the final (released) stage, as finalizeHandback leaves it.
     func enterFinalStageForTesting() { queue.sync { handbackRequested = false; phase = .handingBack; finalOfferSent = true } }
+    /// TEST SEAM: the drain fully acked — stop dosing and send the final offer. Async, as the ack's
+    /// handler runs it, so the test thread never waits on the loan queue.
+    func finalizeHandbackForTesting() { queue.async { self.finalizeHandback() } }
     /// TEST SEAM: the ACTIVE flip's push hook, for a grant that reached .active (a test cannot
     /// take a real pod over).
     func noteActiveForTesting(grant: LoanGrant) { queue.sync { sendOfflineStartNoticeIfDue(grant: grant) } }

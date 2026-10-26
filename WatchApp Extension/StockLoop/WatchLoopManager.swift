@@ -565,15 +565,23 @@ final class WatchLoopManager {
     /// The temp basal the pod is running, as best the watch can know it — the live
     /// `basalDeliveryState` while the pod is connected, otherwise the temp we last enacted
     /// until its programmed end. The link is released between doses, so `basalDeliveryState`
-    /// goes nil within seconds even though the pod keeps delivering. Read on `dataAccessQueue`.
+    /// goes nil within seconds even though the pod keeps delivering. Safe off `dataAccessQueue` (the cache has its own lock).
     /// Hand-back half: is a LOOP temp still executing on the pod right now? The loan
     /// controller needs this at hand-back and cannot ask `basalDeliveryState`, because the
     /// link is orphaned by then and that state reads nil — which is exactly why the
     /// DESIGN-5 cancel in finalizeHandback had been silently dead (no pod
     /// command at all between "drain complete" and the release, at both hand-backs).
-    /// Thread-safe by hopping the data queue; nil when nothing is running.
+    /// Never waits on `dataAccessQueue`: the loan queue calls it, and a dose cycle holds that queue
+    /// while it waits for the pod's reconnect, whose reads run on the loan queue — a circular wait
+    /// the enactor's 25 s limit broke (R8, 2026-10-24). nil when nothing is running.
     func runningTempBasalForHandback() -> DoseEntry? {
-        return dataAccessQueue.sync { self.runningTempBasal() }
+        return runningTempBasal()
+    }
+
+    /// TEST SEAM: hold `dataAccessQueue` until `gate` is signalled, as a dose cycle does while it
+    /// waits for the pod's reconnect.
+    func occupyDataAccessQueueForTesting(until gate: DispatchSemaphore) {
+        dataAccessQueue.async { gate.wait() }
     }
 
     private func runningTempBasal() -> DoseEntry? {
@@ -908,14 +916,13 @@ final class WatchLoopManager {
         self.settings = settings
         // Cache each accepted temp so runningTempBasal() can report what the pod is
         // running while the link is orphaned (basalDeliveryState is nil then). Built here so the
-        // DoseEntry uses this manager's testable clock; the cache is dataAccessQueue-isolated.
+        // DoseEntry uses this manager's testable clock; the cache has its own lock.
         // Shadow ledger: enactor-accepted doses flow into the session timeline.
         doseEnactor.ledgerRecord = { [weak self] dose in self?.ledgerRecordEnact(dose) }
         doseEnactor.onTempBasalEnacted = { [weak self] unitsPerHour, duration in
             guard let self = self else { return }
             let start = self.now()
-            let enacted = DoseEntry(type: .tempBasal, startDate: start, endDate: start.addingTimeInterval(duration), value: unitsPerHour, unit: .unitsPerHour)
-            self.dataAccessQueue.async { self.cachedEnactedTempBasal = enacted }
+            self.cachedEnactedTempBasal = DoseEntry(type: .tempBasal, startDate: start, endDate: start.addingTimeInterval(duration), value: unitsPerHour, unit: .unitsPerHour)
         }
         #if !targetEnvironment(simulator)
         // Phone-BG fallback. Every phone context update, during a loan, mirror the phone's
@@ -1242,8 +1249,14 @@ final class WatchLoopManager {
     /// The temp basal we last successfully enacted, cached so the watch knows what the
     /// pod is running without querying it. The pod link is orphaned after each dose, so
     /// `pumpManager.status.basalDeliveryState` reverts to nil within seconds even though the
-    /// pod keeps delivering the accepted temp for its full programmed duration. dataAccessQueue.
-    private var cachedEnactedTempBasal: DoseEntry?
+    /// pod keeps delivering the accepted temp for its full programmed duration. Lock-guarded, not
+    /// dataAccessQueue: the hand-back reads it from the loan queue (runningTempBasalForHandback).
+    private let enactedTempBasalLock = NSLock()
+    private var _cachedEnactedTempBasal: DoseEntry?
+    private var cachedEnactedTempBasal: DoseEntry? {
+        get { enactedTempBasalLock.lock(); defer { enactedTempBasalLock.unlock() }; return _cachedEnactedTempBasal }
+        set { enactedTempBasalLock.lock(); _cachedEnactedTempBasal = newValue; enactedTempBasalLock.unlock() }
+    }
     private var retrospectiveGlucoseEffect: [GlucoseEffect] = []
 
     /// Mirrors LoopDataManager's buffer multiplier for combining retrospective discrepancies.
