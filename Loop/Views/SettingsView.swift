@@ -274,6 +274,13 @@ extension SettingsView {
                     Text(viewModel.automaticDosingStrategy.title)
                 }
             }
+            NavigationLink(destination: OrefSettingsScreen()) {
+                HStack {
+                    Text("Algorithm")
+                    Spacer()
+                    Text(OrefStatus.shared.configuration.algorithm.title).foregroundColor(.secondary)
+                }
+            }
         }
     }
     

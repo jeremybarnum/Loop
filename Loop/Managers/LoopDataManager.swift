@@ -479,6 +479,9 @@ final class LoopDataManager: ObservableObject {
 
             var output = LoopAlgorithm.run(input: input)
 
+            // oref (Trio's algorithm), when chosen in settings — see OrefDosing.swift
+            try await applyOref(to: &output, input: input, at: loopBaseTime)
+
             switch output.recommendationResult {
             case .success(let recommendation):
                 // Round delivery amounts to pump supported amounts,
