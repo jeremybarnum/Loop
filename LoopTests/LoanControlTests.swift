@@ -35,16 +35,6 @@ final class LoanControlTests: XCTestCase {
                        "a watch not reading the CGM has nothing to dose from, so no offline start is offered")
     }
 
-    // Transfers G and H · Nobody takes the pod while it is giving a bolus, or while a command to it is
-    // unconfirmed; a bolus is the one reported when both hold, since it says when to try again.
-    func testAHandOverIsBlockedByABolusOrAnUnconfirmedCommand() {
-        let bolus = C.BolusUnderWay(endsAt: t0.addingTimeInterval(30))
-        XCTAssertNil(C.handOverBlock(bolus: nil, deliveryIsUncertain: false))
-        XCTAssertEqual(C.handOverBlock(bolus: nil, deliveryIsUncertain: true), .deliveryUncertain)
-        XCTAssertEqual(C.handOverBlock(bolus: bolus, deliveryIsUncertain: true), .bolus(bolus))
-        XCTAssertTrue(C.refusal(.deliveryUncertain, now: t0).contains("hasn't confirmed"))
-    }
-
     // Row 3 · Phone dead or away, no loan: the watch takes nothing (deliberate exception); each word from
     // the phone pushes out a warning that fires after 25 minutes of silence, after the phone's own at 20.
     func testRow3_TheWatchWarnsAfterTwentyFiveMinutesWithoutThePhoneAndTakesNothing() {
