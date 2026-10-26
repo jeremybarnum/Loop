@@ -212,6 +212,10 @@
 		43A51E1F1EB6D62A000736CC /* CarbAbsorptionViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A51E1E1EB6D62A000736CC /* CarbAbsorptionViewController.swift */; };
 		43A51E211EB6DBDD000736CC /* LoopChartsTableViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A51E201EB6DBDD000736CC /* LoopChartsTableViewController.swift */; };
 		43A567691C94880B00334FAC /* LoopDataManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A567681C94880B00334FAC /* LoopDataManager.swift */; };
+		0F0AEF000000000000000011 /* OrefAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000010 /* OrefAdapter.swift */; };
+		0F0AEF000000000000000012 /* OrefAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000010 /* OrefAdapter.swift */; };
+		0F0AEF000000000000000014 /* WatchLoopManager+Oref.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000013 /* WatchLoopManager+Oref.swift */; };
+		0F0AEF000000000000000015 /* OrefAlgorithm in Frameworks */ = {isa = PBXBuildFile; productRef = 0F0AEF000000000000000016 /* OrefAlgorithm */; };
 		0F0AEF000000000000000002 /* OrefDosing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0AEF000000000000000001 /* OrefDosing.swift */; };
 		0F0AEF000000000000000003 /* OrefAlgorithm in Frameworks */ = {isa = PBXBuildFile; productRef = 0F0AEF000000000000000004 /* OrefAlgorithm */; };
 		43A943881B926B7B0051FA24 /* ExtensionDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A943871B926B7B0051FA24 /* ExtensionDelegate.swift */; };
@@ -1170,6 +1174,7 @@
 		43A51E1E1EB6D62A000736CC /* CarbAbsorptionViewController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = CarbAbsorptionViewController.swift; sourceTree = "<group>"; };
 		43A51E201EB6DBDD000736CC /* LoopChartsTableViewController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoopChartsTableViewController.swift; sourceTree = "<group>"; };
 		43A567681C94880B00334FAC /* LoopDataManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; lineEnding = 0; path = LoopDataManager.swift; sourceTree = "<group>"; xcLanguageSpecificationIdentifier = xcode.lang.swift; };
+		0F0AEF000000000000000010 /* OrefAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrefAdapter.swift; sourceTree = "<group>"; };
 		0F0AEF000000000000000001 /* OrefDosing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrefDosing.swift; sourceTree = "<group>"; };
 		43A8EC6E210E622600A81379 /* CGMBLEKitUI.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = CGMBLEKitUI.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		43A943721B926B7B0051FA24 /* WatchApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WatchApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -1696,6 +1701,7 @@
 		C1FB428E217921D600FAB378 /* PumpManagerUI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PumpManagerUI.swift; sourceTree = "<group>"; };
 		C286C2D1E18B35177E020E34 /* WatchLoopManager+Glucose.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchLoopManager+Glucose.swift"; path = "WatchApp Extension/StockLoop/WatchLoopManager+Glucose.swift"; sourceTree = SOURCE_ROOT; };
 		C4975B7BB91A91CB21F89ED6 /* WatchLoopManager+Cycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchLoopManager+Cycle.swift"; path = "WatchApp Extension/StockLoop/WatchLoopManager+Cycle.swift"; sourceTree = SOURCE_ROOT; };
+		0F0AEF000000000000000013 /* WatchLoopManager+Oref.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchLoopManager+Oref.swift"; path = "WatchApp Extension/StockLoop/WatchLoopManager+Oref.swift"; sourceTree = SOURCE_ROOT; };
 		C6333EAA0FF7956C2DD4AC3E /* DeviceDataManager+PodLoan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "DeviceDataManager+PodLoan.swift"; path = "Loop/Managers/PodLoan/DeviceDataManager+PodLoan.swift"; sourceTree = SOURCE_ROOT; };
 		C71A6661AA828EAFD63C8F08 /* GlucoseAlertManager+Sharing.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = "GlucoseAlertManager+Sharing.swift"; sourceTree = "<group>"; };
 		C8B06DC011B54C348CC2A48F /* LoopStallWatchdog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LoopStallWatchdog.swift; path = "WatchApp Extension/StockLoop/LoopStallWatchdog.swift"; sourceTree = SOURCE_ROOT; };
@@ -1810,6 +1816,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F0AEF000000000000000015 /* OrefAlgorithm in Frameworks */,
 				826D1F376E69DF9D410367B3 /* NightscoutServiceKit.framework in Frameworks */,
 				FFCA40ACFF54E0025FA58B14 /* TidepoolServiceKit.framework in Frameworks */,
 				D96C7D3C9C4B414AAEAB3339 /* RileyLinkBLEKit.framework in Frameworks */,
@@ -2463,6 +2470,7 @@
 				A9C62D862331703000535612 /* LoggingServicesManager.swift */,
 				A9D5C5B525DC6C6A00534873 /* LoopAppManager.swift */,
 				43A567681C94880B00334FAC /* LoopDataManager.swift */,
+				0F0AEF000000000000000010 /* OrefAdapter.swift */,
 				0F0AEF000000000000000001 /* OrefDosing.swift */,
 				E9B355232935906B0076AB04 /* Missed Meal Detection */,
 				43C094491CACCC73001F6403 /* NotificationManager.swift */,
@@ -2763,6 +2771,7 @@
 				DC6E574D826158B33EE53EF6 /* WatchLoopManager+GlucoseAlerts.swift */,
 				F89D20C8E12BA79EEB440570 /* WatchLoopManager+Dosing.swift */,
 				C4975B7BB91A91CB21F89ED6 /* WatchLoopManager+Cycle.swift */,
+				0F0AEF000000000000000013 /* WatchLoopManager+Oref.swift */,
 				C940C6F431E6435B971D98B2 /* SportLog.swift */,
 				036B897A66F14CAA9CD5CAD0 /* PodLoanWatchController.swift */,
 				5B7EDF8F4E611C98701399C6 /* CarbAndBolusFlow+PodLoan.swift */,
@@ -3401,6 +3410,9 @@
 				BAD81AABA8FC9AC7CE8B0E17 /* PBXTargetDependency */,
 			);
 			name = WatchApp;
+			packageProductDependencies = (
+				0F0AEF000000000000000016 /* OrefAlgorithm */,
+			);
 			productName = WatchApp;
 			productReference = 43A943721B926B7B0051FA24 /* WatchApp.app */;
 			productType = "com.apple.product-type.application";
@@ -4084,6 +4096,7 @@
 				84F20DFD2D0B9C3A0089DF02 /* EditPresetDurationView.swift in Sources */,
 				89E267FC2292456700A3F2AF /* FeatureFlags.swift in Sources */,
 				43A567691C94880B00334FAC /* LoopDataManager.swift in Sources */,
+				0F0AEF000000000000000011 /* OrefAdapter.swift in Sources */,
 				0F0AEF000000000000000002 /* OrefDosing.swift in Sources */,
 				C152B9F52C9C7D4A00ACBC06 /* AutomationHistoryEntry.swift in Sources */,
 				1DA649A9244126DA00F61E75 /* InAppModalAlertScheduler.swift in Sources */,
@@ -4342,6 +4355,8 @@
 				A9DE3D1E90432124BB5738B2 /* WatchLoopManager+GlucoseAlerts.swift in Sources */,
 				3DAF0D06E678E7616137C84A /* WatchLoopManager+Dosing.swift in Sources */,
 				344ABCF8A638888D8C0AC47B /* WatchLoopManager+Cycle.swift in Sources */,
+				0F0AEF000000000000000014 /* WatchLoopManager+Oref.swift in Sources */,
+				0F0AEF000000000000000012 /* OrefAdapter.swift in Sources */,
 				F06FDE1F67AF4011937B1529 /* SportLog.swift in Sources */,
 				4624A94E56A6ABB49478893A /* DoseEnactor.swift in Sources */,
 				8BACA0014DF81FD4EF87D856 /* LoopAlgorithmSupport.swift in Sources */,
@@ -6165,6 +6180,10 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		0F0AEF000000000000000016 /* OrefAlgorithm */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = OrefAlgorithm;
+		};
 		0F0AEF000000000000000004 /* OrefAlgorithm */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = OrefAlgorithm;

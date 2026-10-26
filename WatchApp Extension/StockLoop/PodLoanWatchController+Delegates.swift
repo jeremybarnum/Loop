@@ -201,7 +201,7 @@ extension PodLoanWatchController: DeviceManagerDelegate {
 extension LoanGrant {
     /// A dormant grant is issued expired; a seize re-stamps the epoch and lease.
     func withEpoch(_ newEpoch: Int, leaseUntil: Date) -> LoanGrant {
-        LoanGrant(epoch: newEpoch, expiresAt: leaseUntil, pumpConfiguration: pumpConfiguration,
+        var grant = LoanGrant(epoch: newEpoch, expiresAt: leaseUntil, pumpConfiguration: pumpConfiguration,
                   podAddress: podAddress, therapySettingsRaw: therapySettingsRaw,
                   settingsTimeZoneID: settingsTimeZoneID, doseHistory: doseHistory,
                   supportsInterimHandback: supportsInterimHandback,
@@ -216,5 +216,7 @@ extension LoanGrant {
                   glucoseAlertSettings: glucoseAlertSettings,
                   overrideHistoryRaw: overrideHistoryRaw,
                   settingsHistory: settingsHistory)
+        grant.orefContext = orefContext
+        return grant
     }
 }

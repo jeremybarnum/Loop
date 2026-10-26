@@ -280,7 +280,7 @@ extension PodLoanPhoneController {
                         let overrideHistoryData = LoanGrant.overrideHistoryRaw(overrides)
                         let settingsHistoryCounts = settingsHistory.map { "\($0.basal.count)/\($0.sensitivity.count)/\($0.carbRatio.count)/\($0.targetRange.count)" } ?? "ABSENT"
                         self.handbackDiag(grantEpoch, "[grant] supplement \(supplementData?.count ?? 0)B · seeds: \(history.count) dose, \(carbs.count) carb, \(glucose.count) glucose, \(overrides.count) override (\(overrideHistoryData?.count ?? 0)B) · settings history basal/ISF/CR/target \(settingsHistoryCounts) · podState \(stateData.count)B · settings \(settingsData.count)B · glucose alerts \(glucoseAlertSettings.map { "\($0.count)B" } ?? "ABSENT")")
-                        let grant = LoanGrant(
+                        var grant = LoanGrant(
                             epoch: grantEpoch,
                             expiresAt: expiresAt,
                             pumpConfiguration: stateData,
@@ -308,6 +308,7 @@ extension PodLoanPhoneController {
                             glucoseAlertSettings: glucoseAlertSettings,
                             overrideHistoryRaw: overrideHistoryData,
                             settingsHistory: settingsHistory)
+                        grant.orefContext = try? JSONEncoder().encode(OrefStatus.loanContext())
                         completion(grant)
                     }
                     }

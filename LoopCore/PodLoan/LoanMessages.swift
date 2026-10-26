@@ -216,6 +216,10 @@ public struct LoanGrant: Codable, Equatable {
     /// which the wrist follows while it has no CGM of its own. Nil from an older phone.
     public var phoneCGMUploadsGlucose: Bool? = nil
 
+    /// The phone's dosing-algorithm choice and oref settings, with its daily insulin totals (JSON of the
+    /// app's `OrefLoanContext`). Nil from a phone without oref: the watch doses with Loop's algorithm.
+    public var orefContext: Data? = nil
+
     public init(epoch: Int, expiresAt: Date, pumpConfiguration: Data, podAddress: UInt32,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
                 doseHistory: [LoanDoseRecord],

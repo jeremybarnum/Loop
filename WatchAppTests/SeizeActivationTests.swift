@@ -135,6 +135,26 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertEqual(rebuilt.settingsTimeZoneID, dormant.grant.settingsTimeZoneID)
     }
 
+    /// A seized standing copy doses with the algorithm the phone chose; a grant from a phone without
+    /// oref carries none, and the watch doses with Loop's algorithm.
+    func testRebuildKeepsThePhonesDosingAlgorithm() throws {
+        var grant = fixtureDormant(issuedAt: Date()).grant
+        let plain = try JSONDecoder().decode(LoanGrant.self, from: JSONEncoder().encode(grant))
+        XCTAssertNil(plain.orefContext, "no oref field: Loop's algorithm")
+        XCTAssertNil(WatchLoopManager.decodeOrefContext(plain.orefContext))
+
+        grant.orefContext = Data(#"{"configuration":{"algorithm":"oref","preferences":{"maxIOB":3}},"dailyDoses":{"total":40,"average":38}}"#.utf8)
+        let context = try XCTUnwrap(WatchLoopManager.decodeOrefContext(grant.orefContext))
+        XCTAssertEqual(context.configuration.algorithm.rawValue, "oref")
+        XCTAssertEqual(context.configuration.preferences.maxIOB, 3)
+        XCTAssertEqual(context.dailyDoses.average, 38)
+
+        let rebuilt = grant.withEpoch(9, leaseUntil: Date().addingTimeInterval(PodLoanWatchController.seizeActivationLease))
+        XCTAssertEqual(WatchLoopManager.decodeOrefContext(rebuilt.orefContext), context, "the seize keeps the choice")
+        let travelled = try JSONDecoder().decode(LoanGrant.self, from: JSONEncoder().encode(rebuilt))
+        XCTAssertEqual(WatchLoopManager.decodeOrefContext(travelled.orefContext), context, "and it survives the wire")
+    }
+
     // MARK: - The entry gate
 
     /// A seized loan's phase and reunion token are saved together: a kill right after the phase

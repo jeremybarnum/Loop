@@ -409,6 +409,7 @@ final class WatchLoopManager {
         self._closedLoopMirror = loopState.closedLoopEnabled
         self.integralRetrospectiveCorrectionEnabled = loopState.integralRetrospectiveCorrectionEnabled
         self.glucoseBasedApplicationFactorEnabled = loopState.glucoseBasedApplicationFactorEnabled
+        self.orefContext = Self.decodeOrefContext(loopState.orefContext)
 
         // The store asks us for the scheduled basal it nets doses against; see the
         // `DoseStoreDelegate` conformance.
@@ -493,6 +494,9 @@ final class WatchLoopManager {
     /// Queue-owned.
     var integralRetrospectiveCorrectionEnabled = false
     var glucoseBasedApplicationFactorEnabled = false
+
+    /// The phone's dosing-algorithm choice for this loan (nil: Loop's algorithm). Queue-owned.
+    var orefContext: OrefLoanContext?
 
     /// Stock glucose alerts, built from the phone's settings for a loan; nil between loans.
     @MainActor var glucoseAlerts: GlucoseAlertManager?
@@ -616,6 +620,8 @@ struct WatchLoopState: RawRepresentable {
     var lastLoopCompleted: Date?
     /// The override history's events, as LoopKit encodes them; read back only by a resume.
     var overrideEvents: Data?
+    /// The grant's `orefContext`, so a resumed loan doses with the same algorithm.
+    var orefContext: Data?
 
     init() {}
 
@@ -625,6 +631,7 @@ struct WatchLoopState: RawRepresentable {
         glucoseBasedApplicationFactorEnabled = rawValue["glucoseBasedApplicationFactorEnabled"] as? Bool ?? false
         lastLoopCompleted = rawValue["lastLoopCompleted"] as? Date
         overrideEvents = rawValue["overrideEvents"] as? Data
+        orefContext = rawValue["orefContext"] as? Data
     }
 
     var rawValue: [String: Any] {
@@ -633,6 +640,7 @@ struct WatchLoopState: RawRepresentable {
                                   "glucoseBasedApplicationFactorEnabled": glucoseBasedApplicationFactorEnabled]
         raw["lastLoopCompleted"] = lastLoopCompleted
         raw["overrideEvents"] = overrideEvents
+        raw["orefContext"] = orefContext
         return raw
     }
 }

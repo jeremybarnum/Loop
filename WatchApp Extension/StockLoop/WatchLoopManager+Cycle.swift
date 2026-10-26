@@ -81,6 +81,9 @@ extension WatchLoopManager {
                 var output = LoopAlgorithm.run(input: input)
                 self.loopRunState = AlgorithmDisplayState(input: input, output: output)
 
+                // oref (Trio's algorithm), when the phone chose it — see WatchLoopManager+Oref.swift
+                try self.applyOref(to: &output, input: input, at: loopBaseTime)
+
                 switch output.recommendationResult {
                 case .success(let recommendation):
                     // Stock force-unwraps this; an automatic run always carries one.
