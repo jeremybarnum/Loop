@@ -18,6 +18,8 @@ import UserNotifications
 /// The test pump's hand-off state, shared by every instance.
 extension MockPumpManager {
     static var testConnectionReleased = false
+    /// The driver keeps the pod at `releaseControl()`, as a pod driver does while a command is unconfirmed.
+    static var testKeepsControl = false
     /// The odometer the PHONE reads on its reclaim round-trip. nil = pump reports none.
     static var testOdometer: Double?
     /// When the phone read it. nil = now.
@@ -37,7 +39,7 @@ final class LendableMockPumpManager: MockPumpManager, ExclusiveDeviceControl, Pu
         self.init()
     }
     var isControlReleased: Bool { Self.testConnectionReleased }
-    func releaseControl() { Self.testConnectionReleased = true }
+    func releaseControl() { if !Self.testKeepsControl { Self.testConnectionReleased = true } }
     func takeControl() { Self.testConnectionReleased = false }
     var deliveredUnits: (units: Double, at: Date)? { Self.testOdometer.map { ($0, Self.testOdometerAt ?? Date()) } }
     var deliveryPulseUnits: Double { 0.05 }
@@ -168,6 +170,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         heldPumpEventWrite = nil
         pump = LendableMockPumpManager()
         MockPumpManager.testConnectionReleased = false
+        MockPumpManager.testKeepsControl = false
         MockPumpManager.testOdometer = nil
         MockPumpManager.testOdometerAt = nil
 
@@ -2343,21 +2346,23 @@ extension PodLoanPhoneControllerTests {
         establishLoan(controller)
     }
 
-    /// Start while the pod has not confirmed this phone's last command (stock's `deliveryIsUncertain`):
-    /// denied, nothing released, and the Start once the command is settled goes through.
-    func testStartIsDeniedWhileThePodHasNotConfirmedACommand() throws {
+    /// Start while the pod driver keeps the pod (a command to the pod is unconfirmed): denied, the phone
+    /// stays the owner and doses again, and the Start after the pod answers goes through.
+    func testStartIsDeniedWhenThePodDriverKeepsThePod() throws {
         let controller = makeController()
-        pump.status.deliveryIsUncertain = true
+        MockPumpManager.testKeepsControl = true
         controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
         waitUntil(timeout: 5, "denied") { if case .denied? = self.lastSent() { return true }; return false }
 
         guard case .denied(let denied)? = lastSent() else { return XCTFail("expected a denial") }
-        XCTAssertTrue(denied.reason.contains("hasn't confirmed"), denied.reason)
+        XCTAssertEqual(denied.reason, LoanControl.unconfirmedCommandRefusal)
         XCTAssertEqual(controller.state, .owner)
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "the pump was never released")
-        XCTAssertNotNil(diagMatching("has not confirmed"))
+        XCTAssertTrue(controlCalls.isEmpty, "the phone's dosing was never handed over")
+        XCTAssertFalse(controller.holdsAutomaticDosing, "the phone doses again")
+        XCTAssertNotNil(diagMatching("the pod driver kept the pod"))
 
-        pump.status.deliveryIsUncertain = false
+        MockPumpManager.testKeepsControl = false
         establishLoan(controller)
     }
 
