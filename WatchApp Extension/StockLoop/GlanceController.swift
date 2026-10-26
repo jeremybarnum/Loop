@@ -1030,13 +1030,20 @@ struct GlanceView: View {
     /// screen — no 64pt number, calm-blue button instead of burnt-orange.
     private var idleCenter: some View {
         VStack(spacing: 12) {
-            if model.state.bgText != "—" {
-                HStack(spacing: 5) {
-                    Text("iPhone").font(.system(size: 11, weight: .medium)).foregroundColor(.glanceDim)
-                    Text(model.state.bgText).font(.system(size: 22, weight: .semibold)).foregroundColor(.glanceDim)
-                    if let arrow = model.state.trendSymbol {
-                        Text(arrow).font(.system(size: 16)).foregroundColor(.glanceDim)
+            VStack(spacing: 2) {
+                if model.state.bgText != "—" {
+                    HStack(spacing: 5) {
+                        Text("iPhone").font(.system(size: 11, weight: .medium)).foregroundColor(.glanceDim)
+                        Text(model.state.bgText).font(.system(size: 22, weight: .semibold)).foregroundColor(.glanceDim)
+                        if let arrow = model.state.trendSymbol {
+                            Text(arrow).font(.system(size: 16)).foregroundColor(.glanceDim)
+                        }
                     }
+                }
+                // Control row 3: the phone has gone quiet. Under its (possibly old) reading.
+                if model.state.notHearingFromPhone {
+                    Text(NSLocalizedString("Not hearing from iPhone", comment: "Glance: no loan, and no word from the phone for the warning's interval"))
+                        .font(.system(size: 12)).foregroundColor(.glanceWarn)
                 }
             }
             if let age = model.state.seizeOfferAgeText {
@@ -1146,9 +1153,6 @@ struct GlanceView: View {
             } else if let eventual = model.state.eventualText {
                 (Text("eventually ").foregroundColor(.glanceDim) + Text(eventual).bold())
                     .font(.system(size: 13))
-            } else if model.state.phase == .idle, model.state.notHearingFromPhone {
-                Text(NSLocalizedString("Not hearing from iPhone", comment: "Glance: no loan, and no word from the phone for the warning's interval"))
-                    .font(.system(size: 12)).foregroundColor(.glanceWarn)
             } else if model.state.viaPhone, model.state.phase == .idle || model.state.phase == .starting {
                 Text("via iPhone").font(.system(size: 12)).foregroundColor(.glanceDim)
             }

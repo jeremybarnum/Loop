@@ -518,8 +518,9 @@ final class PodLoanWatchController {
     }
 
     /// When the phone was last heard from; the Sport Mode page says when it has gone quiet.
-    /// Queue-confined.
-    private var lastHeardFromPhoneAt: Date?
+    /// Until the first word, this launch: a watch app relaunched with the phone already gone
+    /// still says so 25 minutes later. Queue-confined.
+    private var lastHeardFromPhoneAt = Date()
 
     /// Any word from the phone (its loan messages, or its status for the stock pages). With no
     /// loan running (control row 3, next-dev 1406bc8e): the warning for a silent phone is pushed

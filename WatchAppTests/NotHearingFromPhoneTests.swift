@@ -113,11 +113,22 @@ final class NotHearingFromPhoneTests: XCTestCase {
         XCTAssertNil(warning, "and the phone's words during a loan do not bring it back")
     }
 
+    /// A watch app relaunched with the phone already gone has heard nothing since it started:
+    /// the quiet is counted from the launch, so the idle page still says so 25 minutes later.
+    func testARelaunchWithThePhoneAlreadyGoneCountsFromTheLaunch() throws {
+        let launched = Date()
+        let c = makeController()
+        let since = try XCTUnwrap(c.debugSnapshot().lastHeardFromPhoneAt, "counted from the launch")
+        XCTAssertGreaterThanOrEqual(since, launched)
+        XCTAssertFalse(GlanceViewModel.idleState(context: nil, phoneHeardAt: since, now: since.addingTimeInterval(24 * 60)).notHearingFromPhone)
+        XCTAssertTrue(GlanceViewModel.idleState(context: nil, phoneHeardAt: since, now: since.addingTimeInterval(25 * 60)).notHearingFromPhone)
+    }
+
     /// The idle page: "via iPhone" until 25 minutes without a word, then "Not hearing from iPhone".
     func testTheIdlePageSaysSoAfterTwentyFiveMinutes() {
         let now = Date()
         XCTAssertFalse(GlanceViewModel.idleState(context: nil, phoneHeardAt: nil, now: now).notHearingFromPhone,
-                       "never heard this launch: nothing to measure from")
+                       "no clock (a preview): nothing to measure from")
         XCTAssertFalse(GlanceViewModel.idleState(context: nil, phoneHeardAt: now.addingTimeInterval(-24 * 60), now: now).notHearingFromPhone)
         XCTAssertTrue(GlanceViewModel.idleState(context: nil, phoneHeardAt: now.addingTimeInterval(-25 * 60), now: now).notHearingFromPhone)
     }
