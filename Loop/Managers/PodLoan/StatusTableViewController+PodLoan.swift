@@ -17,20 +17,17 @@ extension StatusTableViewController {
     func podLoanedToWatchCell() -> UITableViewCell {
         let cell = UITableViewCell()
         cell.backgroundColor = .secondarySystemBackground
-        let subtitle: String
+        // During the loan, how current the phone's copy is: the time the watch's records last arrived.
+        let subtitle: String?
         if deviceManager.isPodTakeoverInProgress {
             subtitle = NSLocalizedString("Handing the pod to Apple Watch…", comment: "The subtitle of the banner while the watch is taking over the pod")
         } else if deviceManager.isPodLoanReclaiming {
             subtitle = NSLocalizedString("Reclaiming the pod…", comment: "The subtitle of the banner while the phone is reclaiming the pod")
-        } else {
-            subtitle = NSLocalizedString("Apple Watch is controlling the pod. Tap to reclaim.", comment: "The subtitle of the banner indicating the pod is controlled by the watch")
-        }
-        // How current the phone's copy is: the time the watch's records last arrived.
-        var freshness: String?
-        if !deviceManager.isPodTakeoverInProgress, !deviceManager.isPodLoanReclaiming,
-           let lastRecordsAt = deviceManager.podLoanLastRecordsAt {
+        } else if let lastRecordsAt = deviceManager.podLoanLastRecordsAt {
             let time = DateFormatter.localizedString(from: lastRecordsAt, dateStyle: .none, timeStyle: .short)
-            freshness = String(format: NSLocalizedString("Updated from Apple Watch at %@", comment: "Banner line during a loan: when the watch's records last arrived (1: time)"), time)
+            subtitle = String(format: NSLocalizedString("Last watch update %@", comment: "The subtitle of the banner during a loan: when the watch's records last arrived (1: time)"), time)
+        } else {
+            subtitle = nil
         }
         cell.contentConfiguration = UIHostingConfiguration {
             HStack {
@@ -40,13 +37,9 @@ extension StatusTableViewController {
                     Text(NSLocalizedString("Sport Mode Active", comment: "The title of the banner indicating the pod is controlled by the watch"))
                         .font(.headline.bold())
 
-                    Text(subtitle)
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if let freshness {
-                        Text(freshness)
-                            .font(.footnote)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.subheadline)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }

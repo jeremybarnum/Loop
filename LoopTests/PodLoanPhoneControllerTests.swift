@@ -1590,6 +1590,30 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertGreaterThan(addedDoses.flatMap { $0 }.filter { $0.type == .tempBasal }.count, 0, "written once finished")
     }
 
+    /// A bolus still being given is kept back; the watch's next check-in after it has finished stores
+    /// it, though the check-in carries no new records.
+    func testAHeldBolusIsStoredAtTheFirstCheckInAfterItFinishes() throws {
+        let controller = makeController(now: { self.clock })
+        let grant = establishLoan(controller)
+        let start = clock
+        let bolus = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
+                              record: LoanDoseRecord(kind: .bolus, startDate: start, endDate: start.addingTimeInterval(.minutes(2)),
+                                                     amount: 2.8),
+                              loggedAt: start)
+        let firstAck = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: grant.epoch, events: [bolus], tombstones: [], sentAt: start)).transportDictionary())
+        wait(for: [firstAck], timeout: 5)
+        XCTAssertEqual(addedDoses.flatMap { $0 }.filter { $0.type == .bolus }.count, 0, "kept back while it is being given")
+
+        clock = start.addingTimeInterval(.minutes(4))
+        let secondAck = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: grant.epoch, events: [], tombstones: [], sentAt: clock)).transportDictionary())
+        wait(for: [secondAck], timeout: 5)
+        XCTAssertEqual(addedDoses.flatMap { $0 }.filter { $0.type == .bolus }.count, 1, "stored at the check-in after it finished")
+    }
+
     /// A batch with no records is the watch checking in: nothing is written or acknowledged.
     func testABatchWithNoRecordsWritesNothing() throws {
         let controller = makeController()

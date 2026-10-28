@@ -40,12 +40,29 @@ extension PodLoanPhoneController {
         }
 
         // Committed as they arrive, so the phone's stores and screens follow the watch while it is in
-        // reach. Records that arrive during a write wait, staged, for the next one.
-        guard !batch.events.isEmpty || !batch.tombstones.isEmpty, !commitInFlight else { return }
-        let records = HandbackOffer(epoch: batch.epoch, handedBackAt: batch.sentAt ?? deps.now(), finalStatus: nil,
+        // reach. A batch with no new records still stores what has finished by the time it was sent:
+        // a bolus or temp basal kept back while it ran. Records that arrive during a write wait,
+        // staged, for the next one.
+        let sentAt = batch.sentAt ?? deps.now()
+        guard !batch.events.isEmpty || !batch.tombstones.isEmpty || heldRecordHasFinished(by: sentAt),
+              !commitInFlight else { return }
+        let records = HandbackOffer(epoch: batch.epoch, handedBackAt: sentAt, finalStatus: nil,
                                     odometer: batch.odometer, events: batch.events, tombstones: batch.tombstones,
                                     recovered: false, released: false)
         commitStaged(records, isFinal: false, isStale: false, auditThisOffer: false)
+    }
+
+    /// Whether a record kept back while it ran (staged, not yet committed) has finished by `date`.
+    private func heldRecordHasFinished(by date: Date) -> Bool {
+        let held = staged.values.filter { !stagedTombstones.contains($0.id) && !committedIDs.contains($0.id) }
+        guard !held.isEmpty else { return false }
+        let open = LoanReconciler.reconcile(LoanReconciler.Input(
+            events: held.sorted { $0.seq < $1.seq },
+            schedule: deps.settings().basalRateSchedule,
+            loanStart: loanStartedAt ?? date.addingTimeInterval(-.hours(2)),
+            loanEnd: date,
+            isFinalHandback: false)).openEventIDs
+        return held.contains { !open.contains($0.id) }
     }
 
     /// The loan's log line, tagged with its loan number.

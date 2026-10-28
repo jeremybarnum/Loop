@@ -13,6 +13,9 @@
     " -" : {
 
     },
+    "Last watch update %@" : {
+      "comment" : "The subtitle of the banner during a loan: when the watch's records last arrived (1: time)"
+    },
     " - " : {
 
     },
@@ -7937,9 +7940,6 @@
     },
     "Apple Health" : {
       "comment" : "Apple Health settings button text\nTitle of the Apple Health access screen"
-    },
-    "Apple Watch is controlling the pod. Tap to reclaim." : {
-      "comment" : "The subtitle of the banner indicating the pod is controlled by the watch"
     },
     "Apple Watch is running the loop and controlling the pod. %1$@ on this phone will resume automation when the pod is reclaimed." : {
       "comment" : "message when the pod is loaned to the watch (1: app name)"
@@ -39647,9 +39647,6 @@
           }
         }
       }
-    },
-    "Updated from Apple Watch at %@" : {
-      "comment" : "Banner line during a loan: when the watch's records last arrived (1: time)"
     },
     "Urgent alarms, such as Urgent Low, will still sound, but all others will be silenced." : {
       "comment" : "Additional description text for temporarily silencing non-critical alerts when Critical Alerts are unavailable"
