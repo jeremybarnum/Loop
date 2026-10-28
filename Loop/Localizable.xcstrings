@@ -13,8 +13,11 @@
     " -" : {
 
     },
+    "Apple Watch is controlling the pod. Tap to reclaim." : {
+      "comment" : "The subtitle of the banner indicating the pod is controlled by the watch"
+    },
     "Last watch update %@" : {
-      "comment" : "The subtitle of the banner during a loan: when the watch's records last arrived (1: time)"
+      "comment" : "Banner line during a loan: when the watch's records last arrived (1: time)"
     },
     " - " : {
 

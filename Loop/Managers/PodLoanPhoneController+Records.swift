@@ -230,7 +230,7 @@ extension PodLoanPhoneController {
         let doses = outcome.doses
 
         // The interim's open records (a rate record still running, a bolus still being given) are
-        // acked but not committed; each lands finished later.
+        // acked but not committed; each lands finished later. The bolus is stored meanwhile, mutable.
         let committable = events.filter { !outcome.openEventIDs.contains($0.id) }
 
         // Drop impossible doses individually, by name.
@@ -335,8 +335,9 @@ extension PodLoanPhoneController {
                     loanStart: loanStart,
                     loanEnd: offer.handedBackAt,
                     isFinalHandback: isFinal))
+                // A bolus still being given is the pump-event path's alone, until it has finished.
                 let backfill = self.storeIdentifiedDoses(from: self.truncatingOverlaps(
-                    backfillOutcome.doses.filter { $0.endDate >= $0.startDate }))
+                    backfillOutcome.doses.filter { $0.endDate >= $0.startDate && !$0.isMutable }))
                 if isStale || backfill.isEmpty {
                     if isStale {
                         self.handbackDiag(offer.epoch, "hand-back from an older loan: only its own records are saved")

@@ -495,10 +495,10 @@ final class LoanProtocolTests: XCTestCase {
         XCTAssertTrue(outcome.doses.contains { $0.syncIdentifier == LoanReconciler.syncIdentifier(for: events[0]) })
     }
 
-    /// Interim drain: a bolus still being given is open like a running temp: acked, not written, so
-    /// Loop's dose store never holds a finished bolus that ends in the future. Once it has finished,
-    /// the next drain writes it.
-    func testInterimDrainWithholdsABolusStillBeingGiven() {
+    /// Interim drain: a bolus still being given is open like a running temp, but written mutable, as
+    /// stock's pump drivers report one, so insulin on board counts it at once. Once it has finished,
+    /// the next drain writes it final.
+    func testInterimDrainWritesABolusStillBeingGivenAsMutable() {
         let start = loanStart.addingTimeInterval(600)
         let bolus = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
                               record: LoanDoseRecord(kind: .bolus, startDate: start, endDate: start.addingTimeInterval(80), amount: 2),
@@ -507,7 +507,8 @@ final class LoanProtocolTests: XCTestCase {
             events: [bolus], schedule: flatSchedule,
             loanStart: loanStart, loanEnd: start.addingTimeInterval(30), isFinalHandback: false))
         XCTAssertEqual(during.openEventIDs, [bolus.id])
-        XCTAssertTrue(during.doses.isEmpty, "not written while it is being given")
+        XCTAssertEqual(during.doses.map(\.type), [.bolus], "written while it is being given")
+        XCTAssertEqual(during.doses.first?.isMutable, true, "mutable, so the finished record replaces it")
 
         let after = LoanReconciler.reconcile(LoanReconciler.Input(
             events: [bolus], schedule: flatSchedule,
@@ -515,6 +516,7 @@ final class LoanProtocolTests: XCTestCase {
         XCTAssertTrue(after.openEventIDs.isEmpty)
         XCTAssertEqual(after.doses.map(\.type), [.bolus], "written once it has finished")
         XCTAssertEqual(after.doses.first?.endDate, start.addingTimeInterval(80))
+        XCTAssertEqual(after.doses.first?.isMutable, false, "final once it has finished")
     }
 
     /// A single completed temp on a final hand-back keeps its (sub-loanEnd) window intact.

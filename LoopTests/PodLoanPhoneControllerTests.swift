@@ -1590,9 +1590,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertGreaterThan(addedDoses.flatMap { $0 }.filter { $0.type == .tempBasal }.count, 0, "written once finished")
     }
 
-    /// A bolus still being given is kept back; the watch's next check-in after it has finished stores
-    /// it, though the check-in carries no new records.
-    func testAHeldBolusIsStoredAtTheFirstCheckInAfterItFinishes() throws {
+    /// A bolus still being given is stored at once, mutable, as stock's pump drivers report one; the
+    /// watch's next check-in after it has finished stores it final, though the check-in carries no new
+    /// records.
+    func testABolusBeingGivenIsStoredMutableThenFinalAtTheNextCheckIn() throws {
         let controller = makeController(now: { self.clock })
         let grant = establishLoan(controller)
         let start = clock
@@ -1604,14 +1605,17 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
             DoseRecordBatch(epoch: grant.epoch, events: [bolus], tombstones: [], sentAt: start)).transportDictionary())
         wait(for: [firstAck], timeout: 5)
-        XCTAssertEqual(addedDoses.flatMap { $0 }.filter { $0.type == .bolus }.count, 0, "kept back while it is being given")
+        let whileGiven = addedDoses.flatMap { $0 }.filter { $0.type == .bolus }
+        XCTAssertEqual(whileGiven.count, 1, "stored while it is being given, with the carbs that came with it")
+        XCTAssertEqual(whileGiven.first?.isMutable, true, "mutable: insulin on board counts it at once")
 
         clock = start.addingTimeInterval(.minutes(4))
         let secondAck = expectSend()
         controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
             DoseRecordBatch(epoch: grant.epoch, events: [], tombstones: [], sentAt: clock)).transportDictionary())
         wait(for: [secondAck], timeout: 5)
-        XCTAssertEqual(addedDoses.flatMap { $0 }.filter { $0.type == .bolus }.count, 1, "stored at the check-in after it finished")
+        XCTAssertEqual(addedDoses.last?.filter { $0.type == .bolus }.map(\.isMutable), [false],
+                       "stored final at the check-in after it finished, replacing the mutable one")
     }
 
     /// A batch with no records is the watch checking in: nothing is written or acknowledged.
@@ -1674,10 +1678,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         waitForState(controller, .owner)
     }
 
-    /// While an End waits, an interim offer can carry a watch bolus still being given. It is acked
-    /// but not written: Loop's dose store takes a bolus only once it has finished (it stops a debug
-    /// build on a finished bolus that ends in the future). The next offer after it has finished writes it.
-    func testInterimDrainAcksABolusStillBeingGivenAndWritesItOnceFinished() throws {
+    /// While an End waits, an interim offer can carry a watch bolus still being given. It is acked and
+    /// written mutable, as stock's pump drivers report one (Loop's dose store stops a debug build only on
+    /// an immutable bolus that ends in the future). The next offer after it has finished writes it final.
+    func testInterimDrainAcksABolusStillBeingGivenAndWritesItFinalOnceFinished() throws {
         let controller = makeController()
         let grant = establishLoan(controller)
         let now = Date()
@@ -1693,7 +1697,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         wait(for: [duringAck], timeout: 5)
         guard case .handbackAck(let ack)? = lastSent() else { return XCTFail("expected an ack") }
         XCTAssertEqual(ack.committedCursor, bolus.seq, "acked, so the End can reach its release check")
-        XCTAssertFalse(addedDoses.flatMap { $0 }.contains { $0.type == .bolus }, "not written while it is being given")
+        XCTAssertEqual(addedDoses.flatMap { $0 }.filter { $0.type == .bolus }.map(\.isMutable), [true],
+                       "written mutable while it is being given")
 
         let afterAck = expectSend()
         controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(HandbackOffer(
@@ -1701,7 +1706,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             events: [], tombstones: [], recovered: false, released: false)).transportDictionary())
         wait(for: [afterAck], timeout: 5)
         drainMainQueue()
-        XCTAssertEqual(addedDoses.flatMap { $0 }.filter { $0.type == .bolus }.count, 1, "written once, finished")
+        XCTAssertEqual(addedDoses.flatMap { $0 }.filter { $0.type == .bolus && !$0.isMutable }.count, 1, "written once, finished")
         XCTAssertEqual(controller.state, .loaned)
     }
 

@@ -48,8 +48,9 @@ enum LoanReconciler {
         var doses: [DoseEntry] = []
 
         /// On an interim drain, the records not finished yet: the still-running rate record and any
-        /// bolus still being given. Acked but not committed, so each lands finished later. Loop's
-        /// dose store takes a bolus only once it has finished, as stock's drivers report one.
+        /// bolus still being given. Acked but not committed, so each lands finished later. A bolus
+        /// still being given is in `doses` too, marked mutable, as stock's pump drivers report one:
+        /// insulin on board counts it at once, and the finished record replaces it.
         var openEventIDs: Set<UUID> = []
 
         /// Each under its journal event's ID as its sync identifier, the identity the watch stored it under.
@@ -96,7 +97,6 @@ enum LoanReconciler {
         for event in events {
             switch event.record.kind {
             case .bolus:
-                if openEventIDs.contains(event.id) { continue }
                 if let units = event.record.amount {
                     outcome.doses.append(DoseEntry(
                         type: .bolus,
@@ -105,7 +105,8 @@ enum LoanReconciler {
                         value: units, unit: .units,
                         decisionId: event.record.decisionId,
                         syncIdentifier: syncIdentifier(for: event),
-                        automatic: event.record.automatic))
+                        automatic: event.record.automatic,
+                        isMutable: openEventIDs.contains(event.id)))
                 }
             case .tempBasal, .suspend:
 
