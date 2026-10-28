@@ -12,6 +12,7 @@ import LoopCore
 import HealthKit
 @testable import WatchApp
 
+@MainActor
 final class GlanceSurfaceTests: XCTestCase {
 
     private var cacheDir: URL!
@@ -86,10 +87,8 @@ final class GlanceSurfaceTests: XCTestCase {
         try? await manager.recordPumpEvents([], lastReconciliation: Date(), replacePendingEvents: true)
     }
 
-    private func settle(_ seconds: TimeInterval = 2.0) {
-        let done = expectation(description: "settled")
-        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { done.fulfill() }
-        wait(for: [done], timeout: seconds + 5)
+    private func settle(_ seconds: TimeInterval = 2.0) async {
+        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
 
     /// THE REGRESSION THIS FILE EXISTS FOR. The glance's eventual read a field nothing assigned,
@@ -100,9 +99,9 @@ final class GlanceSurfaceTests: XCTestCase {
         await seedBook(manager)
 
         manager.updateDisplayState()
-        settle()
+        await settle()
 
-        let data = manager.glanceData()
+        let data = await manager.settledGlanceData()
         XCTAssertNotNil(data.eventual,
                         "the glance must carry the eventual the display run just computed — a nil here is the field that nothing assigns")
     }
@@ -115,9 +114,9 @@ final class GlanceSurfaceTests: XCTestCase {
         await seedBook(manager)
 
         manager.loop()
-        settle()
+        await settle()
 
-        let data = manager.glanceData()
+        let data = await manager.settledGlanceData()
         XCTAssertNotNil(data.predictionBreakdown,
                         "the diagnostics panel must receive the decomposition the loop computed")
     }
@@ -130,9 +129,9 @@ final class GlanceSurfaceTests: XCTestCase {
         await seedBook(manager)
 
         manager.loop()
-        settle()
+        await settle()
 
-        let data = manager.glanceData()
+        let data = await manager.settledGlanceData()
         guard let eventual = data.dosingEventual?.doubleValue(for: .milligramsPerDeciliter),
               let breakdown = data.predictionBreakdown else {
             return XCTFail("both surfaces must be populated before they can be compared")

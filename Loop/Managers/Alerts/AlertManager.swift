@@ -188,10 +188,7 @@ public final class AlertManager {
     var loopNotRunningSuppressionGate: (() -> Bool)?
 
     func loopDidComplete(_ lastLoopDate: Date? = nil) async {
-        if loopNotRunningSuppressionGate?() == true {
-            log.default("loopDidComplete with the pump released — Loop Failure ladder NOT re-armed")
-            return
-        }
+        guard loopNotRunningSuppressionGate?() != true else { return }
         // use now if there is no lastLoopDate
         await rescheduleLoopNotRunningNotifications(lastLoopDate ?? Date())
         await reportDisplayedScheduledAlerts()

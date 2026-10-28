@@ -30,13 +30,35 @@ final class RecordingDoseEnactor: DoseEnactor {
     }
 }
 
+/// Records each temp asked for, and holds the first until released, as a slow pod would.
+final class GatedDoseEnactor: DoseEnactor {
+    @MainActor private(set) var temps: [TempBasalRecommendation?] = []
+    @MainActor private var gate: CheckedContinuation<Void, Never>?
+
+    override func enact(decisionId: UUID?, bolus: Double?, tempBasal: TempBasalRecommendation?, with pumpManager: PumpManager) async throws {
+        await record(tempBasal)
+    }
+
+    @MainActor private func record(_ tempBasal: TempBasalRecommendation?) async {
+        temps.append(tempBasal)
+        guard temps.count == 1 else { return }
+        await withCheckedContinuation { gate = $0 }
+    }
+
+    @MainActor func release() {
+        gate?.resume()
+        gate = nil
+    }
+}
+
+@MainActor
 final class StockRunsTests: XCTestCase {
 
     private var dir: URL!
     private var scheduler: RecordingWristAlertScheduler!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("stock-runs-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         // The loop refreshes the dead-man watchdog when a pod is held; keep it off the real centre.
@@ -44,11 +66,11 @@ final class StockRunsTests: XCTestCase {
         WristAlerts.scheduler = scheduler
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         WristAlerts.scheduler = UNUserNotificationCenter.current()
         scheduler = nil
         dir = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     private let mgdl = LoopUnit.milligramsPerDeciliter
@@ -136,23 +158,25 @@ final class StockRunsTests: XCTestCase {
         NewCarbEntry(syncIdentifier: UUID().uuidString, quantity: LoopQuantity(unit: .gram, doubleValue: grams), startDate: Date(), foodType: nil, absorptionTime: TimeInterval(3 * 3600))
     }
 
-    /// One automatic cycle, waited out on the manager's queue.
-    private func runLoop(_ manager: WatchLoopManager) {
+    /// One automatic cycle, waited out on the manager's lane.
+    private func runLoop(_ manager: WatchLoopManager) async {
         manager.loop()
-        manager.dataAccessQueue.sync {}
+        await manager.laneSettled()
     }
 
-    private func runDisplay(_ manager: WatchLoopManager) {
+    private func runDisplay(_ manager: WatchLoopManager) async {
         manager.updateDisplayState()
-        manager.dataAccessQueue.sync {}
+        await manager.laneSettled()
     }
 
-    private func loopInput(_ manager: WatchLoopManager) -> StoredDataAlgorithmInput? {
-        manager.dataAccessQueue.sync { manager.loopRunState.input }
+    private func loopInput(_ manager: WatchLoopManager) async -> StoredDataAlgorithmInput? {
+        await manager.laneSettled()
+        return manager.loopRunState.input
     }
 
-    private func bolusInput(_ manager: WatchLoopManager, carbs entry: NewCarbEntry? = nil) throws -> StoredDataAlgorithmInput {
-        try manager.dataAccessQueue.sync { try manager.manualBolusInput(potentialCarbEntry: entry) }
+    private func bolusInput(_ manager: WatchLoopManager, carbs entry: NewCarbEntry? = nil) async throws -> StoredDataAlgorithmInput {
+        await manager.laneSettled()
+        return try await manager.manualBolusInput(potentialCarbEntry: entry)
     }
 
     private func target(_ input: StoredDataAlgorithmInput) -> ClosedRange<Double>? {
@@ -191,16 +215,18 @@ final class StockRunsTests: XCTestCase {
         await report(manager, [bolus(2.0, start: now.addingTimeInterval(-60), end: now.addingTimeInterval(60), mutable: true),
                                runningTemp(now: now)])
 
-        runLoop(manager)
+        await runLoop(manager)
 
-        let input = try XCTUnwrap(loopInput(manager), "the loop ran the algorithm")
+        let loopRun = await loopInput(manager)
+        let input = try XCTUnwrap(loopRun, "the loop ran the algorithm")
         let inFlight = try XCTUnwrap(input.doses.first { $0.deliveryType == .bolus })
         XCTAssertEqual(inFlight.volume, 2.0, accuracy: 0.001, "the whole bolus, not the minute delivered so far")
         XCTAssertGreaterThan(inFlight.endDate, input.predictionStart, "left as it is")
         let temp = try XCTUnwrap(input.doses.first { $0.deliveryType == .basal })
         XCTAssertLessThanOrEqual(temp.endDate, input.predictionStart, "the temp ends at now")
         XCTAssertEqual(temp.volume, 2.0 * 5 / 60, accuracy: 0.01, "five minutes of it")
-        XCTAssertNil(manager.glanceData().lastLoopErrorText)
+        let glanceNow = await manager.settledGlanceData()
+        XCTAssertNil(glanceNow.lastLoopErrorText)
     }
 
     // MARK: - 2. The recommended bolus: stock `recommendManualBolus`'s input
@@ -212,7 +238,7 @@ final class StockRunsTests: XCTestCase {
         await seedGlucose(manager)
         await report(manager, [runningTemp()])
 
-        let input = try bolusInput(manager)
+        let input = try await bolusInput(manager)
         let temp = try XCTUnwrap(input.doses.first { $0.deliveryType == .basal })
         XCTAssertGreaterThan(temp.endDate, input.predictionStart.addingTimeInterval(.minutes(20)), "through its end")
         XCTAssertEqual(temp.volume, 1.0, accuracy: 0.01, "all thirty minutes at 2 U/h")
@@ -227,12 +253,12 @@ final class StockRunsTests: XCTestCase {
         await report(manager)
         manager.scheduleOverride = preset(.preMeal, target: DoubleRange(minValue: 80, maxValue: 80), scale: 0.5)
 
-        let without = try bolusInput(manager)
+        let without = try await bolusInput(manager)
         XCTAssertEqual(target(without), 80...80, "no carbs: the preset's target")
         XCTAssertEqual(try XCTUnwrap(isf(without, at: Date().addingTimeInterval(.minutes(30)))), 140, accuracy: 0.01,
                        "and its scaling ahead")
 
-        let with = try bolusInput(manager, carbs: carbs(40))
+        let with = try await bolusInput(manager, carbs: carbs(40))
         XCTAssertEqual(target(with), 100...115, "with carbs: the scheduled target")
         XCTAssertEqual(try XCTUnwrap(isf(with, at: Date().addingTimeInterval(.minutes(30)))), 70, accuracy: 0.01,
                        "and the preset's scaling ends at now")
@@ -250,11 +276,12 @@ final class StockRunsTests: XCTestCase {
         await report(manager)
         manager.scheduleOverride = preset(.custom, target: nil, scale: 1.8)
 
-        runLoop(manager)
-        let loop = try XCTUnwrap(loopInput(manager))
+        await runLoop(manager)
+        let loopRun = await loopInput(manager)
+        let loop = try XCTUnwrap(loopRun)
         XCTAssertEqual(try XCTUnwrap(loop.suspendThreshold).doubleValue(for: mgdl), 110, accuracy: 0.001, "the loop")
 
-        let bolus = try bolusInput(manager)
+        let bolus = try await bolusInput(manager)
         XCTAssertEqual(try XCTUnwrap(bolus.suspendThreshold).doubleValue(for: mgdl), 110, accuracy: 0.001, "the recommended bolus")
     }
 
@@ -269,9 +296,10 @@ final class StockRunsTests: XCTestCase {
         await report(manager, [bolus(1.0, start: now.addingTimeInterval(-TimeInterval(20 * 3600)), end: now.addingTimeInterval(-TimeInterval(20 * 3600))),
                                runningTemp(now: now)])
 
-        runDisplay(manager)
+        await runDisplay(manager)
 
-        let state = manager.dataAccessQueue.sync { manager.displayState }
+        await manager.laneSettled()
+        let state = manager.displayState
         let input = try XCTUnwrap(state.input)
         let output = try XCTUnwrap(state.output)
         XCTAssertEqual(input.recommendationType, .manualBolus)
@@ -280,7 +308,7 @@ final class StockRunsTests: XCTestCase {
         XCTAssertTrue(input.doses.contains { $0.deliveryType == .basal && $0.endDate > now.addingTimeInterval(.minutes(20)) },
                       "the running temp projected to its end")
 
-        let glance = manager.glanceData()
+        let glance = await manager.settledGlanceData()
         XCTAssertEqual(try XCTUnwrap(glance.iob), try XCTUnwrap(output.activeInsulin), accuracy: 0.0001)
         XCTAssertEqual(try XCTUnwrap(glance.eventual).doubleValue(for: mgdl),
                        try XCTUnwrap(output.predictedGlucose.last).quantity.doubleValue(for: mgdl), accuracy: 0.0001)
@@ -293,9 +321,9 @@ final class StockRunsTests: XCTestCase {
         let manager = await makeManager()
         await seedGlucose(manager, mgdl: 140)
         await report(manager)
-        runLoop(manager)   // the loop and the display run both
+        await runLoop(manager)   // the loop and the display run both
 
-        let before = manager.glanceData()
+        let before = await manager.settledGlanceData()
         let cobBefore: Double? = await withCheckedContinuation { done in manager.glanceCarbsOnBoard { done.resume(returning: $0) } }
         XCTAssertNotNil(before.eventual)
         XCTAssertNotNil(before.iob)
@@ -309,7 +337,7 @@ final class StockRunsTests: XCTestCase {
         await fulfillment(of: [plain, meal], timeout: 20)
         XCTAssertGreaterThan(try XCTUnwrap(withCarbs), try XCTUnwrap(withoutCarbs) + 1, "the carbs reached that run")
 
-        let after = manager.glanceData()
+        let after = await manager.settledGlanceData()
         let cobAfter: Double? = await withCheckedContinuation { done in manager.glanceCarbsOnBoard { done.resume(returning: $0) } }
         XCTAssertEqual(after.eventual, before.eventual, "the glance eventual is the display run's, untouched")
         XCTAssertEqual(after.iob, before.iob)
@@ -326,10 +354,11 @@ final class StockRunsTests: XCTestCase {
         await seedGlucose(manager, mgdl: 140)
         await report(manager, [runningTemp(3.5)])
 
-        runLoop(manager)
+        await runLoop(manager)
 
-        let loopEventual = try XCTUnwrap(manager.dataAccessQueue.sync { manager.loopRunState.output?.predictedGlucose.last })
-        let glance = manager.glanceData()
+        await manager.laneSettled()
+        let loopEventual = try XCTUnwrap(manager.loopRunState.output?.predictedGlucose.last)
+        let glance = await manager.settledGlanceData()
         XCTAssertEqual(try XCTUnwrap(glance.dosingEventual).doubleValue(for: mgdl),
                        loopEventual.quantity.doubleValue(for: mgdl), accuracy: 0.0001)
         XCTAssertGreaterThan(try XCTUnwrap(glance.dosingEventual).doubleValue(for: mgdl),
@@ -346,8 +375,8 @@ final class StockRunsTests: XCTestCase {
         await seedGlucose(manager)
         await report(manager, reconciledAt: Date().addingTimeInterval(-.minutes(20)))
 
-        runLoop(manager)
-        let error = manager.glanceData().lastLoopErrorText ?? ""
+        await runLoop(manager)
+        let error = await manager.settledGlanceData().lastLoopErrorText ?? ""
         XCTAssertTrue(error.contains("pumpDataTooOld"), "the loop refuses; got: \(error)")
 
         let done = expectation(description: "recommendation")
@@ -387,11 +416,13 @@ final class StockRunsTests: XCTestCase {
         await report(manager)
         await addReading(manager, at: Date().addingTimeInterval(.minutes(16)))
 
-        runLoop(manager)
+        await runLoop(manager)
 
-        let input = try XCTUnwrap(loopInput(manager))
+        let loopRun = await loopInput(manager)
+        let input = try XCTUnwrap(loopRun)
         XCTAssertLessThan(try XCTUnwrap(input.glucoseHistory.last).startDate, input.predictionStart)
-        XCTAssertNil(manager.glanceData().lastLoopErrorText)
+        let glanceNow = await manager.settledGlanceData()
+        XCTAssertNil(glanceNow.lastLoopErrorText)
     }
 
     // MARK: - Rounding, as stock
@@ -405,14 +436,21 @@ final class StockRunsTests: XCTestCase {
         // End to end: a correction clamped at 4.03 U/h goes to the pod as 4.00, not 4.05.
         await seedGlucose(manager, mgdl: 350)
         await report(manager)
-        runLoop(manager)
-        let rate = try XCTUnwrap(manager.dataAccessQueue.sync { manager.lastRecommendation?.basalAdjustment.unitsPerHour })
+        await runLoop(manager)
+        await manager.laneSettled()
+        let rate = try XCTUnwrap(manager.lastRecommendation?.basalAdjustment.unitsPerHour)
         XCTAssertEqual(rate, 4.00, accuracy: 0.0001)
     }
 
-    // MARK: - Enact refusals, as stock `loop()`
+    // MARK: - Enact refusals, as stock `loop()` (the shared `LoopCycle`)
 
-    private let highTemp = TempBasalRecommendation(unitsPerHour: 2.0, duration: .minutes(30))
+    /// A closed-loop cycle with glucose and a pump report, so the cycle reaches its checks before sending.
+    private func runClosedCycle(_ manager: WatchLoopManager, mgdl: Double) async {
+        await seedGlucose(manager, mgdl: mgdl)
+        await report(manager)
+        manager.setClosedLoopEnabled(true, reason: "test")
+        await runLoop(manager)
+    }
 
     func testAManualTempIsLeftRunning() async throws {
         let manager = await makeManager()
@@ -424,9 +462,9 @@ final class StockRunsTests: XCTestCase {
         manager.pumpManager = pump
         manager.doseEnactor = enactor
 
-        let error = manager.dataAccessQueue.sync { () -> LoopError? in
-            manager.enactAutomaticDose(bolus: nil, tempBasal: highTemp, decisionId: nil)
-        }
+        await runClosedCycle(manager, mgdl: 350)
+        await manager.laneSettled()
+        let error = manager.lastLoopError as? LoopError
 
         guard case .manualTempBasalRunning? = error else { return XCTFail("refused as stock does; got \(String(describing: error))") }
         XCTAssertTrue(enactor.calls.isEmpty, "no temp sent")
@@ -443,9 +481,9 @@ final class StockRunsTests: XCTestCase {
                                      scheduledCertainty: .certain, insulinType: .novolog)
         manager.pumpManager = try makePump(unfinalizedTemp: manual)
 
-        let error = manager.dataAccessQueue.sync { () -> LoopError? in
-            manager.enactAutomaticDose(bolus: nil, tempBasal: nil, decisionId: nil)
-        }
+        await runClosedCycle(manager, mgdl: 110)
+        await manager.laneSettled()
+        let error = manager.lastLoopError as? LoopError
 
         guard case .manualTempBasalRunning? = error else { return XCTFail("refused as stock does; got \(String(describing: error))") }
     }
@@ -458,12 +496,45 @@ final class StockRunsTests: XCTestCase {
         manager.pumpManager = try makePump(fault: status)
         manager.doseEnactor = enactor
 
-        let error = manager.dataAccessQueue.sync { () -> LoopError? in
-            manager.enactAutomaticDose(bolus: nil, tempBasal: highTemp, decisionId: nil)
-        }
+        await runClosedCycle(manager, mgdl: 350)
+        await manager.laneSettled()
+        let error = manager.lastLoopError as? LoopError
 
         guard case .pumpInoperable? = error else { return XCTFail("refused as stock does; got \(String(describing: error))") }
         XCTAssertTrue(enactor.calls.isEmpty, "the enactor is never called")
+    }
+
+    // MARK: - Unreliable sensor data, as stock `DeviceDataManager`
+
+    private func automaticTemp(_ rate: Double) -> UnfinalizedDose {
+        UnfinalizedDose(decisionId: nil, tempBasalRate: rate, startTime: Date().addingTimeInterval(-.minutes(5)),
+                        duration: .minutes(30), isHighTemp: rate > 0.7, automatic: true,
+                        scheduledCertainty: .certain, insulinType: .novolog)
+    }
+
+    func testUnreliableSensorDataCancelsAHighTemp() async throws {
+        let manager = await makeManager()
+        let enactor = RecordingDoseEnactor()
+        manager.pumpManager = try makePump(unfinalizedTemp: automaticTemp(2.0))
+        manager.doseEnactor = enactor
+
+        manager.receivedUnreliableGlucose()
+        await manager.laneSettled()
+
+        XCTAssertEqual(enactor.calls.count, 1, "one command: the cancel")
+        XCTAssertEqual(enactor.calls.first?.tempBasal, .cancel)
+    }
+
+    func testUnreliableSensorDataLeavesATempBelowTheSchedule() async throws {
+        let manager = await makeManager()
+        let enactor = RecordingDoseEnactor()
+        manager.pumpManager = try makePump(unfinalizedTemp: automaticTemp(0.3))
+        manager.doseEnactor = enactor
+
+        manager.receivedUnreliableGlucose()
+        await manager.laneSettled()
+
+        XCTAssertTrue(enactor.calls.isEmpty, "a low temp protects; it stays")
     }
 
     // MARK: - Opening the loop, as stock `cancelActiveTempBasal`
@@ -479,7 +550,7 @@ final class StockRunsTests: XCTestCase {
         manager.setClosedLoopEnabled(true, reason: "test")
 
         manager.setClosedLoopEnabled(false, reason: "test")
-        manager.dataAccessQueue.sync {}
+        await manager.laneSettled()
 
         XCTAssertEqual(enactor.calls.count, 1, "one cancel")
         XCTAssertEqual(enactor.calls.first?.tempBasal, .cancel)
@@ -496,9 +567,38 @@ final class StockRunsTests: XCTestCase {
         manager.setClosedLoopEnabled(true, reason: "test")
 
         manager.setClosedLoopEnabled(false, reason: "test")
-        manager.dataAccessQueue.sync {}
+        await manager.laneSettled()
 
         XCTAssertTrue(enactor.calls.isEmpty, "stock cancels only a running automatic temp")
+    }
+
+    /// Cycle work runs one operation at a time: a temp cancel asked for while the cycle's dose is
+    /// still on its way to the pod goes out after it, not beside it.
+    func testATempCancelAskedForMidCycleGoesOutAfterTheCyclesDose() async throws {
+        let manager = await makeManager()
+        let automatic = UnfinalizedDose(decisionId: nil, tempBasalRate: 2.0, startTime: Date().addingTimeInterval(-.minutes(5)),
+                                        duration: .minutes(30), isHighTemp: true, automatic: true,
+                                        scheduledCertainty: .certain, insulinType: .novolog)
+        let enactor = GatedDoseEnactor()
+        manager.pumpManager = try makePump(unfinalizedTemp: automatic)
+        manager.doseEnactor = enactor
+        await seedGlucose(manager, mgdl: 350)
+        await report(manager)
+        manager.setClosedLoopEnabled(true, reason: "test")
+
+        manager.loop()
+        let deadline = Date().addingTimeInterval(20)
+        while enactor.temps.isEmpty, Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(enactor.temps.count, 1, "the cycle's temp is on its way to the pod")
+
+        manager.setClosedLoopEnabled(false, reason: "test")
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(enactor.temps.count, 1, "the cancel waits for the cycle's temp")
+
+        enactor.release()
+        await manager.laneSettled()
+        XCTAssertEqual(enactor.temps.count, 2)
+        XCTAssertEqual(enactor.temps.last ?? nil, .cancel, "then the cancel goes out")
     }
 
     // MARK: - lastLoopCompleted, as stock
@@ -509,9 +609,10 @@ final class StockRunsTests: XCTestCase {
         await report(manager)
         XCTAssertNil(manager.lastLoopCompleted)
 
-        runLoop(manager)
+        await runLoop(manager)
 
-        XCTAssertNil(manager.glanceData().lastLoopErrorText, "the cycle itself succeeded")
+        let glanceNow = await manager.settledGlanceData()
+        XCTAssertNil(glanceNow.lastLoopErrorText, "the cycle itself succeeded")
         XCTAssertNil(manager.lastLoopCompleted, "stock moves it only after a closed-loop enact")
     }
 
@@ -525,9 +626,10 @@ final class StockRunsTests: XCTestCase {
         manager.setClosedLoopEnabled(true, reason: "test")
 
         let before = Date()
-        runLoop(manager)
+        await runLoop(manager)
 
-        XCTAssertNil(manager.glanceData().lastLoopErrorText)
+        let glanceNow = await manager.settledGlanceData()
+        XCTAssertNil(glanceNow.lastLoopErrorText)
         XCTAssertFalse(enactor.calls.isEmpty, "the temp was enacted")
         XCTAssertGreaterThanOrEqual(try XCTUnwrap(manager.lastLoopCompleted), before)
     }
@@ -539,7 +641,8 @@ final class StockRunsTests: XCTestCase {
                                 _ condition: @escaping (AlgorithmDisplayState) -> Bool) async {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if manager.dataAccessQueue.sync(execute: { condition(manager.displayState) }) { return }
+            await manager.laneSettled()
+            if condition(manager.displayState) { return }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         XCTFail(label)
@@ -551,8 +654,8 @@ final class StockRunsTests: XCTestCase {
         manager.pumpManager = try makePump()
         await seedGlucose(manager)
         await report(manager)
-        runDisplay(manager)
-        let before = manager.glanceData().iob ?? 0
+        await runDisplay(manager)
+        let before = await manager.settledGlanceData().iob ?? 0
 
         let now = Date()
         await report(manager, [bolus(2.0, start: now.addingTimeInterval(-60), end: now)])
@@ -560,8 +663,10 @@ final class StockRunsTests: XCTestCase {
         await waitForDisplay(manager, "the dose store's change refreshed the display run") {
             ($0.activeInsulin?.value ?? 0) > before + 1.5
         }
-        XCTAssertGreaterThan(manager.glanceData().iob ?? 0, before + 1.5, "the glance reads it")
-        XCTAssertNil(loopInput(manager), "no loop cycle ran")
+        let glanceNow = await manager.settledGlanceData()
+        XCTAssertGreaterThan(glanceNow.iob ?? 0, before + 1.5, "the glance reads it")
+        let loopRun = await loopInput(manager)
+        XCTAssertNil(loopRun, "no loop cycle ran")
     }
 
     /// A carb entry lands in the carb store: the glance COB follows without waiting for a cycle.
@@ -570,8 +675,9 @@ final class StockRunsTests: XCTestCase {
         manager.pumpManager = try makePump()
         await seedGlucose(manager)
         await report(manager)
-        runDisplay(manager)
-        XCTAssertEqual(manager.dataAccessQueue.sync { manager.displayState.activeCarbs?.value } ?? 0, 0, accuracy: 0.01)
+        await runDisplay(manager)
+        await manager.laneSettled()
+        XCTAssertEqual((manager.displayState.activeCarbs?.value) ?? 0, 0, accuracy: 0.01)
 
         _ = try await manager.carbStore.addCarbEntry(carbs(30))
 
@@ -583,7 +689,8 @@ final class StockRunsTests: XCTestCase {
         manager.glanceCarbsOnBoard { cob = $0; done.fulfill() }
         await fulfillment(of: [done], timeout: 5)
         XCTAssertGreaterThan(try XCTUnwrap(cob), 20, "the glance reads it")
-        XCTAssertNil(loopInput(manager), "no loop cycle ran")
+        let loopRun = await loopInput(manager)
+        XCTAssertNil(loopRun, "no loop cycle ran")
     }
 
     /// Between loans (no pod) a store change does not refresh the display run, as before.
@@ -591,14 +698,16 @@ final class StockRunsTests: XCTestCase {
         let manager = await makeManager()
         await seedGlucose(manager)
         await report(manager)
-        runDisplay(manager)
-        let before = manager.dataAccessQueue.sync { manager.displayState.input?.predictionStart }
+        await runDisplay(manager)
+        await manager.laneSettled()
+        let before = manager.displayState.input?.predictionStart
 
         let now = Date()
         await report(manager, [bolus(2.0, start: now.addingTimeInterval(-60), end: now)])
         try await Task.sleep(nanoseconds: 1_000_000_000)
 
-        XCTAssertEqual(manager.dataAccessQueue.sync { manager.displayState.input?.predictionStart }, before)
+        await manager.laneSettled()
+        XCTAssertEqual(manager.displayState.input?.predictionStart, before)
     }
 
     // MARK: - Stock's dosing decisions
@@ -627,7 +736,7 @@ final class StockRunsTests: XCTestCase {
         manager.doseEnactor = enactor
         manager.setClosedLoopEnabled(true, reason: "test")
 
-        runLoop(manager)
+        await runLoop(manager)
 
         let loops = try await storedDecisions(manager).filter { $0.reason == "loop" }
         XCTAssertEqual(loops.count, 1, "one per cycle")
@@ -654,7 +763,7 @@ final class StockRunsTests: XCTestCase {
         manager.doseEnactor = enactor
         manager.setClosedLoopEnabled(false, reason: "test")
 
-        runLoop(manager)
+        await runLoop(manager)
 
         let loops = try await storedDecisions(manager).filter { $0.reason == "loop" }
         XCTAssertEqual(loops.count, 1, "the cycle's decision is stored")
@@ -676,7 +785,7 @@ final class StockRunsTests: XCTestCase {
         manager.doseEnactor = enactor
         manager.setClosedLoopEnabled(true, reason: "test")
 
-        runLoop(manager)
+        await runLoop(manager)
 
         let loops = try await storedDecisions(manager).filter { $0.reason == "loop" }
         XCTAssertEqual(loops.count, 1, "stored on the error arm too")
@@ -693,7 +802,7 @@ final class StockRunsTests: XCTestCase {
         await report(manager)
         manager.pumpManager = try makePump()
 
-        runLoop(manager)
+        await runLoop(manager)
 
         let decisions = try await storedDecisions(manager)
         let loopIndex = try XCTUnwrap(decisions.firstIndex { $0.reason == "loop" })
@@ -711,7 +820,7 @@ final class StockRunsTests: XCTestCase {
         await seedGlucose(manager)
         await report(manager)
 
-        runLoop(manager)
+        await runLoop(manager)
 
         let decisions = try await storedDecisions(manager)
         XCTAssertTrue(decisions.isEmpty, "got \(decisions.map(\.reason))")
@@ -729,7 +838,7 @@ final class StockRunsTests: XCTestCase {
             commanded = (decisionId, units)
             completion(nil)
         }
-        runDisplay(manager)
+        await runDisplay(manager)
         let meal = carbs(30)
 
         let shown = expectation(description: "recommendation")
@@ -743,7 +852,7 @@ final class StockRunsTests: XCTestCase {
         manager.enactManualBolus(units: 1.0, activationType: .manualNoRecommendation, carbEntry: meal,
                                  storedCarbEntry: stored) { _ in accepted.fulfill() }
         await fulfillment(of: [accepted], timeout: 20)
-        manager.dataAccessQueue.sync {}
+        await manager.laneSettled()
 
         let bolusDecisions = try await storedDecisions(manager).filter { $0.reason == "watchBolus" }
         XCTAssertEqual(bolusDecisions.count, 1)
@@ -777,8 +886,8 @@ final class StockRunsTests: XCTestCase {
         manager.pumpManager = try makePump()
         manager.doseEnactor = RecordingDoseEnactor()
         manager.setClosedLoopEnabled(true, reason: "test")
-        runLoop(manager)
-        runLoop(manager)
+        await runLoop(manager)
+        await runLoop(manager)
 
         let controller = PodLoanWatchController(loopManager: manager, journal: LoanEventJournal(directory: dir),
                                                 stateDirectory: dir.appendingPathComponent(UUID().uuidString, isDirectory: true))
@@ -789,9 +898,9 @@ final class StockRunsTests: XCTestCase {
             return true
         }
         func sendAndSettle() async {
-            controller.queue.sync { controller.sendLoanHistoryHome(epoch: 7) }
+            await controller.onMain { controller.sendLoanHistoryHome(epoch: 7) }
             try? await Task.sleep(nanoseconds: 500_000_000)
-            controller.queue.sync {}
+            await controller.onMain {}
         }
 
         await sendAndSettle()
@@ -815,7 +924,7 @@ final class StockRunsTests: XCTestCase {
         await sendAndSettle()
         XCTAssertEqual(files.count, 1, "nothing new: no second file")
 
-        runLoop(manager)
+        await runLoop(manager)
         await sendAndSettle()
         XCTAssertEqual(files.count, 2)
         let second = try LoanHistory.decode(files[1].data)
@@ -827,7 +936,7 @@ final class StockRunsTests: XCTestCase {
 
     /// Every cycle with a pod held stores one "loop" decision, so the count is the cycles run.
     private func cyclesRun(_ manager: WatchLoopManager) async throws -> Int {
-        manager.dataAccessQueue.sync {}
+        await manager.laneSettled()
         return try await storedDecisions(manager).filter { $0.reason == "loop" }.count
     }
 
@@ -840,7 +949,7 @@ final class StockRunsTests: XCTestCase {
         manager.pumpManager = try makePump()
         manager.doseEnactor = enactor
         manager.setClosedLoopEnabled(true, reason: "test")
-        manager.dataAccessQueue.sync {}
+        await manager.laneSettled()
         return (manager, enactor)
     }
 
@@ -977,13 +1086,21 @@ final class StockRunsTests: XCTestCase {
     @MainActor
     func testTheGlanceRingIsFreshInOpenLoopWithAnOldLastLoopCompleted() async {
         let manager = await makeManager()
-        manager.dataAccessQueue.sync { () -> Void in manager.lastLoopCompleted = Date().addingTimeInterval(-TimeInterval(2 * 3600)) }
+        await manager.laneSettled()
+        manager.lastLoopCompleted = Date().addingTimeInterval(-TimeInterval(2 * 3600))
 
-        let open = GlanceViewModel.activeState(data: manager.glanceData(), cob: nil, now: Date())
+        let open = GlanceViewModel.activeState(data: await manager.settledGlanceData(), cob: nil, now: Date())
         XCTAssertEqual(open.loopFreshness, .fresh, "stock: open loop presents fresh")
 
         manager.setClosedLoopEnabled(true, reason: "test")
-        let closed = GlanceViewModel.activeState(data: manager.glanceData(), cob: nil, now: Date())
+        let closed = GlanceViewModel.activeState(data: await manager.settledGlanceData(), cob: nil, now: Date())
         XCTAssertEqual(closed.loopFreshness, .stale, "closed loop ages from the last cycle")
+    }
+
+    /// The glance shows glucose in the user's unit, as the watch's other screens do.
+    func testTheGlanceShowsGlucoseInTheUsersUnit() {
+        let reading = LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: 126)
+        XCTAssertEqual(GlanceViewModel.glucoseText(reading, unit: .milligramsPerDeciliter), "126")
+        XCTAssertTrue(GlanceViewModel.glucoseText(reading, unit: .millimolesPerLiter).hasPrefix("7"), "126 mg/dL reads as 7.0 mmol/L")
     }
 }

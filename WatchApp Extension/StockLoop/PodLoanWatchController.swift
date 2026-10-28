@@ -45,6 +45,7 @@ enum HandbackWedge: Equatable {
     }
 }
 
+@MainActor
 final class PodLoanWatchController {
     /// idle → requested → takingOver → active → handingBack → idle, plus `revoked` and `recoveredDrain`.
     enum Phase: String {
@@ -54,9 +55,7 @@ final class PodLoanWatchController {
         case recoveredDrain
     }
 
-    let log = OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController")
-    /// Also the pump manager's delegate queue; main never syncs onto it (see +Debug).
-    let queue = DispatchQueue(label: "com.loopkit.Loop.PodLoanWatchController", qos: .utility)
+    let log = OSLog(category: "PodLoanWatchController")
     let loopManager: WatchLoopManager
     let journal: LoanEventJournal
 
@@ -66,39 +65,21 @@ final class PodLoanWatchController {
     /// Test seam; nil in the app.
     var scheduler: ((_ delay: TimeInterval, _ label: String, _ work: DispatchWorkItem) -> Void)?
 
-    /// Every timer logs armed, fired or skipped, with lateness and epoch. The work is wrapped so a
-    /// cancelled item still records its skip.
+    /// The work is wrapped, so cancelling the caller's item stops it even after the wrapper is queued.
     func schedule(after delay: TimeInterval, label: String, execute work: DispatchWorkItem) {
-        let armedEpoch = epoch
-        let armedAt = now()
-        SportLog.event("timer", "armed \(label) +\(fmtDelay(delay)) e=\(armedEpoch.map(String.init) ?? "-")")
         let wrapper = DispatchWorkItem { [weak self] in
-            guard let self = self else { return }
-            if work.isCancelled {
-                SportLog.event("timer", "skipped \(label) — cancelled before its deadline")
-                return
-            }
-            let late = self.now().timeIntervalSince(armedAt) - delay
-            let lateNote = late > 1.0 ? String(format: " late %.1fs", late) : ""
-            let epochNote = armedEpoch != self.epoch
-                ? " ** armed e=\(armedEpoch.map(String.init) ?? "-") firing e=\(self.epoch.map(String.init) ?? "-") — cross-epoch **"
-                : ""
-            SportLog.event("timer", "fired \(label) +\(self.fmtDelay(delay))\(lateNote)\(epochNote)")
+            guard self != nil, !work.isCancelled else { return }
             work.perform()
         }
         if let scheduler = scheduler {
             scheduler(delay, label, wrapper)
         } else {
-            queue.asyncAfter(deadline: .now() + delay, execute: wrapper)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: wrapper)
         }
     }
 
     func schedule(after delay: TimeInterval, label: String, execute body: @escaping () -> Void) {
         schedule(after: delay, label: label, execute: DispatchWorkItem(block: body))
-    }
-
-    private func fmtDelay(_ d: TimeInterval) -> String {
-        d < 1 ? String(format: "%.2fs", d) : String(format: "%.0fs", d)
     }
 
     /// Where state files live; nil in the app (Documents).
@@ -132,7 +113,6 @@ final class PodLoanWatchController {
     func whenLinkActivated(_ work: @escaping () -> Void) {
         guard isLinkActivated() else {
             workAwaitingLink.append(work)
-            SportLog.event("wc", "link to the phone not started yet — held until it is")
             return
         }
         work()
@@ -140,7 +120,7 @@ final class PodLoanWatchController {
 
     /// The link to the phone has started up.
     func linkDidActivate() {
-        queue.async {
+        DispatchQueue.main.async {
             let waiting = self.workAwaitingLink
             self.workAwaitingLink = []
             waiting.forEach { $0() }
@@ -150,9 +130,6 @@ final class PodLoanWatchController {
     /// How long a Start waits for the phone's grant before offering the offline start.
     static let requestTimeout: TimeInterval = LoanControl.Wait.onScreen.seconds
 
-    /// Logs reachability transitions, not every resend.
-    var lastHandbackReachable: Bool?
-
     /// Sticky for the hand-back.
     var handbackSawUnreachable = false
 
@@ -161,7 +138,7 @@ final class PodLoanWatchController {
 
     /// Called by the transport when an urgent send errors, from whichever queue it errored on.
     func noteUrgentSendFailed() {
-        queue.async { self.handbackSawUrgentSendError = true }
+        DispatchQueue.main.async { self.handbackSawUrgentSendError = true }
         urgentSendWedged = true
     }
 
@@ -181,14 +158,12 @@ final class PodLoanWatchController {
     /// A queued request delivered at reunion could re-grant over the running loan.
     func cancelStaleQueuedRequests(context: String) {
         guard let cancelled = cancelQueuedLoanRequests?(), cancelled > 0 else { return }
-        SportLog.event("loan", "cancelled \(cancelled) queued loan request(s) — \(context); a delivered ghost would re-grant over whatever this watch does next")
+        SportLog.event("loan", "cancelled \(cancelled) queued loan request(s): \(context)")
     }
 
     /// Fired when a loan starts and when it ends, for whoever owns app-level runtime and UI.
     var onLoanActiveChanged: ((Bool) -> Void)?
 
-    /// Fired when a takeover starts and when it ends.
-    var onTakeoverRadioHold: ((Bool) -> Void)?
 
     /// Transient glance notes, stamped so they age out.
     var handbackFailure: (at: Date, text: String)?
@@ -202,7 +177,6 @@ final class PodLoanWatchController {
     /// odometer and reunion token. Written whole by `updateState`.
     var stateStore: PersistedProperty<[String: Any]>
     var _persisted: PodLoanWatchState
-    let stateLock = NSLock()
 
     /// Repaint without a phase change — for the notes and prompts the glance draws.
     func notifyUI() {
@@ -237,17 +211,8 @@ final class PodLoanWatchController {
     /// End asked for, still dosing, still cancellable.
     var handbackRequested = false
 
-    /// From the grant; an old phone gets the single-phase hand-back.
-    var phoneSupportsInterimHandback = false
-
-    /// From the grant; without it override changes stay local.
-    var phoneSupportsOverrideRecords = false
-
     /// Guards against a duplicate interim ack closing the loan early.
     var finalOfferSent = false
-    /// What the watch confirmed it uploaded before releasing, per remote service; the released
-    /// offer and the loan history carry it. Cleared at each grant.
-    var uploadsConfirmed: [String: [String]]?
     /// The single armed resend.
     var resendWorkItem: DispatchWorkItem?
 
@@ -278,10 +243,12 @@ final class PodLoanWatchController {
     /// The standing copy's pump export, read once from disk and replaced with each refresh.
     lazy var standingPumpConfiguration: SharedDeviceConfiguration? = storedDormantGrant()?.grant.sharedPumpConfiguration
     /// Seams: is the app on screen right now, and the tap itself.
-    var isWatchAppActive: () -> Bool = { RuntimeStateLog.appStateName() == "active" }
+    var isWatchAppActive: () -> Bool = { WKExtension.shared().applicationState == .active }
     var playTakeoverNudge: () -> Void = { WKInterfaceDevice.current().play(.notification) }
     /// A Start or End the watch refused on the spot: the looper feels it as well as reads it.
     var playRefusal: () -> Void = { DispatchQueue.main.async { WKInterfaceDevice.current().play(.failure) } }
+    /// Where the screens' override goes (`LoopDataManager.wristOverride`); a `var` so the suite can see it.
+    var publishOverride: (TemporaryScheduleOverride??) -> Void = { ExtensionDelegate.sharedIfAvailable()?.loopManager.wristOverride = $0 }
 
     /// From persisted state alone: resume (rebuilt later in `resumeIfNeeded`), drain, or idle.
     init(loopManager: WatchLoopManager, journal: LoanEventJournal = LoanEventJournal(),
@@ -301,12 +268,7 @@ final class PodLoanWatchController {
         if let savedPumpState {
             pendingResumeState = savedPumpState
 
-            // init sets `phase` without running its observer.
-            loanActiveMirrorLock.lock()
-            _loanActiveMirror = true
-            _resumingMirror = true
-            _wristAlarmsMirror = true
-            loanActiveMirrorLock.unlock()
+            isResuming = true
         } else if journal.hasUndrainedEvents {
             // Records outlived their loan: park as a drain and say so.
             _persisted.phase = .recoveredDrain
@@ -329,6 +291,9 @@ final class PodLoanWatchController {
         }
         // Saved, or the next launch repeats the normalisation.
         stateStore.wrappedValue = _persisted.rawValue
+
+        // Installed before anything can resume, so a restored override reaches the screens too.
+        loopManager.onScheduleOverrideChanged = { [weak self] in self?.publishOverrideForScreens() }
     }
 
     /// Saved pump state handed from `init` to `resumeIfNeeded`, which does the rebuild.
@@ -338,16 +303,18 @@ final class PodLoanWatchController {
     /// the next Start.
     var startCancelled = false
 
-    /// Serialized with timers and the pump's callbacks.
-    func handleIncoming(userInfo: [String: Any], channel: LoanTransportChannel) {
-        queue.async { self.handleIncomingOnQueue(userInfo: userInfo, channel: channel) }
-        notePhoneHeard()
+    /// Serialized with timers and the pump's callbacks. From the link's thread.
+    nonisolated func handleIncoming(userInfo: [String: Any]) {
+        DispatchQueue.main.async {
+            self.handleIncomingMessage(userInfo: userInfo)
+            self.notePhoneHeard()
+        }
     }
 
     /// Any word from the phone (its loan messages, or its status for the stock pages). With no loan
     /// running, `LoanControl` row 3: the warning for a silent phone is pushed out.
     func notePhoneHeard() {
-        queue.async {
+        DispatchQueue.main.async {
             self.lastHeardFromPhoneAt = self.now()
             guard self.phase == .idle || self.phase == .recoveredDrain else { return }
             if case .tellIfSilent(.notHearingFromPhone, let after) = LoanControl.decide(LoanControl.Situation(device: .watch, trigger: .phoneHeardWithNoLoan)) {
@@ -356,20 +323,18 @@ final class PodLoanWatchController {
         }
     }
 
-    /// Logs every inbound message, with its channel, before any guard.
-    private func handleIncomingOnQueue(userInfo: [String: Any], channel: LoanTransportChannel) {
+    private func handleIncomingMessage(userInfo: [String: Any]) {
         let message: LoanMessage?
         do {
             message = try LoanMessage.decode(fromTransport: userInfo)
         } catch {
             // Nack, never ack-and-drop.
-            os_log("Undecodable v2 payload: %{public}@", log: log, type: .fault, String(describing: error))
+            log.error("Undecodable loan message: %{public}@", String(describing: error))
             sendMessage(.nack(ProtocolNack(seenVersion: nil)))
             return
         }
         guard let message = message else { return }
 
-        SportLog.event("loan", "RX \(message.kindLabel) ch=\(channel.rawValue) — ours ev=\(epoch.map(String.init) ?? "nil") phase=\(phase.rawValue)")
         switch message {
         case .grant(let grant):
             handleGrant(grant)
@@ -381,7 +346,7 @@ final class PodLoanWatchController {
             handleStatusQuery(query)
         case .nack:
 
-            SportLog.event("loan", "phone NACKed our payload — build mismatch; the loan will not start")
+            SportLog.event("loan", "phone could not read our message: the builds do not match, so the loan will not start")
         case .denied(let denied):
             // A refusal during a hand-back fails the hand-back, not the loan.
             if (phase == .active && handbackRequested) || phase == .handingBack {
@@ -396,13 +361,11 @@ final class PodLoanWatchController {
                 playRefusal()
                 notifyUI()
             }
-            SportLog.event("loan", "DENIED by phone — \(denied.reason)")
-        case .diag(let d):
-            SportLog.event("phone", d.text)
+            SportLog.event("loan", "phone denied the loan: \(denied.reason)")
         case .dormantGrant(let dormant):
             handleDormantGrant(dormant)
         case .request, .takeoverComplete, .takeoverFailed, .doseRecordBatch, .handbackOffer, .statusReport:
-            os_log("Ignoring phone-bound message kind on watch", log: log, type: .default)
+            log.default("Ignoring a message meant for the phone")
         }
     }
 
@@ -427,9 +390,6 @@ final class PodLoanWatchController {
     /// Explicit BLE teardown so the pod advertises for the phone. Also resets the insulin book
     /// and wrist override, since WatchLoopManager outlives the loan.
     func teardownPump() {
-        SportLog.event("handback", "teardownPump: releasing control of the pump explicitly")
-        // Uploads stop before the insulin book is reset below.
-        LoanRemoteUploads.shared.end()
         // The pod's alerts are the phone's from here: a repeating one left on the wrist would keep
         // sounding while the phone raises the same alert.
         if let pumpIdentifier = pumpManager?.pluginIdentifier {
@@ -445,13 +405,10 @@ final class PodLoanWatchController {
         updateState { $0.grantedSettings = nil }
 
         let loopManager = self.loopManager
-        Task { await loopManager.resetInsulinBook(reason: "teardown") }
+        Task { await loopManager.resetInsulinBook(reason: "the pod's release") }
 
-        if loopManager.scheduleOverride != nil {
-            SportLog.event("override", "wrist override reset at teardown — the next loan takes the phone's")
-        }
         loopManager.scheduleOverride = nil
-        Task { @MainActor in loopManager.clearGlucoseAlerts() }
+        loopManager.clearGlucoseAlerts()
     }
 
     /// Raised when a request times out with a credential stored.
@@ -463,14 +420,6 @@ final class PodLoanWatchController {
     /// Persisted only once the loan is active (a fold persists at once).
     var pendingSeizeToken: UUID?
 
-
-    /// Simulator only: Start and End drive the fake flow in +SimulatorDriver. Set by tests, or
-    /// by the `-simFakeLoanFlow` launch argument.
-    var simFakeLoanFlow = ProcessInfo.processInfo.arguments.contains("-simFakeLoanFlow")
-
-    /// Simulator only: the fake CGM feed's timer, so a second Start cannot stack two.
-    var simGlucoseTimer: DispatchSourceTimer?
-
     /// The odometer captured before a revoke tears the pump down.
     var revokeCapturedDelivered: Double?
 
@@ -479,23 +428,7 @@ final class PodLoanWatchController {
     /// The loan whose pump fault the phone has been told about.
     var faultReportedEpoch: Int?
 
-    /// Main-readable mirrors, written from the queue.
-    let loanActiveMirrorLock = NSLock()
-    var _loanActiveMirror = false
-
-    var _resumingMirror = false
-
-    /// Taking over, live, handing back, draining or resuming: the phone has left the alarms here.
-    var _wristAlarmsMirror = false
-
-    /// The debug page's snapshot, published from the queue.
-    let snapshotMirrorLock = NSLock()
-
-    var _snapshotMirror: DebugSnapshot?
-}
-
-/// Logged with every inbound message.
-enum LoanTransportChannel: String {
-    case urgent
-    case queued
+    /// A saved loan is being rebuilt, and the watch back from off is checking with the phone
+    /// before looping (`endResuming`).
+    var isResuming = false
 }

@@ -2,8 +2,8 @@
 //  GlanceModel.swift
 //  WatchApp Extension
 //
-//  What the glance draws and the rules that derive it; GlanceView decides nothing. Reads only
-//  mirrors, never the loop or loan queue.
+//  What the glance draws and the rules that derive it; GlanceView decides nothing. Reads the loop's
+//  glance snapshot and the loan controller's state.
 //
 
 import Foundation
@@ -12,6 +12,7 @@ import Combine
 import WatchKit
 import HealthKit
 import LoopKit
+import LoopAlgorithm
 import LoopCore
 import G7SensorKit
 
@@ -98,7 +99,7 @@ struct GlanceUIState {
     var handbackStartedAt: Date? = nil
 }
 
-/// Repaints come from the 2 s tick, the mirror observer, explicit refreshes and the freshness
+/// Repaints come from the 2 s tick, the glance snapshot's observer, explicit refreshes and the freshness
 /// boundary timer (ageing pushes nothing).
 @MainActor
 final class GlanceViewModel: ObservableObject {
@@ -107,34 +108,25 @@ final class GlanceViewModel: ObservableObject {
     /// Hides the idle frame until the first controller snapshot is read.
     @Published var hasControllerState = false
 
-    /// Read from the controller's NON-BLOCKING mirrors. Both are consulted from main while the
-    /// loan queue may be busy with the pod, which is exactly why neither may be a queue read.
-    var loanIsLive: Bool {
-        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.isLoanActiveNonBlocking ?? false
+    /// A loan in any phase but idle, from the controller itself: `state` can still show the frame from
+    /// before the phase change its observers are reacting to.
+    var loanInProgress: Bool {
+        guard let controller = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController else { return false }
+        return controller.phase != .idle
     }
 
     var isResuming: Bool {
-        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.isResumingNonBlocking ?? false
+        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.isResuming ?? false
     }
 
-    /// Every phase but idle, so the user lands on a stalled loop.
-    var wantsFocus: Bool {
-        switch state.phase {
-        case .starting, .active, .handingBack, .draining: return true
-        case .idle: return false
-        }
-    }
 
     /// The on-screen tick. Two seconds is the page's own clock: the elapsed counters, the bolus
     /// bar and the transient notes' expiries all age against it, and none of them are pushed.
     private var timer: Timer?
 
-    /// COB is async; the cached value's time rides the render log.
+    /// COB is async: the last value read.
     private var latestCOB: Double?
 
-    private var lastRenderLogAt: Date?
-    private var lastRenderLogKey: String?
-    private var latestCOBAt: Date?
     private var appStateObservers: [NSObjectProtocol] = []
 
     /// Previews drive the real view with hand-written state and reach nothing.
@@ -164,34 +156,32 @@ final class GlanceViewModel: ObservableObject {
         appStateObservers = [
             center.addObserver(forName: ExtensionDelegate.didBecomeActiveNotification,
                                object: nil, queue: .main) { [weak self] _ in
-                self?.startRefreshing()
+                MainActor.assumeIsolated { self?.startRefreshing() }
             },
             center.addObserver(forName: ExtensionDelegate.willResignActiveNotification,
                                object: nil, queue: .main) { [weak self] _ in
-                self?.stopRefreshing()
+                MainActor.assumeIsolated { self?.stopRefreshing() }
             },
         ]
     }
 
     /// Survives `stopRefreshing` on purpose — see there.
-    private var mirrorObserver: NSObjectProtocol?
+    private var glanceDataObserver: NSObjectProtocol?
 
-    /// The observer must not kick the mirror: a kick republishes, which re-notifies without bound.
+    /// The observer must not ask for a rebuild: a rebuild republishes, which re-notifies without bound.
     func startRefreshing() {
         guard !isPreview else { return }
-        RuntimeStateLog.mark("glance.startRefreshing")
-        SportLog.event("glance", "render loop STARTED [glance-life]")
-        if let o = oneShotMirrorObserver { NotificationCenter.default.removeObserver(o); oneShotMirrorObserver = nil }
-        if mirrorObserver == nil {
-            mirrorObserver = NotificationCenter.default.addObserver(
-                forName: WatchLoopManager.glanceMirrorDidUpdate, object: nil, queue: .main
-            ) { [weak self] _ in self?.refresh(kickMirror: false) }
+        if let o = oneShotGlanceDataObserver { NotificationCenter.default.removeObserver(o); oneShotGlanceDataObserver = nil }
+        if glanceDataObserver == nil {
+            glanceDataObserver = NotificationCenter.default.addObserver(
+                forName: WatchLoopManager.glanceDataDidUpdate, object: nil, queue: .main
+            ) { [weak self] _ in MainActor.assumeIsolated { self?.refresh(rebuildGlanceData: false) } }
         }
 
         refresh()
         guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            self?.refresh()
+            MainActor.assumeIsolated { self?.refresh() }
         }
     }
 
@@ -201,37 +191,37 @@ final class GlanceViewModel: ObservableObject {
     private func armFreshnessBoundaryRepaint() {
         boundaryTimer?.invalidate(); boundaryTimer = nil
         guard state.phase == .active,
-              let last = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.loopManager.mirroredGlanceData?.lastLoopCompleted
+              let last = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.loopManager.glanceData?.lastLoopCompleted
         else { return }
         let age = Date().timeIntervalSince(last)
         let boundaries: [TimeInterval] = [6 * 60, 16 * 60]
         guard let next = boundaries.first(where: { $0 > age }) else { return }
         let delay: TimeInterval = next - age + 1
         let t = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
-            SportLog.event("glance", "freshness boundary passed — self-repaint [glance-life]")
-            self?.refreshNow()
+            MainActor.assumeIsolated { self?.refreshNow() }
         }
         t.tolerance = 5
         RunLoop.main.add(t, forMode: .common)
         boundaryTimer = t
     }
 
-    private var oneShotMirrorObserver: NSObjectProtocol?
+    private var oneShotGlanceDataObserver: NSObjectProtocol?
 
     /// For a phase or bolus change; arms a one-shot when no observer is standing.
     func refreshNow() {
         guard !isPreview else { return }
-        RuntimeStateLog.mark("glance.refreshNow")
-        if mirrorObserver == nil, oneShotMirrorObserver == nil {
-            oneShotMirrorObserver = NotificationCenter.default.addObserver(
-                forName: WatchLoopManager.glanceMirrorDidUpdate, object: nil, queue: .main
+        if glanceDataObserver == nil, oneShotGlanceDataObserver == nil {
+            oneShotGlanceDataObserver = NotificationCenter.default.addObserver(
+                forName: WatchLoopManager.glanceDataDidUpdate, object: nil, queue: .main
             ) { [weak self] _ in
-                guard let self = self else { return }
-                if let o = self.oneShotMirrorObserver {
-                    NotificationCenter.default.removeObserver(o)
-                    self.oneShotMirrorObserver = nil
+                MainActor.assumeIsolated {
+                    guard let self = self else { return }
+                    if let o = self.oneShotGlanceDataObserver {
+                        NotificationCenter.default.removeObserver(o)
+                        self.oneShotGlanceDataObserver = nil
+                    }
+                    self.refresh(rebuildGlanceData: false)
                 }
-                self.refresh(kickMirror: false)
             }
         }
         refresh()
@@ -239,9 +229,6 @@ final class GlanceViewModel: ObservableObject {
 
     /// Stops the tick only; the observer stays to repaint a face-up watch.
     func stopRefreshing() {
-        RuntimeStateLog.mark("glance.stopRefreshing")
-        SportLog.event("glance", "render loop STOPPED [glance-life]")
-
         timer?.invalidate()
         timer = nil
     }
@@ -252,8 +239,8 @@ final class GlanceViewModel: ObservableObject {
     }
 
     deinit {
-        if let o = mirrorObserver { NotificationCenter.default.removeObserver(o) }
-        if let o = oneShotMirrorObserver { NotificationCenter.default.removeObserver(o) }
+        if let o = glanceDataObserver { NotificationCenter.default.removeObserver(o) }
+        if let o = oneShotGlanceDataObserver { NotificationCenter.default.removeObserver(o) }
         timer?.invalidate()
         appStateObservers.forEach(NotificationCenter.default.removeObserver)
     }
@@ -273,7 +260,6 @@ final class GlanceViewModel: ObservableObject {
 
     func confirmSeize() {
         guard !isPreview else { return }
-        RuntimeStateLog.mark("glance.confirmSeize")
         ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.confirmSeize()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
     }
@@ -285,30 +271,22 @@ final class GlanceViewModel: ObservableObject {
     }
 
     func startSportMode() {
-        RuntimeStateLog.mark("glance.startSportMode")
         guard !isPreview else { return }
 
         let build = BuildDetails.default.codeIdentity
 
         guard let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession else {
             let why = ExtensionDelegate.sharedIfAvailable() == nil ? "no app delegate" : "no session"
-            SportLog.event("session", "START TAPPED but Sport Mode is unavailable (\(why)) — the stack never assembled · build \(build)")
+            SportLog.event("session", "tapped Start, but Sport Mode is unavailable: \(why)")
             return
         }
 
         session.loanController.requestLoan(watchBuild: build)
-
-        // Snapshots at the tap and after, since a dark watch cannot send one later.
-        session.sendLogSnapshot("sport start")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 35) {
-            session.sendLogSnapshot("start +35s")
-        }
         refresh()
     }
 
     /// The watch keeps dosing and stays cancellable until the phone acks the records.
     func endSportMode() {
-        RuntimeStateLog.mark("glance.endSportMode")
         guard !isPreview else { state.handbackPending = true; return }
 
         WKInterfaceDevice.current().play(.click)
@@ -334,21 +312,14 @@ final class GlanceViewModel: ObservableObject {
         refresh()
     }
 
-    /// The controller's phase picks the page; the loop mirror fills the numbers. Breadcrumbs
+    /// The controller's phase picks the page; the loop's glance snapshot fills the numbers. Breadcrumbs
     /// name the step if main wedges here.
-    private func refresh(kickMirror: Bool = true) {
+    private func refresh(rebuildGlanceData: Bool = true) {
         guard !isPreview else { return }
-        RuntimeStateLog.mark("glance.refresh(kick:\(kickMirror))")
         guard let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession else { return }
 
-        RuntimeStateLog.mark("glance.refresh.debugSnap")
-        session.loanController.refreshDebugSnapshot()
-        RuntimeStateLog.mark("glance.refresh.mirrorRead")
-        // Nothing is drawn from a missing snapshot — the page keeps its previous frame rather
-        // than falling back to the default `.idle` state, which would advertise Start mid-loan.
-        guard let snap = session.loanController.mirroredDebugSnapshot else { return }
+        let snap = session.loanController.debugSnapshot()
         if !hasControllerState { hasControllerState = true }
-        RuntimeStateLog.mark("glance.refresh.phase(\(snap.phase.rawValue))")
         // Deferred so EVERY path re-arms the boundary, including the arms below that return
         // early. A refresh that skipped it would leave the page with no way to notice ageing.
         defer { armFreshnessBoundaryRepaint() }
@@ -421,12 +392,11 @@ final class GlanceViewModel: ObservableObject {
             state = s
         case .active:
 
-            RuntimeStateLog.mark("glance.refresh.kickGlance")
-            if kickMirror { session.stack.loopManager.refreshGlanceData() }
-            guard let data = session.stack.loopManager.mirroredGlanceData else { return }
-            RuntimeStateLog.mark("glance.refresh.activeStateBuild")
+            if rebuildGlanceData { session.stack.loopManager.refreshGlanceData() }
+            guard let data = session.stack.loopManager.glanceData else { return }
             var s = Self.activeState(data: data, cob: latestCOB, now: Date(),
-                                     phoneGlucoseDate: ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext?.glucoseDate)
+                                     phoneGlucoseDate: ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext?.glucoseDate,
+                                     unit: ExtensionDelegate.sharedIfAvailable()?.loopManager.displayGlucoseUnit ?? .milligramsPerDeciliter)
             // One transient slot: hand-back in progress, then start note; a recent End failure is
             // laid over the bolus narration below.
             if snap.handbackPending {
@@ -475,11 +445,7 @@ final class GlanceViewModel: ObservableObject {
                 s.bolusDelivery = nil
                 s.transientText = text
             }
-            RuntimeStateLog.mark("glance.refresh.statePublish")
             state = s
-            RuntimeStateLog.mark("glance.refresh.logRender")
-            logRender(iob: data.iob, cob: latestCOB, glucoseDate: data.glucoseDate, now: Date())
-            RuntimeStateLog.mark("glance.refresh.carbFetchDispatch")
             // COB arrives asynchronously, so this frame drew the previous value and only a CHANGE
             // earns a second pass. Unconditional re-entry here would turn every refresh into two.
             session.stack.loopManager.glanceCarbsOnBoard { [weak self] cob in
@@ -487,28 +453,15 @@ final class GlanceViewModel: ObservableObject {
                     guard let self else { return }
                     let changed = cob != self.latestCOB
                     self.latestCOB = cob
-                    self.latestCOBAt = Date()
-
-                    if changed { self.refresh(kickMirror: false) }
+                    if changed { self.refresh(rebuildGlanceData: false) }
                 }
             }
         }
     }
 
-    /// Logs on change, at most once a minute otherwise, with the ages of both values.
-    private func logRender(iob: Double?, cob: Double?, glucoseDate: Date?, now: Date) {
-        let key = String(format: "%@|%@", iob.map { String(format: "%.2f", $0) } ?? "nil",
-                                          cob.map { String(format: "%.1f", $0) } ?? "nil")
-        if key == lastRenderLogKey, let last = lastRenderLogAt, now.timeIntervalSince(last) < 60 { return }
-        lastRenderLogKey = key
-        lastRenderLogAt = now
-        let bgAge = glucoseDate.map { Int(now.timeIntervalSince($0)) }
-        let cobAge = latestCOBAt.map { Int(now.timeIntervalSince($0)) }
-        SportLog.event("glance", String(format: "RENDER iob=%@ cob=%@ · bgAge=%@ cobCacheAge=%@",
-                                        iob.map { String(format: "%.2f", $0) } ?? "nil",
-                                        cob.map { String(format: "%.1f", $0) } ?? "nil",
-                                        bgAge.map { "\($0)s" } ?? "nil",
-                                        cobAge.map { "\($0)s" } ?? "never"))
+    /// A glucose value as the watch's other screens show it: in the user's display unit.
+    static func glucoseText(_ quantity: LoopQuantity, unit: LoopUnit) -> String {
+        NumberFormatter.glucoseFormatter(for: unit).string(from: quantity.doubleValue(for: unit)) ?? "—"
     }
 
     /// No loan: the phone's last reading, labelled and dimmed.
@@ -527,7 +480,7 @@ final class GlanceViewModel: ObservableObject {
         s.loopClosed = context?.isClosedLoop == true
         s.notHearingFromPhone = phoneHeardAt.map { now.timeIntervalSince($0) >= LoanControl.notHearingFromPhoneWarning } ?? false
         if let quantity = context?.glucose {
-            s.bgText = String(format: "%.0f", quantity.doubleValue(for: .milligramsPerDeciliter))
+            s.bgText = glucoseText(quantity, unit: context?.displayGlucoseUnit ?? .milligramsPerDeciliter)
             s.trendSymbol = context?.glucoseTrend?.symbol
         }
         s.loopStatusText = NSLocalizedString("phone loop active", comment: "Glance status when the phone runs the loop")
@@ -542,7 +495,7 @@ final class GlanceViewModel: ObservableObject {
         s.viaPhone = true
         s.bgColor = .dim
         if let quantity = context?.glucose {
-            s.bgText = String(format: "%.0f", quantity.doubleValue(for: .milligramsPerDeciliter))
+            s.bgText = glucoseText(quantity, unit: context?.displayGlucoseUnit ?? .milligramsPerDeciliter)
             s.trendSymbol = context?.glucoseTrend?.symbol
         }
         s.loopStatusText = NSLocalizedString("starting…", comment: "Glance status while starting Sport Mode")
@@ -575,7 +528,8 @@ final class GlanceViewModel: ObservableObject {
 
     /// The ring is the last cycle's `LoopCompletionFreshness`, as on the phone; glucose age is shown
     /// separately. A pure function of its arguments.
-    static func activeState(data: WatchLoopManager.GlanceData, cob: Double?, now: Date, phoneGlucoseDate: Date? = nil) -> GlanceUIState {
+    static func activeState(data: WatchLoopManager.GlanceData, cob: Double?, now: Date, phoneGlucoseDate: Date? = nil,
+                            unit: LoopUnit = .milligramsPerDeciliter) -> GlanceUIState {
         var s = GlanceUIState()
         s.overrideLabel = data.overrideLabel
         s.overrideSymbol = data.overrideSymbol
@@ -614,7 +568,7 @@ final class GlanceViewModel: ObservableObject {
         }
         if let quantity = data.glucose {
             let mgdl = quantity.doubleValue(for: .milligramsPerDeciliter)
-            s.bgText = String(format: "%.0f", mgdl)
+            s.bgText = glucoseText(quantity, unit: unit)
             if isStale {
                 // A stale number keeps its value but loses colour and arrow.
                 s.bgColor = .dim
@@ -638,7 +592,7 @@ final class GlanceViewModel: ObservableObject {
         // An eventual is only offered against a FRESH reading. A prediction from a stale input is
         // not a weaker prediction, it is a different question.
         } else if let eventual = data.eventual {
-            s.eventualText = String(format: "%.0f", eventual.doubleValue(for: .milligramsPerDeciliter))
+            s.eventualText = glucoseText(eventual, unit: unit)
         }
 
         // Fresh reading: show provenance; "via iPhone" is drawn in the warning colour.

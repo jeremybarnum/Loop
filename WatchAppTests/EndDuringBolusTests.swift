@@ -17,13 +17,14 @@ import LoopAlgorithm
 @testable import OmnipodKit
 @testable import WatchApp
 
+@MainActor
 final class EndDuringBolusTests: XCTestCase {
 
     private var defaults: UserDefaults!
     private var dir: URL!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         defaults = UserDefaults(suiteName: "EndDuringBolusTests-\(UUID().uuidString)")!
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -65,9 +66,9 @@ final class EndDuringBolusTests: XCTestCase {
         let c = await makeController()
         let pump = try makePumpMidBolus()
         guard case .inProgress = pump.status.bolusState else { return XCTFail("precondition: the pod is giving a bolus") }
-        c.queue.sync {
+        await c.onMain {
             pump.pumpManagerDelegate = c
-            pump.delegateQueue = c.queue
+            pump.delegateQueue = .main
             c.pumpManager = pump
             c.loopManager.pumpManager = pump
             c.phase = .active
@@ -78,23 +79,25 @@ final class EndDuringBolusTests: XCTestCase {
         c.playRefusal = { refusalsFelt += 1 }
 
         c.beginHandback()
-        c.queue.sync { }
+        await c.onMain { }
 
         XCTAssertEqual(refusalsFelt, 1, "felt as well as read")
         XCTAssertTrue(sent.isEmpty, "no offer goes out")
-        XCTAssertFalse(c.debugSnapshot().handbackPending)
+        let snapshot1 = await c.fencedSnapshot()
+        XCTAssertFalse(snapshot1.handbackPending)
         XCTAssertEqual(c.phase, .active, "the loan continues")
         XCTAssertNotNil(c.pumpManager, "the watch still holds the pod")
-        XCTAssertTrue(c.debugSnapshot().handbackFailureText?.contains("bolus") == true,
+        let snapshot2 = await c.fencedSnapshot()
+        XCTAssertTrue(snapshot2.handbackFailureText?.contains("bolus") == true,
                       "on screen: why, and when to try again")
     }
 
     /// A loan with no bolus on the pod, the End about to be tapped.
-    private func activeLoan(_ c: PodLoanWatchController) throws -> OmniPumpManager {
+    private func activeLoan(_ c: PodLoanWatchController) async throws -> OmniPumpManager {
         let pump = try makePumpMidBolus(false)
-        c.queue.sync {
+        await c.onMain {
             pump.pumpManagerDelegate = c
-            pump.delegateQueue = c.queue
+            pump.delegateQueue = .main
             c.pumpManager = pump
             c.loopManager.pumpManager = pump
             c.phase = .active
@@ -106,7 +109,7 @@ final class EndDuringBolusTests: XCTestCase {
     /// bolus counts from the moment it is sent, so the End is refused on the spot, not started.
     func testEndWhileTheWatchsBolusIsBeingSentIsRefusedAtOnce() async throws {
         let c = await makeController()
-        _ = try activeLoan(c)
+        _ = try await activeLoan(c)
         c.loopManager.setManualBolusInFlight(true, units: 1)
         var sent: [[String: Any]] = []
         c.send = { sent.append($0) }
@@ -114,39 +117,43 @@ final class EndDuringBolusTests: XCTestCase {
         c.playRefusal = { refusalsFelt += 1 }
 
         c.beginHandback()
-        c.queue.sync { }
+        await c.onMain { }
 
         XCTAssertTrue(sent.isEmpty, "no offer: no Cancel screen")
-        XCTAssertFalse(c.debugSnapshot().handbackPending)
+        let snapshot3 = await c.fencedSnapshot()
+        XCTAssertFalse(snapshot3.handbackPending)
         XCTAssertEqual(refusalsFelt, 1)
-        XCTAssertEqual(c.debugSnapshot().handbackFailureText, "A bolus is still being given. Try again when it has finished.")
+        let snapshot4 = await c.fencedSnapshot()
+        XCTAssertEqual(snapshot4.handbackFailureText, "A bolus is still being given. Try again when it has finished.")
     }
 
     /// A bolus started while the End waited for the phone: at the release the End is refused, and
     /// the watch keeps the pod.
     func testABolusStartedDuringAPendingEndRefusesItAtTheRelease() async throws {
         let c = await makeController()
-        _ = try activeLoan(c)
+        _ = try await activeLoan(c)
         c.send = { _ in }
         var refusalsFelt = 0
         c.playRefusal = { refusalsFelt += 1 }
-        c.queue.sync { c.handbackRequested = true }      // the End is waiting for the phone
+        await c.onMain { c.handbackRequested = true }      // the End is waiting for the phone
         c.loopManager.setManualBolusInFlight(true, units: 1)
 
-        c.queue.sync { c.finalizeHandback() }            // the drain is complete
+        await c.onMain { c.finalizeHandback() }            // the drain is complete
 
         XCTAssertEqual(c.phase, .active, "the loan continues")
         XCTAssertNotNil(c.pumpManager, "the watch still holds the pod")
-        XCTAssertFalse(c.debugSnapshot().handbackPending)
+        let snapshot5 = await c.fencedSnapshot()
+        XCTAssertFalse(snapshot5.handbackPending)
         XCTAssertEqual(refusalsFelt, 1)
-        XCTAssertTrue(c.debugSnapshot().handbackFailureText?.contains("bolus") == true)
+        let snapshot6 = await c.fencedSnapshot()
+        XCTAssertTrue(snapshot6.handbackFailureText?.contains("bolus") == true)
     }
 
     /// A command to the pod unconfirmed at the release: the pod driver keeps the pod, the End is refused,
     /// no final offer goes out, and the watch's loop has the pod again.
     func testAnUnconfirmedCommandAtTheReleaseRefusesTheEnd() async throws {
         let c = await makeController()
-        let pump = try activeLoan(c)
+        let pump = try await activeLoan(c)
         pump.setState { state in
             var pod = state.podState
             pod?.unacknowledgedCommand = .stopProgram(.tempBasal, 3, Date(), false)
@@ -156,33 +163,36 @@ final class EndDuringBolusTests: XCTestCase {
         c.send = { sent.append($0) }
         var refusalsFelt = 0
         c.playRefusal = { refusalsFelt += 1 }
-        c.queue.sync { c.handbackRequested = true }      // the End is waiting for the phone
+        await c.onMain { c.handbackRequested = true }      // the End is waiting for the phone
 
-        c.queue.sync { c.finalizeHandback() }            // the drain is complete
-        c.loopManager.dataAccessQueue.sync { }
-        c.queue.sync { }
-        c.loopManager.dataAccessQueue.sync { }
+        await c.onMain { c.finalizeHandback() }            // the drain is complete
+        await c.loopManager.laneSettled()
+        await c.onMain { }
+        await c.loopManager.laneSettled()
 
         XCTAssertFalse(pump.isControlReleased, "the driver kept the pod")
         XCTAssertEqual(c.phase, .active, "the loan continues")
         XCTAssertTrue(c.pumpManager === pump, "the watch still holds the pod")
         XCTAssertTrue(c.loopManager.pumpManager === pump, "the watch's loop doses again")
         XCTAssertTrue(sent.isEmpty, "no final offer")
-        XCTAssertFalse(c.debugSnapshot().handbackPending)
+        let snapshot7 = await c.fencedSnapshot()
+        XCTAssertFalse(snapshot7.handbackPending)
         XCTAssertEqual(refusalsFelt, 1)
-        XCTAssertEqual(c.debugSnapshot().handbackFailureText, LoanControl.unconfirmedCommandRefusal)
+        let snapshot8 = await c.fencedSnapshot()
+        XCTAssertEqual(snapshot8.handbackFailureText, LoanControl.unconfirmedCommandRefusal)
     }
 
     /// Nobody starts a bolus while the pod is being handed back: with an End waiting, the watch
     /// refuses a bolus and says how to give one; the End itself is untouched.
     func testABolusIsRefusedWhileAnEndIsWaiting() async throws {
         let c = await makeController()
-        _ = try activeLoan(c)
+        _ = try await activeLoan(c)
         XCTAssertNil(c.bolusRefusalWhileEnding(), "no End waiting: a bolus may go")
 
-        c.queue.sync { c.handbackRequested = true }
+        await c.onMain { c.handbackRequested = true }
         XCTAssertEqual(c.bolusRefusalWhileEnding(), "Sport Mode is ending. Bolus on the iPhone once it has the pod.")
-        XCTAssertTrue(c.debugSnapshot().handbackPending, "the End carries on")
+        let snapshot9 = await c.fencedSnapshot()
+        XCTAssertTrue(snapshot9.handbackPending, "the End carries on")
 
         let content = CarbAndBolusFlowViewModel.bolusFailureContent(units: 1, carbGrams: nil,
                                                                     error: BolusRefusedWhileEnding(reason: c.bolusRefusalWhileEnding()!))
@@ -195,8 +205,8 @@ final class EndDuringBolusTests: XCTestCase {
         var refusalsFelt = 0
         c.playRefusal = { refusalsFelt += 1 }
         let reason = "A bolus is still being given. Try again in 30 seconds."
-        c.handleIncoming(userInfo: try LoanMessage.denied(LoanDenied(reason: reason)).transportDictionary(), channel: .urgent)
-        c.queue.sync { }
+        c.handleIncoming(userInfo: try LoanMessage.denied(LoanDenied(reason: reason)).transportDictionary())
+        await c.onMain { }
 
         XCTAssertEqual(refusalsFelt, 1)
         XCTAssertEqual(c.phase, .idle)

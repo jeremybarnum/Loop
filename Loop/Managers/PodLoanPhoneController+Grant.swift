@@ -11,7 +11,6 @@ import HealthKit
 import LoopKit
 import LoopCore
 import UserNotifications
-import os.log
 
 extension PodLoanPhoneController {
     /// The watch is asking for the pod.
@@ -20,9 +19,7 @@ extension PodLoanPhoneController {
         if let sentAt = request.sentAt {
             let age = deps.now().timeIntervalSince(sentAt)
             if age > Self.requestTTL {
-                os_log("Loan request STALE — sent %.0fs ago (TTL %.0fs); ignored as a queued-channel ghost",
-                       log: log, type: .default, age, Self.requestTTL)
-                PhoneLog.event("loan", String(format: "request STALE — sent %.0fs ago (TTL %.0fs) — ignored, no grant", age, Self.requestTTL))
+                PhoneLog.event("loan", String(format: "ignored a Start request sent %.0f s ago, older than %.0f s", age, Self.requestTTL))
                 return
             }
         }
@@ -30,8 +27,6 @@ extension PodLoanPhoneController {
         if let id = request.requestID, id == lastRequestID,
            let seenAt = lastRequestAt,
            deps.now().timeIntervalSince(seenAt) < Self.requestDedupeWindow {
-            os_log("Duplicate loan request %{public}@ ignored (transport redelivery, %.1fs after the first)",
-                   log: log, type: .default, id, deps.now().timeIntervalSince(seenAt))
             return
         }
         if let id = request.requestID {
@@ -39,33 +34,23 @@ extension PodLoanPhoneController {
             lastRequestAt = deps.now()
         }
 
-        if let seize = request.supportsSeize {
-            updateState { $0.watchSupportsSeize = seize }
+        if !persisted.watchUsesSportMode {
+            updateState { $0.watchUsesSportMode = true }
         }
         watchKnownEpoch = request.knownEpoch
-        // Version skew ends here with a nack; the apps install separately.
-        guard request.supportedVersions.contains(LoanProtocol.version) else {
-            sendMessage(.nack(ProtocolNack(seenVersion: request.supportedVersions.max())))
-            return
-        }
         // A grant is mid-flight: the phone has already paused dosing and is waiting on the pod. A second
         // Start (the same one by its second route, or a second tap) is answered by that grant.
         guard !grantInFlight else {
-            os_log("Loan request while a grant is being prepared — the grant answers it", log: log, type: .default)
             return
         }
         guard state == .owner else {
             switch state {
             // A previous attempt never finished: recover to owner and grant afresh.
             case .grantOffered, .reconciling, .reclaimPending:
-
-                os_log("Loan request while %{public}@ — recovering stale state and granting", log: log, type: .default, state.rawValue)
-                forceReclaimToOwner(reason: "new request while \(state.rawValue)")
+                forceReclaimToOwner(reason: "a new Start request came in state \(state.rawValue)")
                 beginGrant()
             // A live loan is not stale state. Take it back properly and let the user ask again.
             case .loaned:
-
-                os_log("Loan request while LOANED — revoking the previous loan first", log: log, type: .default)
                 reclaimNow()
                 deny("Ending the previous Sport Mode session. Tap Start again in a few seconds.")
             case .owner:
@@ -78,7 +63,7 @@ extension PodLoanPhoneController {
 
     /// Refuse, with a reason the glance can show.
     func deny(_ reason: String) {
-        os_log("Loan denied: %{public}@", log: log, type: .default, reason)
+        handbackDiag(epoch, "refused the watch's Start: \(reason)")
         sendMessage(.denied(LoanDenied(reason: reason)))
     }
 
@@ -101,13 +86,12 @@ extension PodLoanPhoneController {
 
         // A grant supersedes an inferred loan; the radio comes back first.
         if yieldingToInferredLoan {
-            clearInferredLoanYield(reason: "new loan request — a granted loan supersedes the inferred one")
+            clearInferredLoanYield(reason: "a new Start request replaces it")
             reclaimPodConnection()
         }
 
         // Nobody takes the pod while it is giving a bolus (transfer G): the looper tries again after it.
         if let bolus = pump.status.bolusState.underWay {
-            handbackDiag(epoch, "grant REFUSED — this phone's bolus is still being given (ends \(bolus.endsAt.map { "in \(Int($0.timeIntervalSince(deps.now()).rounded(.up))) s" } ?? "when the pod has it"))")
             deny(LoanControl.bolusRefusal(bolus, now: deps.now()))
             return
         }
@@ -116,8 +100,6 @@ extension PodLoanPhoneController {
         if let started = reclaimStartedAt,
            deps.now().timeIntervalSince(started) < Self.reclaimSettleTimeout,
            reclaimVerifiedAt == nil {
-            os_log("Grant deferred: pod still returning from the last reclaim (%.0fs into settle, round-trip not yet verified) — deny-and-retry",
-                   log: log, type: .default, deps.now().timeIntervalSince(started))
             deny("The iPhone is still reconnecting to the pod. Try again in a few seconds.")
             attemptReclaimVerificationNow(started: started)
             return
@@ -126,7 +108,6 @@ extension PodLoanPhoneController {
         let settings = deps.settings()
 
         let loanSettings = settings
-        PhoneLog.event("loan", "dosing strategy for the loan: \(settings.automaticDosingStrategy)")
         // Deny on anything missing rather than letting the watch invent it.
         guard settings.basalRateSchedule != nil,
               settings.insulinSensitivitySchedule != nil,
@@ -144,10 +125,10 @@ extension PodLoanPhoneController {
         grantInFlight = true
         deps.cancelTempBasalForGrant { [weak self] error in
             guard let self = self else { return }
-            self.queue.async {
+            DispatchQueue.main.async {
                 self.grantInFlight = false
                 if let error = error {
-                    os_log("Grant: the pre-grant temp cancel failed: %{public}@", log: self.log, type: .error, String(describing: error))
+                    self.log.error("could not cancel this phone's temp before lending the pod: %{public}@", String(describing: error))
                     self.deny("The iPhone couldn't reach the pod and kept it. Try again.")
                     return
                 }
@@ -166,11 +147,10 @@ extension PodLoanPhoneController {
 
         // Above anything the watch knows: a loan it started alone may have run past this phone's count.
         let releaseEpoch = max(epoch, watchKnownEpoch ?? 0) + 1
-        handbackDiag(releaseEpoch, "GRANT — releasing pod BLE (wasReleased=\(control.isControlReleased))")
+        handbackDiag(releaseEpoch, "lending the pod to the watch")
         control.releaseControl()
         // The pod driver keeps the pod while a command to it is unconfirmed: the Start is refused.
         guard control.isControlReleased else {
-            handbackDiag(releaseEpoch, "grant REFUSED — the pod driver kept the pod: a command to it is unconfirmed")
             deny(LoanControl.unconfirmedCommandRefusal)
             return
         }
@@ -205,15 +185,10 @@ extension PodLoanPhoneController {
             guard let self = self else { return }
             // The loan moved on during assembly; drop the grant.
             guard self.state == .grantOffered, self.epoch == grantEpoch else { return }
-            guard var grant = grant else {
+            guard let grant = grant else {
                 self.abortGrant(reason: "snapshot encoding failed")
                 return
             }
-            // Start grants only; the standing copy never carries them.
-            let services = self.deps.serviceConfigurations()
-            grant.serviceConfigurations = services.compactMap(\.propertyList)
-            grant.phoneCGMUploadsGlucose = self.deps.cgmUploadsGlucose()
-            PhoneLog.event("loan", "[uploads] grant carries service configuration(s): \(services.isEmpty ? "none" : services.map(\.managerIdentifier).joined(separator: ", "))")
             self.sendMessage(.grant(grant))
             self.armT1(for: grantEpoch)
         }
@@ -245,7 +220,7 @@ extension PodLoanPhoneController {
                     guard let self = self else { return }
                     self.deps.settingsHistory(dayStart, referenceDate) { [weak self] settingsHistory in
                     guard let self = self else { return }
-                    self.queue.async {
+                    DispatchQueue.main.async {
                         guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pumpConfiguration.rawValue, format: .binary, options: 0),
                               let settingsData = try? PropertyListSerialization.data(fromPropertyList: loanSettingsRaw, format: .binary, options: 0) else {
                             completion(nil)
@@ -259,16 +234,8 @@ extension PodLoanPhoneController {
                         let overrideData: Data? = activeOverride.flatMap { o in
                             try? PropertyListSerialization.data(fromPropertyList: o.rawValue, format: .binary, options: 0)
                         }
-                        if let o = activeOverride {
-                            if overrideData == nil {
-                                os_log("[override] grant: FAILED to encode active override %{public}@ — the wrist will dose UNSCALED",
-                                       log: self.log, type: .error, Self.overrideNameForLog(o))
-                            } else {
-                                os_log("[override] grant: carrying %{public}@ · insulin needs %.0f%% · sync %{public}@",
-                                       log: self.log, type: .default, Self.overrideNameForLog(o),
-                                       o.settings.effectiveInsulinNeedsScaleFactor * 100,
-                                       o.syncIdentifier.uuidString)
-                            }
+                        if let o = activeOverride, overrideData == nil {
+                            self.log.error("could not encode the active preset %{public}@; the watch doses without it", Self.overrideNameForLog(o))
                         }
 
                         // Schedules and insulin model travel separately; the settings blob drops them.
@@ -279,29 +246,17 @@ extension PodLoanPhoneController {
                         supplement["defaultRapidActingModel"] = settings.defaultRapidActingModel?.rawValue
                         let supplementData = supplement.isEmpty ? nil
                             : try? PropertyListSerialization.data(fromPropertyList: supplement, format: .binary, options: 0)
-                        os_log("[grant] settings supplement: basal=%{public}@ isf=%{public}@ cr=%{public}@ model=%{public}@ bytes=%{public}d",
-                               log: self.log, type: .default,
-                               settings.basalRateSchedule == nil ? "MISSING" : "ok",
-                               settings.insulinSensitivitySchedule == nil ? "MISSING" : "ok",
-                               settings.carbRatioSchedule == nil ? "MISSING" : "ok",
-                               settings.defaultRapidActingModel.map { String(describing: $0) } ?? "MISSING (wrist will assume rapid-acting adult)",
-                               supplementData?.count ?? 0)
 
                         let overrideHistoryData = LoanGrant.overrideHistoryRaw(overrides)
-                        let settingsHistoryCounts = settingsHistory.map { "\($0.basal.count)/\($0.sensitivity.count)/\($0.carbRatio.count)/\($0.targetRange.count)" } ?? "ABSENT"
-                        self.handbackDiag(grantEpoch, "[grant] supplement \(supplementData?.count ?? 0)B · seeds: \(history.count) dose, \(carbs.count) carb, \(glucose.count) glucose, \(overrides.count) override (\(overrideHistoryData?.count ?? 0)B) · settings history basal/ISF/CR/target \(settingsHistoryCounts) · podState \(stateData.count)B · settings \(settingsData.count)B · glucose alerts \(glucoseAlertSettings.map { "\($0.count)B" } ?? "ABSENT")")
                         let grant = LoanGrant(
                             epoch: grantEpoch,
                             expiresAt: expiresAt,
                             pumpConfiguration: stateData,
-                            podAddress: 0,
                             therapySettingsRaw: settingsData,
                             // The schedules' authoring time zone.
                             settingsTimeZoneID: settings.basalRateSchedule?.timeZone.identifier ?? TimeZone.current.identifier,
                             doseHistory: history.compactMap(LoanDoseRecord.init(storeDose:)),
                             // Capability flags for version skew.
-                            supportsInterimHandback: true,
-                            supportsOverrideRecords: true,
 
                             // Not in the settings blob.
                             integralRetrospectiveCorrectionEnabled: UserDefaults.standard.integralRetrospectiveCorrectionEnabled,
@@ -362,11 +317,9 @@ extension PodLoanPhoneController {
 
     /// The phone's glucose alert settings changed (or were first seen): refresh the copy now.
     func noteGlucoseAlertSettings(_ settings: GlucoseAlertSettings) {
-        queue.async { [weak self] in
-            guard let self, settings != self.glucoseAlertSettingsSeen else { return }
-            self.glucoseAlertSettingsSeen = settings
-            self.queue_considerDormantRefresh()
-        }
+        guard settings != glucoseAlertSettingsSeen else { return }
+        glucoseAlertSettingsSeen = settings
+        considerDormantRefresh()
     }
 
     /// Minted once; echoed back by a watch that started alone.
@@ -379,13 +332,9 @@ extension PodLoanPhoneController {
 
     /// Keeps the watch's standing copy current. `bookChanged`: insulin or carbs moved.
     func considerDormantRefresh(bookChanged: Bool = false) {
-        queue.async { [weak self] in self?.queue_considerDormantRefresh(bookChanged: bookChanged) }
-    }
-
-    private func queue_considerDormantRefresh(bookChanged: Bool = false) {
         // Only while this phone holds the pod, and only to a watch that said it can use this.
         guard state == .owner else { return }
-        guard persisted.watchSupportsSeize else { return }
+        guard persisted.watchUsesSportMode else { return }
         guard let control = deps.pumpManager() as? ExclusiveDeviceControl,
               !control.isControlReleased else { return }
         let settings = deps.settings()
@@ -403,9 +352,9 @@ extension PodLoanPhoneController {
             if wait > 0 {
                 guard !trailingDormantRefreshPending else { return }
                 trailingDormantRefreshPending = true
-                queue.asyncAfter(deadline: .now() + wait) { [weak self] in
+                DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
                     self?.trailingDormantRefreshPending = false
-                    self?.queue_considerDormantRefresh(bookChanged: true)
+                    self?.considerDormantRefresh(bookChanged: true)
                 }
                 return
             }
@@ -433,7 +382,7 @@ extension PodLoanPhoneController {
             // A loan started meanwhile; the watch already has newer materials.
             guard self.state == .owner else { return }
             self.sendMessage(.dormantGrant(DormantGrant(grant: grant, issuedAt: issuedAt, seizeToken: token)))
-            PhoneLog.event("seize", "dormant grant refreshed — \(grant.doseHistory.count) dose record(s), token …\(String(token.uuidString.suffix(8))) [seize]")
+            PhoneLog.event("seize", "standing copy sent to the watch with \(grant.doseHistory.count) dose records")
         }
     }
 

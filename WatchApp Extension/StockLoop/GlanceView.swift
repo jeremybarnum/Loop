@@ -43,7 +43,7 @@ struct GlanceView: View {
         .onAppear { model.startRefreshing() }
         .onDisappear { model.stopRefreshing() }
 
-        // Posted from the loan queue, so hop to main before touching view state.
+        // Handled on the next pass of main, once the phase change has finished.
         .onReceive(NotificationCenter.default.publisher(for: .podLoanPhaseDidChange)
             .receive(on: DispatchQueue.main)) { _ in
             model.refreshNow()

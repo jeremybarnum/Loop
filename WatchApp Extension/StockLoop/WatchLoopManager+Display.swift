@@ -2,8 +2,9 @@
 //  WatchLoopManager+Display.swift
 //  WatchApp Extension
 //
-//  What the wrist draws, never what it doses from: `GlanceData` for the glance and a
-//  WatchContext for the stock pages. Built on `dataAccessQueue`, published for main.
+//  What the wrist draws, never what it doses from: `GlanceData` for the glance and its state for
+//  the stock pages (`LoopDataManager.wristState`). Built on the manager's lane, after the cycle work
+//  before it.
 //
 
 import Foundation
@@ -17,22 +18,17 @@ import os.log
 
 extension WatchLoopManager {
 
-    /// Rebuild the glance mirror; a burst collapses into one. Observers must not call back in.
+    /// Rebuild the glance snapshot; a burst collapses into one. Observers must not call back in.
     func refreshGlanceData() {
-        glanceMirrorLock.lock()
-        if _glanceRefreshPending { glanceMirrorLock.unlock(); return }
-        _glanceRefreshPending = true
-        glanceMirrorLock.unlock()
+        if glanceRefreshPending { return }
+        glanceRefreshPending = true
 
-        dataAccessQueue.async { [weak self] in
-            guard let self = self else { return }
-            let data = self.buildGlanceData()
-            self.glanceMirrorLock.lock()
-            self._glanceMirror = data
-            self._glanceRefreshPending = false
-            self.glanceMirrorLock.unlock()
+        onLane { [weak self] in
+            guard let self else { return }
+            self.glanceData = self.buildGlanceData()
+            self.glanceRefreshPending = false
 
-            NotificationCenter.default.post(name: Self.glanceMirrorDidUpdate, object: nil)
+            NotificationCenter.default.post(name: Self.glanceDataDidUpdate, object: nil)
         }
     }
 
@@ -43,7 +39,7 @@ extension WatchLoopManager {
         return basalDeliveryState.getNetBasal(basalSchedule: basalSchedule, maximumBasalRatePerHour: settings.maximumBasalRatePerHour)
     }
 
-    /// On `dataAccessQueue`.
+    /// Lane work.
     func buildGlanceData() -> GlanceData {
             let latest = glucoseStore.latestGlucose
             // Stock's net rate; none while the schedule runs, so the glance shows no temp.
@@ -69,7 +65,7 @@ extension WatchLoopManager {
                 tempRate: tempRate,
                 lastLoopCompleted: lastLoopCompleted,
                 suspendThreshold: settings.suspendThreshold?.quantity,
-                closedLoopEnabled: _closedLoopEnabled,
+                closedLoopEnabled: appliedClosedLoopEnabled,
 
                 // ABSOLUTE rate, unlike `tempRate` above, which is net of the schedule.
                 recommendedTempRate: lastRecommendation?.basalAdjustment.unitsPerHour,
@@ -84,10 +80,9 @@ extension WatchLoopManager {
                 overrideSymbol: Self.overrideSymbol(for: scheduleOverride))
     }
 
-    /// The glance's override line ("🏓 70% 128"), only while the override is active. Also used for the
-    /// Sport complications when the phone holds the pod. A preset's emoji leads it; a preset drawn with an
-    /// Apple symbol has it in `overrideSymbol` instead.
-    static func overrideLabel(for override: TemporaryScheduleOverride?) -> String? {
+    /// The glance's override line ("🏓 70% 128"), only while the override is active. A preset's emoji
+    /// leads it; a preset drawn with an Apple symbol has it in `overrideSymbol` instead.
+    nonisolated static func overrideLabel(for override: TemporaryScheduleOverride?) -> String? {
         guard let o = override, o.isActive() else { return nil }
 
         var parts: [String] = []
@@ -107,7 +102,7 @@ extension WatchLoopManager {
     }
 
     /// The Apple symbol an active preset is drawn with ("figure.run"), which a string can't carry.
-    static func overrideSymbol(for override: TemporaryScheduleOverride?) -> String? {
+    nonisolated static func overrideSymbol(for override: TemporaryScheduleOverride?) -> String? {
         guard let o = override, o.isActive(), case .preset(let p) = o.context,
               let symbol = p.symbol, symbol.symbolType == .systemImage, !symbol.value.isEmpty else { return nil }
         return symbol.value
@@ -115,40 +110,18 @@ extension WatchLoopManager {
 
     /// COB from the display run, as stock's `LoopDataManager.activeCarbs`.
     func glanceCarbsOnBoard(_ completion: @escaping (Double?) -> Void) {
-        dataAccessQueue.async { [weak self] in
+        onLane { [weak self] in
             completion(self?.displayState.activeCarbs?.value)
         }
     }
 
-    /// Feeds the complication from the watch's own reading off-loan. `isWatchAuthored` keeps it out
-    /// of the phone relay; the sync identifier is cleared so the sample is not stored twice.
-    func publishOwnGlucoseContextWhenIdle() {
-        guard pumpManager == nil, let latest = glucoseStore.latestGlucose else { return }
-        let trend = (latest as? StoredGlucoseSample)?.trend
-        let mgdl = Int(latest.quantity.doubleValue(for: .milligramsPerDeciliter).rounded())
-        DispatchQueue.main.async {
-            let manager = LoopDataManager.shared
-            // Keep the phone's other fields.
-            let ctx = manager.activeContext.flatMap { WatchContext(rawValue: $0.rawValue) } ?? WatchContext()
-            ctx.isWatchAuthored = true
-            ctx.glucoseSyncIdentifier = nil
-            ctx.glucose = latest.quantity
-            ctx.glucoseDate = latest.startDate
-            ctx.glucoseTrend = trend
-            manager.updateContext(ctx)
-            NotificationCenter.default.post(name: LoopDataManager.didUpdateContextNotification, object: manager)
-            SportLog.event("glucose", "complication fed from the watch's own reading (idle, no loan) — \(mgdl) mg/dL")
-        }
-    }
-
-    /// The watch-authored context for the stock pages, only while a pod is held. As stock's
-    /// `WatchDataManager.createWatchContext`: IOB, COB and the prediction come from the display
-    /// run (`displayState`), and the recommended bolus from its own manual-bolus run, which
-    /// changes nothing displayed. Published over the phone's last context (`overlayWatchState`).
-    func publishHUDContext() {
+    /// The state of the watch holding the pod, for the stock pages (`LoopDataManager.wristState`), only
+    /// while a pod is held. As stock's `WatchDataManager.createWatchContext`: IOB, COB and the
+    /// prediction come from the display run (`displayState`), and the recommended bolus from its own
+    /// manual-bolus run, which changes nothing displayed. The screens lay it over the phone's context.
+    func publishHUDContext() async {
         guard pumpManager != nil else { return }
         let ctx = WatchContext()
-        ctx.isWatchAuthored = true
 
         // The wrist holding the pod asserts onboarding; the phone may be off.
         ctx.isOnboardingCompleted = true
@@ -168,7 +141,7 @@ extension WatchLoopManager {
 
         ctx.iob = displayState.activeInsulin?.value
         ctx.loopLastRunDate = lastLoopCompleted
-        ctx.isClosedLoop = _closedLoopEnabled
+        ctx.isClosedLoop = appliedClosedLoopEnabled
         // As stock's `WatchDataManager.createWatchContext`.
         if let netBasal = netBasal() {
             ctx.lastNetTempBasalDose = netBasal.rate
@@ -176,64 +149,20 @@ extension WatchLoopManager {
 
         if let cob = displayState.activeCarbs?.value {
             ctx.cob = cob
-
-            if cob > 0.05 { SportLog.eventOnChange("loop", key: "hud.cob", String(format: "COB %.1f g on board", cob)) }
         }
 
         // Fill the recommendation before installing the context: the stock flow reads nil as zero.
-        let recommendationResult = self.manualBolusRecommendationOnQueue()
+        let recommendationResult = await self.manualBolusRecommendation()
         // As stock's context for the watch, the watchBolus decision built with it is kept.
         self.noteContextDosingDecision(potentialCarbEntry: nil, recommendation: (try? recommendationResult.get()) ?? nil)
         switch recommendationResult {
         case .success(let recommendation):
-
-            SportLog.eventOnChange("loan", key: "hud.rec", String(format: "REC bolus %.2f U — published to the stock bolus flow", recommendation?.amount ?? 0))
             ctx.recommendedBolusDose = recommendation?.amount
         case .failure(let error):
-
-            SportLog.eventOnChange("loan", key: "hud.rec", "REC bolus UNAVAILABLE — \(error) (the flow will show 'REC: – U')")
+            SportLog.eventOnChange("loan", key: "hud.rec", "bolus recommendation unavailable: \(error)")
         }
-        DispatchQueue.main.async {
-            guard let loopDataManager = ExtensionDelegate.sharedIfAvailable()?.loopManager else { return }
-            let published = loopDataManager.activeContext.flatMap { WatchContext(rawValue: $0.rawValue) } ?? WatchContext()
-            published.overlayWatchState(from: ctx)
-            loopDataManager.updateContext(published)
-            NotificationCenter.default.post(name: LoopDataManager.didUpdateContextNotification, object: loopDataManager)
-        }
-    }
-}
-
-extension WatchContext {
-    /// The phone's context with the state of the watch holding the pod over it: every field the watch
-    /// has its own value for, an empty one included, so nothing of the phone's dosing state survives.
-    /// The rest stay the phone's, so what only the phone knows (its display unit, its CGM, whether the
-    /// watch may read the sensor) carries through a loan, as stock's consumers expect.
-    func overlayWatchState(from watch: WatchContext) {
-        creationDate = watch.creationDate
-        isWatchAuthored = true
-        isOnboardingCompleted = watch.isOnboardingCompleted
-        glucose = watch.glucose
-        glucoseCondition = watch.glucoseCondition
-        glucoseTrend = watch.glucoseTrend
-        glucoseTrendRate = watch.glucoseTrendRate
-        glucoseDate = watch.glucoseDate
-        glucoseIsDisplayOnly = watch.glucoseIsDisplayOnly
-        glucoseWasUserEntered = watch.glucoseWasUserEntered
-        glucoseSyncIdentifier = watch.glucoseSyncIdentifier
-        predictedGlucose = watch.predictedGlucose
-        loopLastRunDate = watch.loopLastRunDate
-        lastNetTempBasalDose = watch.lastNetTempBasalDose
-        lastNetTempBasalDate = watch.lastNetTempBasalDate
-        recommendedBolusDose = watch.recommendedBolusDose
-        insulinDeliveryState = watch.insulinDeliveryState
-        lastManualBolus = watch.lastManualBolus
-        potentialCarbEntry = watch.potentialCarbEntry
-        cob = watch.cob
-        iob = watch.iob
-        reservoir = watch.reservoir
-        reservoirPercentage = watch.reservoirPercentage
-        batteryPercentage = watch.batteryPercentage
-        isClosedLoop = watch.isClosedLoop
-        deviceIssue = watch.deviceIssue
+        // A loan that ended since this was built has cleared the state already.
+        guard pumpManager != nil else { return }
+        ExtensionDelegate.sharedIfAvailable()?.loopManager.wristState = ctx
     }
 }

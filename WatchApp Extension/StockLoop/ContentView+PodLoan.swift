@@ -19,15 +19,10 @@ extension ContentView {
         let phoneSaysOnboarded = loopManager.activeContext?.isOnboardingCompleted == true
         guard FeatureFlags.sportModeEnabled else { return phoneSaysOnboarded }
         let gate = loanIsLive || phoneSaysOnboarded
-        // Logged on change; pairs with [onboarding-gate] in LoopDataManager.
-        let key = "\(gate)|\(loanIsLive)|\(phoneSaysOnboarded)"
-        if key != Self.lastGateKey {
-            Self.lastGateKey = key
-            SportLog.event("gate", "stock pages \(gate ? "SHOWN" : "BEHIND onboarding") — loanIsLive=\(loanIsLive) phoneSaysOnboarded=\(phoneSaysOnboarded) [onboarding-gate]")
-        }
+        SportLog.eventOnChange("gate", key: "stock-pages", "stock pages \(gate ? "shown" : "behind onboarding"): "
+            + "\(loanIsLive ? "a loan is live" : "no loan is live"), \(phoneSaysOnboarded ? "phone onboarded" : "phone not onboarded")")
         return gate
     }
-    static var lastGateKey = ""
 
     /// Called from `body`'s `.onChange(of: selectedPage)`.
     func podLoanRememberPage(_ newValue: Int) {
@@ -39,19 +34,19 @@ extension ContentView {
 
     /// Called from `body`'s `.podLoanPhaseDidChange` receiver.
     func podLoanPhaseDidChange() {
-        let live = glanceModel.wantsFocus || glanceModel.loanIsLive   // the controller's flag covers a resume
+        let live = glanceModel.loanInProgress
         loanIsLive = live
         if live { selectedPage = Self.sportPage }
     }
 
-    /// Back to the glance after carbs or a bolus during a loan, only when `wantsFocus`.
+    /// Back to the glance after carbs or a bolus during a loan.
     func podLoanReturnToGlanceAfterFlow() {
-        if glanceModel.wantsFocus { selectedPage = Self.sportPage }
+        if glanceModel.loanInProgress { selectedPage = Self.sportPage }
     }
 
     /// Called from `body`'s `.task`.
     func podLoanSyncGateOnLaunch() {
         // Also right on a cold launch into a live loan, which posts no phase change.
-        loanIsLive = glanceModel.wantsFocus || glanceModel.loanIsLive
+        loanIsLive = glanceModel.loanInProgress
     }
 }

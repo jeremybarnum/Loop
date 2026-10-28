@@ -12,6 +12,7 @@ import LoopCore
 import LoopAlgorithm
 @testable import WatchApp
 
+@MainActor
 final class PodLoanTimerSeamTests: XCTestCase {
 
     private var cacheDir: URL!
@@ -19,8 +20,8 @@ final class PodLoanTimerSeamTests: XCTestCase {
     private var journalDir: URL!
     private var defaults: UserDefaults!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         cacheStore = PersistenceController(directoryURL: cacheDir)
         journalDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -28,13 +29,13 @@ final class PodLoanTimerSeamTests: XCTestCase {
         defaults = UserDefaults(suiteName: "PodLoanTimerSeamTests-\(UUID().uuidString)")!
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         // Never unlink a live store's directory synchronously; unique names avoid collisions.
         cacheStore = nil
         cacheDir = nil
         journalDir = nil
         defaults = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     private func makeController() async -> PodLoanWatchController {
@@ -77,7 +78,7 @@ final class PodLoanTimerSeamTests: XCTestCase {
         controller.scheduler = { delay, label, _ in captured.append((delay, label)); timerArmed.fulfill() }
 
         controller.requestLoan(watchBuild: "seam-test")
-        wait(for: [timerArmed], timeout: 5)
+        await fulfillment(of: [timerArmed], timeout: 5)
 
         XCTAssertEqual(sent, 1)
         XCTAssertEqual(captured.map(\.0), [PodLoanWatchController.requestTimeout], "the request timeout is the only timer a bare request arms")
@@ -99,20 +100,14 @@ final class PodLoanTimerSeamTests: XCTestCase {
         controller.requestLoan(watchBuild: "seam-test")   // request → inline timeout → idle
         controller.requestLoan(watchBuild: "seam-test")   // must be accepted again
 
-        wait(for: [secondSend], timeout: 5)
+        await fulfillment(of: [secondSend], timeout: 5)
         XCTAssertEqual(sends, 2, "a timed-out request must not wedge the controller in .requested")
 
         // Poll, bounded: an unbounded poller outlives a failed wait and traps the runner.
-        let idled = expectation(description: "returned to idle")
         let deadline = Date().addingTimeInterval(5)
-        DispatchQueue.global().async {
-            while controller.phase != .idle {
-                guard Date() < deadline else { return }
-                usleep(10_000)
-            }
-            idled.fulfill()
+        while controller.phase != .idle, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
-        wait(for: [idled], timeout: 5)
         XCTAssertEqual(controller.phase, .idle, "timed out and recovered")
     }
 
@@ -127,14 +122,14 @@ final class PodLoanTimerSeamTests: XCTestCase {
         controller.scheduler = { _, _, _ in }   // time never advances
 
         controller.requestLoan(watchBuild: "seam-test")
-        wait(for: [firstSend], timeout: 5)
+        await fulfillment(of: [firstSend], timeout: 5)
         controller.requestLoan(watchBuild: "seam-test")
 
         // Drain the controller's queue: a third call's guard runs after the second's.
         let drained = expectation(description: "queue drained")
         controller.scheduler = { _, _, _ in }
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { drained.fulfill() }
-        wait(for: [drained], timeout: 5)
+        await fulfillment(of: [drained], timeout: 5)
 
         XCTAssertEqual(sends, 1, "the pending request absorbs the double-tap")
         XCTAssertEqual(controller.phase, .requested)
@@ -143,6 +138,7 @@ final class PodLoanTimerSeamTests: XCTestCase {
 
 /// Screen-off scans cannot find a pod, so first contact asks for the wrist and nudges;
 /// a pod with a saved handle connects silently.
+@MainActor
 final class TakeoverDiscoveryHintTests: XCTestCase {
 
     func testAPodWithASavedHandleSaysNothing() {

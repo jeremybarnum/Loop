@@ -27,7 +27,7 @@ final class LoanEventJournal {
         }
     }
 
-    private let log = OSLog(subsystem: "com.loopkit.Loop", category: "LoanEventJournal")
+    private let log = OSLog(category: "LoanEventJournal")
     private let lock = NSLock()
     private var state: State?
     private let fileURL: URL
@@ -35,12 +35,11 @@ final class LoanEventJournal {
     /// In Application Support, outside the versioned store, so it survives a store reset.
     init(directory: URL? = nil) {
         let base = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        self.fileURL = base.appendingPathComponent("PodLoanJournalV2.json")
+        self.fileURL = base.appendingPathComponent("PodLoanJournal.json")
         if let data = try? Data(contentsOf: fileURL),
            let loaded = try? LoanProtocol.decoder.decode(State.self, from: data) {
             self.state = loaded
-            os_log("Loaded persisted loan journal: epoch %d, %d events, cursor %d",
-                   log: log, type: .default, loaded.epoch, loaded.events.count, loaded.ackedCursor)
+            log.default("Loaded the loan journal: loan %d, %d events, cursor %d", loaded.epoch, loaded.events.count, loaded.ackedCursor)
         }
     }
 
@@ -87,8 +86,6 @@ final class LoanEventJournal {
         s.epoch = newEpoch
         state = s
         persistLocked()
-        os_log("Journal FOLDED into epoch %d — %d undrained event(s) carried, cursor %d kept",
-               log: log, type: .default, newEpoch, carried, s.ackedCursor)
         return carried
     }
 
@@ -162,7 +159,7 @@ final class LoanEventJournal {
             let data = try LoanProtocol.encoder.encode(s)
             try data.write(to: fileURL, options: .atomic)
         } catch {
-            os_log("Loan journal persist FAILED: %{public}@", log: log, type: .fault, String(describing: error))
+            log.error("Loan journal persist failed: %{public}@", String(describing: error))
         }
     }
 }

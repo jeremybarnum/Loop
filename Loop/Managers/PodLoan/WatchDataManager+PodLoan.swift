@@ -30,14 +30,13 @@ extension WatchDataManager {
 
     /// Brought up with WatchDataManager, after the session is activated.
     func podLoanStartup() {
-        // With the flag off nothing of the loan starts: no controller, no census, no log.
+        // With the flag off nothing of the loan starts.
         guard FeatureFlags.sportModeEnabled else { return }
         // The build as a commit and build time, matching the watch; build numbers do not name source.
         PhoneLog.event("session", "Loop phone ready — build \(BuildDetails.default.codeIdentity)")
 
         // Eager, so a relaunch mid-loan restores the state machine before any message.
         _ = podLoanController
-        startLinkCensus()
         followGlucoseAlertSettings()
     }
 
@@ -85,29 +84,15 @@ extension WatchDataManager {
         podLoanController.considerOwedForceReclaimAudit()
     }
 
-    // MARK: - Context
-
-    private static var lastOnboardingKey = ""   // [onboarding-gate] dedupe
-
-    func podLoanLogOnboardingContext(_ context: WatchContext) {
-        guard FeatureFlags.sportModeEnabled else { return }
-        // Logged on change; pairs with the watch's [onboarding-gate] lines.
-        let onboardingKey = "\(context.isOnboardingCompleted == true)|\(deviceManager.cgmManager != nil)|\(deviceManager.pumpManager?.isOnboarded == true)"
-        if onboardingKey != Self.lastOnboardingKey {
-            Self.lastOnboardingKey = onboardingKey
-            PhoneLog.event("link", "context to watch: onboardingCompleted=\(context.isOnboardingCompleted == true) — cgmManager \(deviceManager.cgmManager == nil ? "NIL" : "present"), pump onboarded=\(deviceManager.pumpManager?.isOnboarded == true) [onboarding-gate]")
-        }
-    }
-
     // MARK: - Watch bolus
 
     /// Whether the watch's bolus must be refused because the pod is not this phone's to command.
-    func podLoanRefusesWatchBolus(_ bolus: SetBolusUserInfo, message: [String: Any]) -> Bool {
+    func podLoanRefusesWatchBolus(_ bolus: SetBolusUserInfo) -> Bool {
         guard FeatureFlags.sportModeEnabled else { return false }
         // The pod is on the watch: refuse delivery loudly. An attached carb entry is still stored.
         let deliveryRefusedForLoan = bolus.value > 0 && podLoanController.isPodLoanedOut
         if deliveryRefusedForLoan {
-            log.error("Refusing watch bolus while the pod is on loan: %{public}@", String(describing: message))
+            log.error("refused a %.2f U bolus sent from the watch: the pod is on loan", bolus.value)
             NotificationManager.sendBolusFailureNotificationForPodLoan(units: bolus.value)
         }
         return deliveryRefusedForLoan
@@ -120,12 +105,10 @@ extension WatchDataManager {
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
         Task { @MainActor in
             guard FeatureFlags.sportModeEnabled, (try? LoanMessage.decode(fromTransport: message)) != nil else {
-                log.default("Ignoring unexpected sendMessage from the watch: %{public}@",
+                log.default("ignored a message from the watch that is not a loan message: %{public}@",
                             String(describing: Array(message.keys)))
                 return
             }
-            lockedLastWatchContact.value = Date()
-            log.default("Loan sendMessage delivered (urgent path)")
             podLoanController.handleIncoming(userInfo: message)
         }
     }
@@ -133,7 +116,6 @@ extension WatchDataManager {
     /// Loan handshake messages, handled before the stock message handling; false for anything else.
     func podLoanHandlesMessage(_ message: [String: Any], replyHandler: ([String: Any]) -> Void) -> Bool {
         guard FeatureFlags.sportModeEnabled, (try? LoanMessage.decode(fromTransport: message)) != nil else { return false }
-        lockedLastWatchContact.value = Date()
         podLoanController.handleIncoming(userInfo: message)
         replyHandler([:])
         return true
@@ -145,45 +127,36 @@ extension WatchDataManager {
         // silently.
         Task { @MainActor in
             guard FeatureFlags.sportModeEnabled else {
-                log.default("Unexpected userInfo from the watch: %{public}@", String(describing: Array(userInfo.keys)))
+                log.default("ignored userInfo from the watch: %{public}@", String(describing: Array(userInfo.keys)))
                 return
             }
             do {
-                if let message = try LoanMessage.decode(fromTransport: userInfo) {
-                    lockedLastWatchContact.value = Date()
-                    podLoanController.handleIncoming(userInfo: userInfo)
+                if try LoanMessage.decode(fromTransport: userInfo) != nil {
+                            podLoanController.handleIncoming(userInfo: userInfo)
                     return
                 }
-                log.default("Unexpected userInfo from the watch: %{public}@", String(describing: Array(userInfo.keys)))
+                log.default("ignored userInfo from the watch: %{public}@", String(describing: Array(userInfo.keys)))
             } catch {
-                log.error("Undecodable pod loan payload from the watch: %{public}@", String(describing: error))
+                log.error("could not read a loan message from the watch: %{public}@", String(describing: error))
             }
         }
     }
 
-    /// The loan's half of `sessionReachabilityDidChange`.
-    func podLoanSessionReachabilityDidChange(_ session: WCSession) {
-        guard FeatureFlags.sportModeEnabled else { return }
-        if session.isReachable {
-            lockedLastWatchContact.value = Date()
-        }
-    }
-
-    /// The watch's log files, copied at once (the system deletes the file on return) to Documents
-    /// for AirDrop from the phone; and a loan's history, read at once for the stores.
+    /// A loan's history, read at once (the system deletes the file on return) for the stores.
     nonisolated func session(_ session: WCSession, didReceive file: WCSessionFile) {
         guard FeatureFlags.sportModeEnabled else { return }
-        lockedLastWatchContact.value = Date()   // the log pulse is the loan's heartbeat
-        if file.metadata?["kind"] as? String == LoanHistory.fileKind {
-            do {
-                let transfer = try LoanHistory.decode(Data(contentsOf: file.fileURL))
-                Task { @MainActor in self.podLoanController.handleWatchLoanHistory(transfer) }
-            } catch {
-                PhoneLog.event("loan", "loan history file from the watch UNREADABLE — \(error)")
-            }
-            return
+        if file.metadata?["kind"] as? String == "g7watch.log" { keepWatchLog(file); return }
+        guard file.metadata?["kind"] as? String == LoanHistory.fileKind else { return }
+        do {
+            let transfer = try LoanHistory.decode(Data(contentsOf: file.fileURL))
+            Task { @MainActor in self.podLoanController.handleWatchLoanHistory(transfer) }
+        } catch {
+            PhoneLog.event("loan", "could not read the loan history file from the watch: \(error)")
         }
-        guard file.metadata?["kind"] as? String == "g7watch.log" else { return }
+    }
+
+    /// Bench only: the watch's log, copied at once to Documents for AirDrop; the newest 20 kept.
+    nonisolated private func keepWatchLog(_ file: WCSessionFile) {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
@@ -192,7 +165,6 @@ extension WatchDataManager {
         let latest = docs.appendingPathComponent("g7watch-latest.log")
         try? FileManager.default.removeItem(at: latest)
         try? FileManager.default.copyItem(at: file.fileURL, to: latest)
-        // Keep the newest 20 stamped copies, plus latest.
         if let entries = try? FileManager.default.contentsOfDirectory(at: docs, includingPropertiesForKeys: nil) {
             let stampedLogs = entries
                 .filter { $0.pathExtension == "log" && $0.lastPathComponent.hasPrefix("g7watch-") && $0.lastPathComponent != "g7watch-latest.log" }
@@ -201,27 +173,6 @@ extension WatchDataManager {
                 try? FileManager.default.removeItem(at: old)
             }
         }
-        log.default("Watch log received: %{public}@", stamped.lastPathComponent)
-    }
-
-    /// Link census: one line a minute on whether this phone can see the watch. Serial.
-    nonisolated private static let linkCensusQueue = DispatchQueue(label: "com.loopkit.Loop.linkCensus", qos: .utility)
-    nonisolated(unsafe) private static var linkCensusTimer: DispatchSourceTimer?
-
-    /// The phone's pod link during a loan, for the census.
-    nonisolated(unsafe) static var podLinkCensus: (() -> String)?
-
-    nonisolated private func startLinkCensus() {
-        let t = DispatchSource.makeTimerSource(queue: Self.linkCensusQueue)
-        t.schedule(deadline: .now() + 60, repeating: 60, leeway: .seconds(5))
-        t.setEventHandler {
-            guard WCSession.isSupported() else { return }
-            let s = WCSession.default
-            let pod = Self.podLinkCensus.map { " · pod: \($0())" } ?? ""
-            PhoneLog.event("link", "watch reachable=\(s.isReachable) activation=\(s.activationState.rawValue) paired=\(s.isPaired) appInstalled=\(s.isWatchAppInstalled)\(pod)")
-        }
-        t.resume()
-        Self.linkCensusTimer = t
     }
 
     // MARK: - Watch state transitions
@@ -230,10 +181,8 @@ extension WatchDataManager {
     /// queues every message, which can strand a hand-back ack.
     nonisolated func sessionWatchStateDidChange(_ session: WCSession) {
         guard FeatureFlags.sportModeEnabled else { return }
-        PhoneLog.event("link", "** WATCH STATE CHANGED ** paired=\(session.isPaired) "
-            + "appInstalled=\(session.isWatchAppInstalled) reachable=\(session.isReachable) "
-            + "activation=\(session.activationState.rawValue) "
-            + "complication=\(session.isComplicationEnabled)")
+        PhoneLog.event("link", "watch state changed: paired \(session.isPaired), app installed \(session.isWatchAppInstalled), "
+            + "reachable \(session.isReachable)")
     }
 }
 

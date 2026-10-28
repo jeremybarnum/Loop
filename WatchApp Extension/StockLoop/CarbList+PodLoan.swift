@@ -14,7 +14,7 @@ extension CarbList {
     /// During a loan: the loan's store, editable. Off-loan: stock, read-only.
     var loanSession: StockLoopSession? {
         guard let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession,
-              session.loanController.isLoanActiveNonBlocking else { return nil }
+              session.loanController.isLoanActive else { return nil }
         return session
     }
 
@@ -26,9 +26,6 @@ extension CarbList {
         let startDate = entry.startDate
 
         entries.removeAll { $0 == entry }   // optimistic: the row is gone, the loop recalculates
-        SportLog.event("carb-ui", String(format: "wrist DELETE %.0f g @ %@ · sync=%@",
-                                         grams, timeFormatter.string(from: startDate),
-                                         syncIdentifier ?? "none"))
 
         // Re-runs the loop, so the prediction drops the carb at once.
         session.stack.loopManager.deleteLoanCarbEntry(entry) { ok in

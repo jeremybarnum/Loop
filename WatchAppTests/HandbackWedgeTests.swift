@@ -12,6 +12,7 @@ import LoopCore
 import UserNotifications
 @testable import WatchApp
 
+@MainActor
 final class HandbackWedgeTests: XCTestCase {
 
     // MARK: - The two variants
@@ -104,23 +105,24 @@ final class HandbackWedgeTests: XCTestCase {
 
 /// Drain state (resend count, classifier flags, seize marker) resets per session, so the next
 /// drain does not start at the ceiling.
+@MainActor
 final class HandbackDrainStateTests: XCTestCase {
 
     private var defaults: UserDefaults!
     private var journalDir: URL!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         defaults = UserDefaults(suiteName: "HandbackDrainStateTests-\(UUID().uuidString)")!
         journalDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: journalDir, withIntermediateDirectories: true)
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         try? FileManager.default.removeItem(at: journalDir)
         defaults = nil
         journalDir = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     private func makeController() async -> PodLoanWatchController {
@@ -145,7 +147,7 @@ final class HandbackDrainStateTests: XCTestCase {
 
         // The state an abandoned drain reaches: the ceiling hit, both wedge flags tripped, and
         // the marker a phoneless start leaves on disk.
-        c.queue.sync {
+        await c.onMain {
             c.handbackResendCount = PodLoanWatchController.maxDrainResends
             c.handbackSawUnreachable = true
             c.handbackSawUrgentSendError = true
@@ -159,9 +161,9 @@ final class HandbackDrainStateTests: XCTestCase {
         // inline is a jump past its deadline, on the queue it would really run on.
         c.scheduler = { _, _, work in work.perform() }
         c.sendHandbackOffer(recovered: true)
-        c.queue.sync { }
+        await c.onMain { }
 
-        c.queue.sync {
+        await c.onMain {
             XCTAssertEqual(c.handbackResendCount, 0,
                            "the next drain must start with its full budget, not spent by the last one")
             XCTAssertFalse(c.handbackSawUnreachable, "a wedge verdict must describe THIS session")
@@ -190,14 +192,15 @@ final class HandbackDrainStateTests: XCTestCase {
 // MARK: - Interruption levels of the loan's own alerts
 
 /// Pod unattended → time-sensitive; the watch still dosing → normal.
+@MainActor
 final class LoanAlertLevelTests: XCTestCase {
 
     private var defaults: UserDefaults!
     private var journalDir: URL!
     private var scheduler: RecordingWristAlertScheduler!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         defaults = UserDefaults(suiteName: "LoanAlertLevelTests-\(UUID().uuidString)")!
         journalDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: journalDir, withIntermediateDirectories: true)
@@ -205,13 +208,13 @@ final class LoanAlertLevelTests: XCTestCase {
         WristAlerts.scheduler = scheduler
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         WristAlerts.scheduler = UNUserNotificationCenter.current()
         try? FileManager.default.removeItem(at: journalDir)
         scheduler = nil
         defaults = nil
         journalDir = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     private func makeController() async -> PodLoanWatchController {
@@ -252,12 +255,13 @@ final class LoanAlertLevelTests: XCTestCase {
     func testWithNoLoanAWordFromThePhoneArmsTheSilentPhoneWarning() async throws {
         let c = await makeController()
         c.notePhoneHeard()
-        c.queue.sync { }
+        await c.onMain { }
         let request = try await alert(titled: "Not Hearing From iPhone")
         XCTAssertEqual(request.content.interruptionLevel, .timeSensitive)
-        XCTAssertNotNil(c.debugSnapshot().lastHeardFromPhoneAt)
+        let snapshot1 = await c.fencedSnapshot()
+        XCTAssertNotNil(snapshot1.lastHeardFromPhoneAt)
 
-        c.queue.sync { c.phase = .active }
+        await c.onMain { c.phase = .active }
         let gone = await MainActor.run { [scheduler] in scheduler!.pending.allSatisfy { $0.content.title != "Not Hearing From iPhone" } }
         XCTAssertTrue(gone, "a loan running: the watch's own ladder covers it")
     }
@@ -265,7 +269,7 @@ final class LoanAlertLevelTests: XCTestCase {
     /// One-way wedge while the loan is live: the watch is still dosing.
     func testEndNotConfirmedWhileStillDosingIsNormal() async throws {
         let c = await makeController()
-        c.queue.sync {
+        await c.onMain {
             c.phase = .active
             c.handbackResendCount = 3
             c.handbackTimedOut()
@@ -277,7 +281,7 @@ final class LoanAlertLevelTests: XCTestCase {
     /// The watch has let go of the pod and the phone has not confirmed: nobody is dosing.
     func testEndNotConfirmedAfterTheFinalOfferIsTimeSensitive() async throws {
         let c = await makeController()
-        c.queue.sync {
+        await c.onMain {
             c.phase = .handingBack
             c.handbackTimedOut()
         }
@@ -288,13 +292,13 @@ final class LoanAlertLevelTests: XCTestCase {
     /// The two variants never replace each other.
     func testTheTwoEndNotConfirmedVariantsHaveTheirOwnIdentifiers() async throws {
         let c = await makeController()
-        c.queue.sync {
+        await c.onMain {
             c.phase = .active
             c.handbackResendCount = 3
             c.handbackTimedOut()
         }
         let stillDosing = try await alert(titled: "End Not Confirmed")
-        c.queue.sync {
+        await c.onMain {
             c.phase = .handingBack
             c.handbackTimedOut()
         }

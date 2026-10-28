@@ -124,6 +124,10 @@ screen, and the words. Stated once here:
   notifications if the looper has not allowed them.
 - **On screen** means the Sport Mode page on the watch, or the banner, pod tile and status screen on the phone. It is
   seen only when the looper looks.
+- **The phone's copy during a loan.** The phone stores the watch's records as they arrive, so while the watch is in
+  reach the phone's stores follow its loop within a cycle; a temp basal still running is stored once it ends. The
+  banner says when the records last came. Out of reach, no records is what a loan looks like, and the phone says
+  nothing more.
 
 ---
 
@@ -569,10 +573,11 @@ Failures only a test can produce. They are logged when recognised; no warning is
   - *A device told to stand aside while it holds an unconfirmed command.* The watch drops its pod driver when it
     stands aside, so its command goes nowhere. The phone keeps its driver: told of a loan the watch started without
     it (row 17) while a command is unconfirmed, its driver keeps the pod. The phone stands aside all the same: it
-    doses nothing while the watch loops, and asks the driver again after each exchange with the pod; the first one
-    settles the command, and the driver lets go. Until then the phone still reaches for the pod to read it, beside
+    doses nothing while the watch loops, and reads the pod at once, since a phone standing aside runs no loop cycle
+    that would. The pod shows that the watch has run it, so the driver drops the command with nothing booked and
+    lets go; the insulin check books anything the pod gave. If that read fails, the driver lets go after the
+    phone's next exchange with the pod, which nothing schedules; until then the phone may reach for the pod beside
     the watch.
-  - Open: what letting the pod go should do with an unconfirmed command, discussed with the pod driver's reviewer.
 - **Row 15's warnings land on a watch nobody is wearing.** Nothing better is possible without the phone.
 - **A stop queued to a watch that is off** may be lost, or delivered once the watch's link to the phone has started.
   Row 12 does not depend on it: the returning watch asks.

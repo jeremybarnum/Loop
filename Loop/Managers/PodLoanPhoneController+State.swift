@@ -28,8 +28,8 @@ struct PodLoanPhoneState: RawRepresentable {
     /// loan started before it is refused.
     var tookOverOnSilenceAt: Date?
 
-    /// The watch said it can start alone; nothing dormant goes to a watch that cannot.
-    var watchSupportsSeize = false
+    /// The watch has asked for a loan at least once; no standing copy goes to a watch that never has.
+    var watchUsesSportMode = false
     /// Minted once and echoed by a watch that started alone: this phone's reunion credential.
     var seizeToken: UUID?
 
@@ -80,7 +80,7 @@ struct PodLoanPhoneState: RawRepresentable {
         yieldingToInferredLoan = rawValue["yieldingToInferredLoan"] as? Bool ?? false
         holdRenewedAt = rawValue["holdRenewedAt"] as? Date
         tookOverOnSilenceAt = rawValue["tookOverOnSilenceAt"] as? Date
-        watchSupportsSeize = rawValue["watchSupportsSeize"] as? Bool ?? false
+        watchUsesSportMode = rawValue["watchUsesSportMode"] as? Bool ?? false
         seizeToken = (rawValue["seizeToken"] as? String).flatMap(UUID.init(uuidString:))
         loanStartedAt = rawValue["loanStartedAt"] as? Date
         pendingForceAudit = (rawValue["pendingForceAudit"] as? [String: Any]).flatMap(Self.forceAudit(from:))
@@ -96,7 +96,7 @@ struct PodLoanPhoneState: RawRepresentable {
         var raw: [String: Any] = ["phase": phase.rawValue, "epoch": epoch, "committedCursor": committedCursor,
                                   "committedIDs": committedIDs.map(\.uuidString),
                                   "yieldingToInferredLoan": yieldingToInferredLoan,
-                                  "watchSupportsSeize": watchSupportsSeize]
+                                  "watchUsesSportMode": watchUsesSportMode]
         raw["seizeToken"] = seizeToken?.uuidString
         raw["holdRenewedAt"] = holdRenewedAt
         raw["tookOverOnSilenceAt"] = tookOverOnSilenceAt
@@ -132,13 +132,6 @@ struct PodLoanPhoneState: RawRepresentable {
 extension PodLoanPhoneController {
     static let stateFileKey = "PodLoanPhoneState"
 
-    /// The persisted state, readable from any queue.
-    var persisted: PodLoanPhoneState {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return _persisted
-    }
-
     /// The loan phase. Every route back to `.owner` opens the settle window before observers hear of it.
     var state: State {
         get { persisted.phase }
@@ -158,7 +151,6 @@ extension PodLoanPhoneController {
         if oldValue != .owner, state == .owner {
             beginReclaimSettleWindow()
         }
-        syncUIMirror()
         deps.ownershipDidChange()
     }
 
@@ -190,9 +182,7 @@ extension PodLoanPhoneController {
 
     /// Applies one change and writes the whole value once, before returning.
     func updateState(_ change: (inout PodLoanPhoneState) -> Void) {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        change(&_persisted)
-        stateStore.wrappedValue = _persisted.rawValue
+        change(&persisted)
+        stateStore.wrappedValue = persisted.rawValue
     }
 }

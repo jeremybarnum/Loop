@@ -12,6 +12,7 @@ import LoopAlgorithm
 import LoopCore
 @testable import WatchApp
 
+@MainActor
 final class WakeResumeTests: XCTestCase {
 
     private var cacheDir: URL!
@@ -19,8 +20,8 @@ final class WakeResumeTests: XCTestCase {
     private var journalDir: URL!
     private var defaults: UserDefaults!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         cacheStore = PersistenceController(directoryURL: cacheDir)
         journalDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -51,24 +52,18 @@ final class WakeResumeTests: XCTestCase {
         let history = LoanSettingsHistory(
             basal: [AbsoluteScheduleValue(startDate: now.addingTimeInterval(-.hours(24)), endDate: now, value: 0.8)],
             sensitivity: [], carbRatio: [], targetRange: [])
-        let nightscout = SharedDeviceConfiguration(managerIdentifier: "NightscoutService", asOf: now,
-                                                   state: ["siteURL": "https://fixture-site.example", "apiSecret": "fixture-secret"])
         saveState {
             $0.grantedSettings = .init(therapySettingsRaw: raw, supplementRaw: supplement,
-                                       supportsInterimHandback: true, supportsOverrideRecords: true,
-                                       settingsHistory: history,
-                                       serviceConfigurations: [nightscout.propertyList!],
-                                       phoneCGMUploadsGlucose: false)
+                                       settingsHistory: history)
         }
     }
 
-    override func tearDown() {
-        LoanRemoteUploads.shared.end()
+    override func tearDown() async throws {
         cacheStore = nil
         cacheDir = nil
         journalDir = nil
         defaults = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     private func makeController() async -> PodLoanWatchController {
@@ -105,10 +100,10 @@ final class WakeResumeTests: XCTestCase {
         let c = await makeController()
         // The ask before looping answers at once here (no phone); every other timer runs for real.
         c.scheduler = { [weak c] delay, label, work in
-            if label == "resume-ask" { work.perform() } else { c?.queue.asyncAfter(deadline: .now() + delay, execute: work) }
+            if label == "resume-ask" { work.perform() } else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) }
         }
         c.resumeIfNeeded()   // what the session does once the hooks are wired
-        c.queue.sync { }     // the resume is built on the queue; wait for it
+        await c.onMain { }     // the resume is built on main; wait for it
         return c
     }
 
@@ -141,8 +136,8 @@ final class WakeResumeTests: XCTestCase {
     /// memory only, the relaunched watch could take a pod the phone had already asked back.
     func testARecordedRevokeSurvivesARelaunch() async throws {
         let c = await makeController()
-        c.handleIncoming(userInfo: try LoanMessage.revoke(Revoke(epoch: 8)).transportDictionary(), channel: .urgent)
-        c.queue.sync { }
+        c.handleIncoming(userInfo: try LoanMessage.revoke(Revoke(epoch: 8)).transportDictionary())
+        await c.onMain { }
 
         let relaunched = await makeController()
         var failures: [String] = []
@@ -150,9 +145,9 @@ final class WakeResumeTests: XCTestCase {
             if case .takeoverFailed(let f)? = try? LoanMessage.decode(fromTransport: dict) { failures.append(f.reason) }
         }
         let grant = LoanGrant(epoch: 8, expiresAt: Date().addingTimeInterval(300), pumpConfiguration: Data([1, 2, 3]),
-                              podAddress: 0, therapySettingsRaw: Data([4, 5]), settingsTimeZoneID: "GMT", doseHistory: [],
+                              therapySettingsRaw: Data([4, 5]), settingsTimeZoneID: "GMT", doseHistory: [],
                               therapySettingsSupplementRaw: nil)
-        relaunched.queue.sync { relaunched.handleGrant(grant) }
+        await relaunched.onMain { relaunched.handleGrant(grant) }
         XCTAssertEqual(failures.count, 1)
         XCTAssertTrue(failures.first?.contains("last revoke") == true, "refused for the revoke, got: \(failures)")
     }
@@ -165,15 +160,15 @@ final class WakeResumeTests: XCTestCase {
         c.send = { dict in
             if case .handbackOffer? = try? LoanMessage.decode(fromTransport: dict) { offers += 1 }
         }
-        c.handleIncoming(userInfo: try LoanMessage.revoke(Revoke(epoch: 7)).transportDictionary(), channel: .urgent)
-        c.queue.sync { }
-        c.queue.sync { }
+        c.handleIncoming(userInfo: try LoanMessage.revoke(Revoke(epoch: 7)).transportDictionary())
+        await c.onMain { }
+        await c.onMain { }
         XCTAssertEqual(c.phase, .revoked)
         XCTAssertEqual(offers, 1, "the stop is answered with the final offer")
 
-        c.handleIncoming(userInfo: try LoanMessage.revoke(Revoke(epoch: 7)).transportDictionary(), channel: .queued)
-        c.queue.sync { }
-        c.queue.sync { }
+        c.handleIncoming(userInfo: try LoanMessage.revoke(Revoke(epoch: 7)).transportDictionary())
+        await c.onMain { }
+        await c.onMain { }
         XCTAssertEqual(c.phase, .revoked)
         XCTAssertEqual(offers, 1, "the queued copy is dropped")
     }
@@ -184,12 +179,10 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertEqual(c.epoch, 7, "the loan's epoch carries over unchanged")
         XCTAssertNotNil(c.pumpManager, "the pump manager is rebuilt from the saved state")
         XCTAssertNotNil(c.loopManager.pumpManager, "and handed to the loop, so dosing can resume")
-        XCTAssertTrue(c.isLoanActiveNonBlocking,
-                      "the main-safe mirror is set — init loads the phase without its didSet (else: onboarding screen + blank IOB)")
+        XCTAssertTrue(c.isLoanActive,
+                      "live from launch — init loads the phase without its didSet (else: onboarding screen + blank IOB)")
         XCTAssertNotNil(c.loopManager.settings.basalRateSchedule,
                         "the granted therapy settings came back from disk (else: blank IOB, no schedule)")
-        XCTAssertTrue(c.phoneSupportsInterimHandback,
-                      "the phone's hand-back capability comes back with the grant payload (else: a resumed loan hands back single-phase)")
         XCTAssertNotNil(c.pumpStateStore.wrappedValue,
                         "the saved state stays on disk — the next relaunch resumes the same way")
     }
@@ -258,15 +251,18 @@ final class WakeResumeTests: XCTestCase {
         var sent: [[String: Any]] = []
         c.send = { sent.append($0) }
         c.beginHandback()
-        c.queue.sync { }
+        await c.onMain { }
         XCTAssertEqual(sent.count, 1, "the offer went out, whatever the reachability flag says")
-        XCTAssertTrue(c.debugSnapshot().handbackPending, "and the End waits for an answer")
+        let snapshot1 = await c.fencedSnapshot()
+        XCTAssertTrue(snapshot1.handbackPending, "and the End waits for an answer")
 
-        c.queue.sync { answerWait?.perform() }
+        await c.onMain { answerWait?.perform() }
         XCTAssertEqual(c.phase, .active, "silence: the loan continues")
         XCTAssertNotNil(c.pumpManager, "the watch still holds the pod")
-        XCTAssertFalse(c.debugSnapshot().handbackPending)
-        XCTAssertTrue(c.debugSnapshot().handbackFailureText?.contains("open the loop") == true,
+        let snapshot2 = await c.fencedSnapshot()
+        XCTAssertFalse(snapshot2.handbackPending)
+        let snapshot3 = await c.fencedSnapshot()
+        XCTAssertTrue(snapshot3.handbackFailureText?.contains("open the loop") == true,
                       "on screen: why, and how to stop dosing instead")
     }
 
@@ -276,11 +272,12 @@ final class WakeResumeTests: XCTestCase {
         c.scheduler = { _, label, work in if label == "handback-answer" { answerWait = work } }
         c.send = { _ in }
         c.beginHandback()
-        c.queue.sync { }
-        c.handleIncoming(userInfo: try LoanMessage.handbackAck(HandbackAck(epoch: 7, committedCursor: 0)).transportDictionary(), channel: .queued)
-        c.queue.sync { }
-        c.queue.sync { answerWait?.perform() }
-        XCTAssertNil(c.debugSnapshot().handbackFailureText, "the phone answered: not refused")
+        await c.onMain { }
+        c.handleIncoming(userInfo: try LoanMessage.handbackAck(HandbackAck(epoch: 7, committedCursor: 0)).transportDictionary())
+        await c.onMain { }
+        await c.onMain { answerWait?.perform() }
+        let snapshot4 = await c.fencedSnapshot()
+        XCTAssertNil(snapshot4.handbackFailureText, "the phone answered: not refused")
     }
 
     func testEveryHandbackOfferGoesWhateverReachabilitySays() async {
@@ -293,13 +290,14 @@ final class WakeResumeTests: XCTestCase {
         var sent: [[String: Any]] = []
         c.send = { sent.append($0) }
         c.beginHandback()
-        c.queue.sync { }
+        await c.onMain { }
         XCTAssertEqual(sent.count, 1)
 
         c.isPhoneReachable = { false }
-        c.queue.sync { timers.last { $0.label == "handback-resend" }?.work.perform() }
+        await c.onMain { timers.last { $0.label == "handback-resend" }?.work.perform() }
         XCTAssertEqual(sent.count, 2, "the resend went, queued")
-        XCTAssertTrue(c.debugSnapshot().handbackPending)
+        let snapshot5 = await c.fencedSnapshot()
+        XCTAssertTrue(snapshot5.handbackPending)
     }
 
     /// The answer to a query says whether the watch can reach the pod and when its loan started
@@ -312,8 +310,8 @@ final class WakeResumeTests: XCTestCase {
         c.send = { dict in
             if let m = try? LoanMessage.decode(fromTransport: dict), case .statusReport(let r) = m { reports.append(r) }
         }
-        c.handleIncoming(userInfo: try LoanMessage.statusQuery(StatusQuery(epoch: 7)).transportDictionary(), channel: .queued)
-        c.queue.sync { }
+        c.handleIncoming(userInfo: try LoanMessage.statusQuery(StatusQuery(epoch: 7)).transportDictionary())
+        await c.onMain { }
         let report = try XCTUnwrap(reports.last)
         XCTAssertTrue(report.holdsPod)
         XCTAssertEqual(report.loanStartedAt?.timeIntervalSince1970 ?? 0, started.timeIntervalSince1970, accuracy: 1)
@@ -328,15 +326,17 @@ final class WakeResumeTests: XCTestCase {
         var sent = 0
         c.send = { _ in sent += 1 }
         c.beginHandback()
-        c.queue.sync { }
+        await c.onMain { }
         XCTAssertEqual(sent, 1, "the interim offer went out")
         let reason = "The watch is still looping. To end, turn on iPhone Bluetooth and tap End again."
-        c.handleIncoming(userInfo: try LoanMessage.denied(LoanDenied(reason: reason)).transportDictionary(), channel: .urgent)
-        c.queue.sync { }
+        c.handleIncoming(userInfo: try LoanMessage.denied(LoanDenied(reason: reason)).transportDictionary())
+        await c.onMain { }
         XCTAssertEqual(c.phase, .active, "the loan continues")
         XCTAssertNotNil(c.pumpManager, "the watch still holds the pod")
-        XCTAssertEqual(c.debugSnapshot().handbackFailureText, reason, "the glance shows the phone's own reason")
-        XCTAssertFalse(c.debugSnapshot().handbackPending, "End is over — tap again once Bluetooth is back")
+        let snapshot6 = await c.fencedSnapshot()
+        XCTAssertEqual(snapshot6.handbackFailureText, reason, "the glance shows the phone's own reason")
+        let snapshot7 = await c.fencedSnapshot()
+        XCTAssertFalse(snapshot7.handbackPending, "End is over — tap again once Bluetooth is back")
     }
 
     func testResumeRestoresEverythingALoanHadInstalled() async {
@@ -348,25 +348,47 @@ final class WakeResumeTests: XCTestCase {
         let override = halfNeeds(start: Date().addingTimeInterval(-.minutes(10)), duration: .indefinite)
         live.loopManager.applyWristOverride(override)
         saveState { $0.deliveredAtTakeover = 12.5 }
-        LoanRemoteUploads.shared.end()
 
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         XCTAssertNotNil(c.loopManager.settings.basalRateSchedule, "therapy settings")
         XCTAssertEqual(c.loopManager.settingsProvider.history?.basal.first?.value, 0.8,
                        "the phone's settings history — else the resumed loan projects today's settings back")
-        XCTAssertTrue(c.loopManager.closedLoopEnabledNonBlocking, "closed-loop mode — else a resumed loan comes back OPEN")
-        XCTAssertTrue(c.loopManager.isIntegralRetrospectiveCorrectionEnabled, "retrospective-correction mode")
-        XCTAssertTrue(c.loopManager.isGlucoseBasedApplicationFactorEnabled, "application-factor mode")
-        XCTAssertTrue(c.loopManager.isGuardAndRunwayEnabled, "guard + runway")
-        XCTAssertEqual(c.loopManager.loanVolatilityBaseline, 4.2, "the phone's volatility baseline for guard + runway")
-        XCTAssertTrue(c.phoneSupportsInterimHandback, "the phone's interim hand-back capability")
-        XCTAssertTrue(c.phoneSupportsOverrideRecords, "the phone's override-records capability")
+        await c.loopManager.laneSettled()
+        XCTAssertTrue(c.loopManager.closedLoopEnabled, "closed-loop mode — else a resumed loan comes back OPEN")
+        XCTAssertTrue(c.loopManager.integralRetrospectiveCorrectionEnabled, "retrospective-correction mode")
+        XCTAssertTrue(c.loopManager.glucoseBasedApplicationFactorEnabled, "application-factor mode")
+        XCTAssertTrue(c.loopManager.guardAndRunwayEnabled, "guard + runway")
+        XCTAssertEqual(c.loopManager.volatilityBaseline, 4.2, "the phone's volatility baseline for guard + runway")
         XCTAssertEqual(c.deliveredAtTakeover, 12.5, "the delivery baseline — else the hand-back audit reads delivered=n/a")
         XCTAssertEqual(c.loopManager.scheduleOverride?.syncIdentifier, override.syncIdentifier,
                        "the active override — else the resumed loan doses unscaled")
-        XCTAssertTrue(c.isLoanActiveNonBlocking, "the live-loan mirror")
-        XCTAssertTrue(LoanRemoteUploads.shared.holdsServiceConfigurations, "the upload services — else the resumed loan uploads nothing")
-        XCTAssertFalse(LoanRemoteUploads.shared.shouldSyncGlucoseToRemoteService, "the phone's glucose-upload answer")
+        XCTAssertTrue(c.isLoanActive, "the loan is live")
+    }
+
+    /// A loan resumed after a relaunch is live from launch, with no change of phase to announce it: the
+    /// screens are handed the restored override all the same.
+    func testAResumedLoanHandsItsOverrideToTheScreens() async {
+        let live = await makeController()
+        let override = halfNeeds(start: Date().addingTimeInterval(-.minutes(10)), duration: .indefinite)
+        live.loopManager.applyWristOverride(override)
+
+        persistGrantedSettings()
+        saveState {
+            $0.phase = .active
+            $0.epoch = 7
+        }
+        savePumpState(readablePumpState)
+        let c = await makeController()
+        var published: [TemporaryScheduleOverride??] = []
+        c.publishOverride = { published.append($0) }
+        c.scheduler = { [weak c] delay, label, work in
+            if label == "resume-ask" { work.perform() } else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) }
+        }
+        c.resumeIfNeeded()
+        await c.onMain { }
+
+        guard case .some(let shown)? = published.last else { return XCTFail("nothing handed to the screens") }
+        XCTAssertEqual(shown?.syncIdentifier, override.syncIdentifier, "the screens show the override the resumed loan doses with")
     }
 
     /// The whole history comes back, not only the active override: one that ended before the
@@ -397,7 +419,7 @@ final class WakeResumeTests: XCTestCase {
         live.loopManager.setClosedLoopEnabled(true, reason: "test")
         live.loopManager.resetClosedLoopForSessionEnd()
         let next = await makeController()
-        XCTAssertFalse(next.loopManager.closedLoopEnabledNonBlocking, "loop mode is per loan: the next launch starts open")
+        XCTAssertFalse(next.loopManager.closedLoopEnabled, "loop mode is per loan: the next launch starts open")
     }
 
     // MARK: insulin the records cannot explain
@@ -475,16 +497,16 @@ final class WakeResumeTests: XCTestCase {
         var ask: DispatchWorkItem?
         c.scheduler = { _, label, work in if label == "resume-ask" { ask = work } }
         c.resumeIfNeeded()
-        c.queue.sync { }
+        await c.onMain { }
         XCTAssertEqual(reports, [7], "the phone is asked at once")
         XCTAssertNil(c.loopManager.pumpManager, "and the loop does not have the pod while the question is out")
         XCTAssertNil(c.pumpManager, "nor is there a pump manager to reach the pod")
-        XCTAssertTrue(c.isResumingNonBlocking, "the glance says it is checking with the phone")
+        XCTAssertTrue(c.isResuming, "the glance says it is checking with the phone")
 
-        c.handleIncoming(userInfo: try LoanMessage.revoke(Revoke(epoch: 7)).transportDictionary(), channel: .queued)
-        c.queue.sync { }
-        XCTAssertFalse(c.isResumingNonBlocking, "the phone's stop ends the check")
-        c.queue.sync { ask?.perform() }
+        c.handleIncoming(userInfo: try LoanMessage.revoke(Revoke(epoch: 7)).transportDictionary())
+        await c.onMain { }
+        XCTAssertFalse(c.isResuming, "the phone's stop ends the check")
+        await c.onMain { ask?.perform() }
         XCTAssertNil(c.loopManager.pumpManager, "the phone holds the pod: this watch stood aside, no cycle ran")
         XCTAssertNotEqual(c.phase, .active)
     }
@@ -505,13 +527,13 @@ final class WakeResumeTests: XCTestCase {
         var asks = 0
         c.scheduler = { _, label, _ in if label == "resume-ask" { asks += 1 } }
         c.resumeIfNeeded()
-        c.queue.sync { }
+        await c.onMain { }
         XCTAssertEqual(reports, 0, "nothing sent before the link has started")
         XCTAssertEqual(asks, 0, "and no wait for an answer started")
 
         linkUp = true
         c.linkDidActivate()
-        c.queue.sync { }
+        await c.onMain { }
         XCTAssertEqual(reports, 1, "asked once the link is up")
         XCTAssertEqual(asks, 1, "and the wait starts then")
         XCTAssertNil(c.loopManager.pumpManager)
@@ -526,13 +548,13 @@ final class WakeResumeTests: XCTestCase {
         var ask: DispatchWorkItem?
         c.scheduler = { _, label, work in if label == "resume-ask" { ask = work } }
         c.resumeIfNeeded()
-        c.queue.sync { }
+        await c.onMain { }
         XCTAssertNil(c.loopManager.pumpManager)
-        XCTAssertTrue(c.isResumingNonBlocking, "checking with the phone")
-        c.queue.sync { ask?.perform() }
+        XCTAssertTrue(c.isResuming, "checking with the phone")
+        await c.onMain { ask?.perform() }
         XCTAssertNotNil(c.loopManager.pumpManager, "silence: the loop has the pod")
         XCTAssertEqual(c.phase, .active)
-        XCTAssertFalse(c.isResumingNonBlocking, "and the check is over")
+        XCTAssertFalse(c.isResuming, "and the check is over")
     }
 
     func testAfterARelaunchNothingDosesBeforeThePodReports() async {
@@ -553,7 +575,7 @@ final class WakeResumeTests: XCTestCase {
         savePumpState(readablePumpState)
         let c = await makeController()
         c.resumeIfNeeded()
-        c.queue.sync { }
+        await c.onMain { }
         XCTAssertEqual(c.persisted.ledgerLast?.units, 10.0, "the window survives the relaunch")
         await c.checkOwnPumpTotal(reading: (units: 13.0, at: Date()), pulseUnits: 0.05, insulinType: nil)   // 20 min of basal is about 0.33 U; the rest nobody recorded
         let estimate = await booked(in: c, since: before)
@@ -591,7 +613,8 @@ final class WakeResumeTests: XCTestCase {
             c.loopManager.updateDisplayState { done.resume(returning: $0.activeInsulin?.value) }
         }
         XCTAssertEqual(iob ?? 0, 6.0, accuracy: 0.5, "six units, a minute old, are all still on board")
-        XCTAssertNotNil(c.debugSnapshot().startNoteText, "and the wrist says so")
+        let snapshot8 = await c.fencedSnapshot()
+        XCTAssertNotNil(snapshot8.startNoteText, "and the wrist says so")
         XCTAssertEqual(c.persisted.ledgerLast?.units, 16.2, "the reading starts the next window")
     }
 
@@ -606,13 +629,13 @@ final class WakeResumeTests: XCTestCase {
         }
         savePumpState(readablePumpState)
         let c = await makeController()
-        XCTAssertTrue(c.isLoanActiveNonBlocking, "live from the moment the saved session is found")
-        XCTAssertTrue(c.isResumingNonBlocking, "and known to be rebuilding — what the glance shows instead of nothing")
+        XCTAssertTrue(c.isLoanActive, "live from the moment the saved session is found")
+        XCTAssertTrue(c.isResuming, "and known to be rebuilding — what the glance shows instead of nothing")
 
         c.resumeIfNeeded()
-        c.queue.sync { }
-        XCTAssertTrue(c.isResumingNonBlocking, "restored, and still checking with the phone before looping")
-        XCTAssertTrue(c.isLoanActiveNonBlocking)
+        await c.onMain { }
+        XCTAssertTrue(c.isResuming, "restored, and still checking with the phone before looping")
+        XCTAssertTrue(c.isLoanActive)
         XCTAssertNil(c.pumpManager, "the pump manager, which reaches the pod by itself, waits for the check")
     }
 
@@ -624,10 +647,10 @@ final class WakeResumeTests: XCTestCase {
         savePumpState(readablePumpState)
         let c = await makeController()          // no granted settings on disk: the rebuild must fail
         c.resumeIfNeeded()
-        c.queue.sync { }
-        XCTAssertFalse(c.isResumingNonBlocking)
-        XCTAssertFalse(c.isLoanActiveNonBlocking, "a session that could not be rebuilt is not live")
-        XCTAssertTrue(c.wristOwnsAlarmsNonBlocking, "the phone still leaves the alarms here until the records land")
+        await c.onMain { }
+        XCTAssertFalse(c.isResuming)
+        XCTAssertFalse(c.isLoanActive, "a session that could not be rebuilt is not live")
+        XCTAssertTrue(c.wristOwnsAlarms, "the phone still leaves the alarms here until the records land")
     }
 
     // MARK: the hold
@@ -641,7 +664,7 @@ final class WakeResumeTests: XCTestCase {
         c.send = { sent.append($0) }
         let before = Date()
         c.renewHold()
-        c.queue.sync { }
+        await c.onMain { }
         XCTAssertEqual(sent.count, 1, "one renewal")
         let dictionary = try XCTUnwrap(sent.first)
         XCTAssertNil(dictionary["urgentOnly"], "an empty renewal goes like any other, queued if need be")
@@ -659,7 +682,7 @@ final class WakeResumeTests: XCTestCase {
         var sent = 0
         c.send = { _ in sent += 1 }
         c.renewHold()
-        c.queue.sync { }
+        await c.onMain { }
         XCTAssertEqual(sent, 0, "no loan, no hold")
     }
 
@@ -670,14 +693,14 @@ final class WakeResumeTests: XCTestCase {
         var sent: [[String: Any]] = []
         c.send = { sent.append($0) }
         c.beginHandback()
-        c.queue.sync { }
-        c.handleIncoming(userInfo: try LoanMessage.handbackAck(HandbackAck(epoch: 7, committedCursor: 0)).transportDictionary(), channel: .urgent)
-        // The ack finalizes: dosing stops on the loop's queue, then the final offer goes from the loan's.
-        c.queue.sync { }; c.loopManager.dataAccessQueue.sync { }; c.queue.sync { }; c.queue.sync { }
+        await c.onMain { }
+        c.handleIncoming(userInfo: try LoanMessage.handbackAck(HandbackAck(epoch: 7, committedCursor: 0)).transportDictionary())
+        // The ack finalizes: dosing stops on the loop's lane, then the final offer goes out.
+        await c.onMain { }; await c.loopManager.laneSettled(); await c.onMain { }; await c.onMain { }
         XCTAssertEqual(c.phase, .handingBack, "released: the final offer is out")
         XCTAssertNil(c.loopManager.pumpManager, "and dosing has stopped")
 
-        c.queue.sync { c.handbackTimedOut() }
+        await c.onMain { c.handbackTimedOut() }
 
         XCTAssertNotEqual(c.phase, .active, "released means released")
         XCTAssertEqual(c.phase, .recoveredDrain, "drain-only: the offer itself is the news")
@@ -693,7 +716,7 @@ final class WakeResumeTests: XCTestCase {
     func testTeardownClearsSavedState() async {
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         XCTAssertNotNil(c.pumpManager)
-        c.queue.sync { c.teardownPump() }
+        await c.onMain { c.teardownPump() }
         XCTAssertNil(c.pumpManager)
         XCTAssertNil(c.pumpStateStore.wrappedValue,
                      "no pod held, nothing to resume — a relaunch now sees an ordinary closed loan")

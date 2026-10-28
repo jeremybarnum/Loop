@@ -15,22 +15,6 @@ import WidgetKit
 import LoopAlgorithm
 
 
-protocol DeliveryDelegate: AnyObject {
-    var isSuspended: Bool { get }
-    var isManualTempBasalRunning: Bool { get }
-    var pumpInsulinType: InsulinType? { get }
-    var basalDeliveryState: PumpManagerStatus.BasalDeliveryState? { get }
-    var isPumpConfigured: Bool { get }
-    var pumpManagerStatus: PumpManagerStatus? { get }
-    var pumpStatusHighlight: DeviceStatusHighlight? { get }
-    var cgmManagerStatus: CGMManagerStatus? { get }
-
-    func enact(bolus: Double?, tempBasal: TempBasalRecommendation?, decisionId: UUID?) async throws
-    func enactBolus(units: Double, decisionId: UUID?, activationType: BolusActivationType) async throws
-    func roundBasalRate(unitsPerHour: Double) -> Double
-    func roundBolusVolume(units: Double) -> Double
-}
-
 protocol DosingManagerDelegate {
     func didMakeDosingDecision(_ decision: StoredDosingDecision)
 }
@@ -99,6 +83,11 @@ final class LoopDataManager: ObservableObject {
 
     private var now: Date { TestingDate.currentTestingDate() }
 
+    /// The dosing loop both apps run (`LoopCycle.swift`); this manager is its host on the phone.
+    private(set) lazy var cycle = LoopCycle(doseStore: doseStore, carbStore: carbStore, glucoseStore: glucoseStore,
+                                            dosingDecisionStore: dosingDecisionStore, settingsProvider: settingsProvider,
+                                            host: self, now: { TestingDate.currentTestingDate() })
+
     // References to registered notification center observers
     private var notificationObservers: [Any] = []
     private var overrideIntentObserver: NSKeyValueObservation? = nil
@@ -124,7 +113,6 @@ final class LoopDataManager: ObservableObject {
 
     var carbAbsorptionModel: CarbAbsorptionModel
 
-    private var lastManualBolusRecommendation: ManualBolusRecommendation?
 
     private(set) var volatilityBaseline: (value: Double?, date: Date)?
 
@@ -325,28 +313,11 @@ final class LoopDataManager: ObservableObject {
         ensureDosingCoverageStart: Date? = nil,
         projectOngoingDoses: Bool = false
     ) async throws -> StoredDataAlgorithmInput {
-        let experiments = enabledAlgorithmExperiments
-        let volatilityBaseline = experiments.contains(.guardAndRunway) ? await currentVolatilityBaseline(at: baseTime ?? now) : nil
-        return try await StoredDataAlgorithmInput.fetch(
-            for: baseTime,
-            presumePresetEndingNow: presumePresetEndingNow,
-            ensureDosingCoverageStart: ensureDosingCoverageStart,
-            projectOngoingDoses: projectOngoingDoses,
-            now: now,
-            doseStore: doseStore,
-            carbStore: carbStore,
-            glucoseStore: glucoseStore,
-            settingsProvider: settingsProvider,
-            overrideHistory: temporaryPresetsManager.presetHistory,
-            activeOverride: temporaryPresetsManager.activeOverride,
-            pumpInsulinType: deliveryDelegate?.pumpInsulinType,
-            insulinModel: insulinModel(for:),
-            experiments: experiments,
-            volatilityBaseline: volatilityBaseline,
-            carbAbsorptionModel: carbAbsorptionModel)
+        try await cycle.fetchData(for: baseTime, presumePresetEndingNow: presumePresetEndingNow,
+                                  ensureDosingCoverageStart: ensureDosingCoverageStart, projectOngoingDoses: projectOngoingDoses)
     }
 
-    private var enabledAlgorithmExperiments: Set<ExperimentOption> {
+    var enabledAlgorithmExperiments: Set<ExperimentOption> {
         var experiments: Set<ExperimentOption> = []
         if UserDefaults.standard.integralRetrospectiveCorrectionEnabled {
             experiments.insert(.integralRetrospectiveCorrection)
@@ -367,14 +338,9 @@ final class LoopDataManager: ObservableObject {
 
     func updateDisplayState(forceStoreRemoteRecommendation: Bool = false) async {
 
-        var newState = AlgorithmDisplayState()
-        do {
+        let newState = await cycle.displayState()
+        if let input = newState.input {
             let lastManualBolusVisibilityWindowStartDate = now.addingTimeInterval(.days(-1))
-
-            var input = try await fetchData(for: now, ensureDosingCoverageStart: lastManualBolusVisibilityWindowStartDate, projectOngoingDoses: true)
-            input.recommendationType = .manualBolus
-            newState.input = input
-            newState.output = await runAlgorithm(input: input)
 
             let lastStoredManualBolus = input.doses.last(
                 where: {
@@ -396,9 +362,6 @@ final class LoopDataManager: ObservableObject {
             } else if let lastManualBolus = self.lastManualBolus, lastManualBolus.startDate < recentlyEnactedCutoff {
                 self.lastManualBolus = nil
             }
-        } catch {
-            let loopError = error as? LoopError ?? .unknownError(error)
-            logger.error("Error updating Loop state: %{public}@", String(describing: loopError))
         }
         displayState = newState
         publishedMostRecentGlucoseDataDate = glucoseStore.latestGlucose?.startDate
@@ -415,45 +378,25 @@ final class LoopDataManager: ObservableObject {
         await updateRemoteRecommendation(force: forceStoreRemoteRecommendation)
     }
 
-    private nonisolated func runAlgorithm(input: StoredDataAlgorithmInput) async -> AlgorithmOutput<StoredCarbEntry> {
-        LoopAlgorithm.run(input: input)
-    }
-
     /// True while the pod is loaned out, or until a force reclaim's audit rules; injected at wiring — see `LoopDataManager+PodLoan.swift`.
     var isPumpConnectionReleased: () -> Bool = { false }
 
     /// Cancel the active temp basal if it was automatically issued
     func cancelActiveTempBasal(for reason: CancelActiveTempBasalReason) async throws {
-        guard case .tempBasal(let dose) = deliveryDelegate?.basalDeliveryState, (dose.automatic ?? true) else { return }
-
-        // Never command a pod lent to the watch; the boundary cancel runs after reclaim.
-        guard !isPumpConnectionReleased() else {
-            logger.default("Temp-basal cancel SKIPPED (%{public}@) — pod connection is released (loaned out); the watch owns the program until reclaim", String(describing: reason))
-            return
-        }
-
-        logger.default("Cancelling active temp basal for reason: %{public}@", String(describing: reason))
-
-        let recommendation = AutomaticDoseRecommendation(basalAdjustment: .cancel, direction: .decrease)
-
-        var dosingDecision = StoredDosingDecision(reason: reason.rawValue)
-        dosingDecision.settings = StoredDosingDecision.Settings(settingsProvider.settings)
-        dosingDecision.automaticDoseRecommendation = recommendation
-
+        let cancelled: Bool
         do {
-            crashRecoveryManager.dosingStarted(dose: recommendation)
-            try await deliveryDelegate?.enact(bolus: recommendation.bolusUnits, tempBasal: recommendation.basalAdjustment, decisionId: dosingDecision.id)
-            self.crashRecoveryManager.dosingFinished()
+            cancelled = try await cycle.cancelActiveTempBasal(
+                for: reason,
+                dosingStarted: { self.crashRecoveryManager.dosingStarted(dose: $0) },
+                dosingFinished: { self.crashRecoveryManager.dosingFinished() })
         } catch {
-            dosingDecision.appendError(error as? LoopError ?? .unknownError(error))
             if reason == .maximumBasalRateChanged {
                 throw CancelTempBasalFailedMaximumBasalRateChangedError(reason: error)
             } else {
                 throw error
             }
         }
-
-        await dosingDecisionStore.storeDosingDecision(dosingDecision)
+        guard cancelled else { return }
 
         // DIY: refresh post-dose forecast and persist an "updateRemoteRecommendation"
         // decision so Nightscout sees the post-cancel state.
@@ -463,125 +406,21 @@ final class LoopDataManager: ObservableObject {
     func loop() async {
         let loopBaseTime = now
 
-        var dosingDecision = StoredDosingDecision(
-            date: loopBaseTime,
-            reason: "loop",
-            settings: StoredDosingDecision.Settings(settingsProvider.settings)
-        )
+        logger.debug("Running Loop at %{public}@", String(describing: loopBaseTime))
+        NotificationCenter.default.post(name: .LoopRunning, object: self)
 
-        do {
-            guard let deliveryDelegate else {
-                preconditionFailure("Unable to dose without dosing delegate.")
-            }
+        let outcome = await cycle.run(at: loopBaseTime)
 
-            logger.debug("Running Loop at %{public}@", String(describing: loopBaseTime))
-            NotificationCenter.default.post(name: .LoopRunning, object: self)
-
-            var input = try await fetchData(for: loopBaseTime)
-
-            // Trim future basal
-            input.doses =  input.doses.trimmed(to: loopBaseTime)
-
-            var dosingStrategy: AutomaticDosingStrategy = .automaticBolus
-
-            if dosingStrategySelectionEnabled {
-                dosingStrategy = settingsProvider.settings.automaticDosingStrategy
-            }
-            input.recommendationType = dosingStrategy.recommendationType
-            dosingDecision.algorithmExperiments = algorithmExperiments(for: dosingStrategy)
-
-            try input.checkRecency(at: loopBaseTime, lastAddedPumpData: doseStore.lastAddedPumpData)
-
-            var output = LoopAlgorithm.run(input: input)
-            dosingDecision.algorithmExperiments = algorithmExperiments(for: dosingStrategy, guardAndRunway: output.guardAndRunway)
-
-            switch output.recommendationResult {
-            case .success(let recommendation):
-                // Round delivery amounts to pump supported amounts,
-                // And determine if a change in dosing should be made.
-
-                let algoRecommendation = recommendation.automatic!
-                logger.default("Algorithm recommendation: %{public}@", String(describing: algoRecommendation))
-
-                var recommendationToEnact = algoRecommendation
-                // Round bolus recommendation based on pump bolus precision
-                if let bolus = algoRecommendation.bolusUnits, bolus > 0 {
-                    recommendationToEnact.bolusUnits = deliveryDelegate.roundBolusVolume(units: bolus)
-                }
-
-                var basal = algoRecommendation.basalAdjustment
-                
-                basal.unitsPerHour = deliveryDelegate.roundBasalRate(unitsPerHour: basal.unitsPerHour)
-
-                let scheduledBasalRate = input.basal.closestPrior(to: loopBaseTime)!.value
-                let activeOverride = temporaryPresetsManager.presetHistory.activeOverride(at: loopBaseTime)
-
-                let basalAdjustment = basal.adjustForCurrentDelivery(
-                    at: loopBaseTime,
-                    neutralBasalRate: scheduledBasalRate,
-                    currentTempBasal: deliveryDelegate.basalDeliveryState?.currentTempBasal,
-                    continuationInterval: .minutes(11),
-                    neutralBasalRateMatchesPump: activeOverride == nil
-                )
-                
-                if let basalAdjustment {
-                    recommendationToEnact.basalAdjustment = basalAdjustment
-                }
-                
-                output.recommendationResult = .success(.init(automatic: recommendationToEnact))
-
-                if recommendationToEnact != algoRecommendation {
-                    logger.default("Recommendation changed to: %{public}@", String(describing: recommendationToEnact))
-                }
-
-                dosingDecision.updateFrom(input: input, output: output)
-
-                // While the pod is lent, compute but never enact; dosingEnabled is untouched.
-                if self.settingsProvider.dosingEnabled, !isPumpConnectionReleased() {
-                    if deliveryDelegate.basalDeliveryState == .pumpInoperable {
-                        throw LoopError.pumpInoperable
-                    }
-
-                    if deliveryDelegate.isSuspended {
-                        throw LoopError.pumpSuspended
-                    }
-
-                    if deliveryDelegate.isManualTempBasalRunning {
-                        throw LoopError.manualTempBasalRunning
-                    }
-
-                    logger.default("Enacting: %{public}@", String(describing: recommendationToEnact))
-
-                    try await deliveryDelegate.enact(bolus: recommendationToEnact.bolusUnits, tempBasal: basalAdjustment, decisionId: dosingDecision.id)
-
-                    logger.default("loop() completed successfully.")
-                    lastLoopCompleted = now
-                    let duration = lastLoopCompleted!.timeIntervalSince(loopBaseTime)
-                    
-                    dosingDecision.enactedTempBasal = basalAdjustment
-                    dosingDecision.enactedBolusAmount = recommendationToEnact.bolusUnits
-
-                    analyticsServicesManager?.loopDidSucceed(duration)
-                } else {
-                    self.logger.default("Not adjusting dosing during open loop.")
-                }
-
-                // While the pod is lent the watch stores this cycle's decisions; the phone stores none.
-                if !isPumpConnectionReleased() { await dosingDecisionStore.storeDosingDecision(dosingDecision) }
-                NotificationCenter.default.post(name: .LoopCycleCompleted, object: self)
-
-            case .failure(let error):
-                throw error
-            }
-        } catch {
-            logger.error("loop() did error: %{public}@", String(describing: error))
-            let loopError = error as? LoopError ?? .unknownError(error)
-            dosingDecision.appendError(loopError)
-            // While the pod is lent the watch stores this cycle's decisions; the phone stores none.
-            if !isPumpConnectionReleased() { await dosingDecisionStore.storeDosingDecision(dosingDecision) }
-            analyticsServicesManager?.loopDidError(error: loopError)
-            NotificationCenter.default.post(name: .LoopCycleCompleted, object: self)
+        if outcome.enacted {
+            logger.default("loop() completed successfully.")
+            lastLoopCompleted = now
+            let duration = lastLoopCompleted!.timeIntervalSince(loopBaseTime)
+            analyticsServicesManager?.loopDidSucceed(duration)
         }
+        if let loopError = outcome.error {
+            analyticsServicesManager?.loopDidError(error: loopError)
+        }
+        NotificationCenter.default.post(name: .LoopCycleCompleted, object: self)
 
         // DIY: refresh post-dose forecast and persist an "updateRemoteRecommendation"
         // decision (Nightscout's Loop pill + forecast source — paired with the just-stored
@@ -596,37 +435,8 @@ final class LoopDataManager: ObservableObject {
         carbEntryChange: CarbEntryChange? = nil,
         truncatingActiveOverride: Bool = false
     ) async throws -> ManualBolusRecommendation? {
-
-        var endingPremealOverride = false
-
-        if carbEntryChange != nil,
-            let activeOverride = temporaryPresetsManager.activeOverride,
-            activeOverride.context == .preMeal
-        {
-            endingPremealOverride = true
-        }
-
-        var input = try await self.fetchData(for: now, presumePresetEndingNow: truncatingActiveOverride || endingPremealOverride)
-            .addingGlucoseSample(sample: manualGlucoseSample?.asStoredGlucoseSample)
-            .removingCarbEntry(carbEntry: carbEntryChange?.originalEntry)
-            .addingCarbEntry(carbEntry: carbEntryChange?.asStoredCarbEntry)
-
-        input.includePositiveVelocityAndRC = usePositiveMomentumAndRCForManualBoluses
-        input.recommendationType = .manualBolus
-
-        let output = LoopAlgorithm.run(input: input)
-
-
-        switch output.recommendationResult {
-        case .success(let prediction):
-            guard var manualBolusRecommendation = prediction.manual else { return nil }
-            if let roundedAmount = deliveryDelegate?.roundBolusVolume(units: manualBolusRecommendation.amount) {
-                manualBolusRecommendation.amount = roundedAmount
-            }
-            return manualBolusRecommendation
-        case .failure(let error):
-            throw error
-        }
+        try await cycle.recommendManualBolus(manualGlucoseSample: manualGlucoseSample, carbEntryChange: carbEntryChange,
+                                             truncatingActiveOverride: truncatingActiveOverride)
     }
 
     public func totalDeliveredToday() async -> InsulinValue?
@@ -678,63 +488,9 @@ final class LoopDataManager: ObservableObject {
     }
 
     func updateRemoteRecommendation(force: Bool = false) async {
-        // While the pod is lent the watch stores these decisions; the phone stores none.
-        guard !isPumpConnectionReleased() else { return }
-
-        if lastManualBolusRecommendation == nil {
-            lastManualBolusRecommendation = displayState.output?.recommendation?.manual
-        }
-
-        let recommendationChanged = lastManualBolusRecommendation != displayState.output?.recommendation?.manual
-
-        // DIY: post-dose "updateRemoteRecommendation" decisions are also Nightscout's
-        // Loop pill + forecast source (NightscoutService pairs them with the cached "loop"
-        // decision). Force-store after every Loop cycle and temp basal cancel so NS stays
-        // current even when the manual bolus recommendation hasn't changed.
-        guard force || recommendationChanged else {
-            return
-        }
-
-        lastManualBolusRecommendation = displayState.output?.recommendation?.manual
-
-        if let output = displayState.output {
-            var dosingDecision = StoredDosingDecision(date: now, reason: "updateRemoteRecommendation")
-            dosingDecision.algorithmExperiments = algorithmExperiments(for: currentDosingStrategy, guardAndRunway: output.guardAndRunway)
-            dosingDecision.predictedGlucose = output.predictedGlucose
-            dosingDecision.insulinOnBoard = displayState.activeInsulin
-            dosingDecision.carbsOnBoard = displayState.activeCarbs
-            switch output.recommendationResult {
-            case .success(let recommendation):
-                dosingDecision.automaticDoseRecommendation = recommendation.automatic
-                if let recommendationDate = displayState.input?.predictionStart, let manualRec = recommendation.manual {
-                    dosingDecision.manualBolusRecommendation = ManualBolusRecommendationWithDate(recommendation: manualRec, date: recommendationDate)
-                }
-            case .failure(let error):
-                if let loopError = error as? LoopError {
-                    dosingDecision.errors.append(loopError.issue)
-                } else {
-                    dosingDecision.errors.append(.init(id: "error", details: ["description": error.localizedDescription]))
-                }
-            }
-
-            dosingDecision.controllerStatus = UIDevice.current.controllerStatus
-
-            // Device status for the Nightscout devicestatus.pump payload.
-            dosingDecision.pumpManagerStatus = deliveryDelegate?.pumpManagerStatus
-            if let pumpStatusHighlight = deliveryDelegate?.pumpStatusHighlight {
-                dosingDecision.pumpStatusHighlight = StoredDosingDecision.StoredDeviceHighlight(
-                    localizedMessage: pumpStatusHighlight.localizedMessage,
-                    imageName: pumpStatusHighlight.imageName,
-                    state: pumpStatusHighlight.state)
-            }
-            dosingDecision.cgmManagerStatus = deliveryDelegate?.cgmManagerStatus
-            dosingDecision.lastReservoirValue = StoredDosingDecision.LastReservoirValue(doseStore.lastReservoirValue)
-
-            self.logger.debug("Manual bolus rec = %{public}@", String(describing: dosingDecision.manualBolusRecommendation))
-            await self.dosingDecisionStore.storeDosingDecision(dosingDecision)
-        }
+        await cycle.storeRemoteRecommendation(displayState: displayState, force: force)
     }
-    
+
     // MARK: - Glucose Staleness
 
     private var glucoseValueStalenessTimer: Timer?
@@ -769,6 +525,30 @@ final class LoopDataManager: ObservableObject {
 }
 
 // MARK: - Background task management
+extension LoopDataManager: LoopCycleHost {
+    var overrideHistory: TemporaryScheduleOverrideHistory {
+        temporaryPresetsManager.presetHistory
+    }
+
+    var activeOverride: TemporaryScheduleOverride? {
+        temporaryPresetsManager.activeOverride
+    }
+
+    /// While the pod is lent the cycle computes but never enacts (dosingEnabled is untouched), and the
+    /// watch stores the cycles' decisions; the phone stores none.
+    var holdsPump: Bool {
+        !isPumpConnectionReleased()
+    }
+
+    var isClosedLoop: Bool {
+        settingsProvider.dosingEnabled
+    }
+
+    var controllerStatus: StoredDosingDecision.ControllerStatus {
+        UIDevice.current.controllerStatus
+    }
+}
+
 extension LoopDataManager: PersistenceControllerDelegate {
     nonisolated func persistenceControllerWillSave(_ controller: PersistenceController) {
         Task {
@@ -835,17 +615,17 @@ extension LoopDataManager {
         }
     }
 
-    private var currentDosingStrategy: AutomaticDosingStrategy {
+    var currentDosingStrategy: AutomaticDosingStrategy {
         dosingStrategySelectionEnabled ? settingsProvider.settings.automaticDosingStrategy : .automaticBolus
     }
 
-    private func algorithmExperiments(for dosingStrategy: AutomaticDosingStrategy, guardAndRunway: GuardAndRunwayOutput? = nil) -> [AlgorithmExperiment] {
+    func algorithmExperiments(for dosingStrategy: AutomaticDosingStrategy, guardAndRunway: GuardAndRunwayOutput? = nil) -> [AlgorithmExperiment] {
         AlgorithmExperiment.records(enabled: enabledAlgorithmExperiments, dosingStrategy: dosingStrategy,
                                     volatilityBaseline: volatilityBaseline?.value, guardAndRunway: guardAndRunway)
     }
 
     /// The median σ5 over the last four weeks, for guard + runway's volatility band. Nil until there is a day of glucose.
-    private func currentVolatilityBaseline(at date: Date) async -> Double? {
+    func currentVolatilityBaseline(at date: Date) async -> Double? {
         if let volatilityBaseline, abs(date.timeIntervalSince(volatilityBaseline.date)) < (volatilityBaseline.value == nil ? .hours(1) : .days(1)) {
             return volatilityBaseline.value
         }
@@ -861,26 +641,7 @@ extension LoopDataManager {
     }
 
     func storeManualBolusDosingDecision(_ bolusDosingDecision: BolusDosingDecision, withDate date: Date) async {
-        var dosingDecision = StoredDosingDecision(id: bolusDosingDecision.id,
-                                                  date: date,
-                                                  reason: bolusDosingDecision.reason.rawValue,
-                                                  settings: StoredDosingDecision.Settings(settingsProvider.settings),
-                                                  scheduleOverride: bolusDosingDecision.scheduleOverride,
-                                                  controllerStatus: UIDevice.current.controllerStatus,
-                                                  pumpManagerStatus: deliveryDelegate?.pumpManagerStatus,
-                                                  cgmManagerStatus: deliveryDelegate?.cgmManagerStatus,
-                                                  lastReservoirValue: StoredDosingDecision.LastReservoirValue(doseStore.lastReservoirValue),
-                                                  historicalGlucose: bolusDosingDecision.historicalGlucose,
-                                                  originalCarbEntry: bolusDosingDecision.originalCarbEntry,
-                                                  carbEntry: bolusDosingDecision.carbEntry,
-                                                  manualGlucoseSample: bolusDosingDecision.manualGlucoseSample,
-                                                  carbsOnBoard: bolusDosingDecision.carbsOnBoard,
-                                                  insulinOnBoard: bolusDosingDecision.insulinOnBoard,
-                                                  glucoseTargetRangeSchedule: bolusDosingDecision.glucoseTargetRangeSchedule,
-                                                  predictedGlucose: bolusDosingDecision.predictedGlucose,
-                                                  manualBolusRecommendation: bolusDosingDecision.manualBolusRecommendation,
-                                                  manualBolusRequested: bolusDosingDecision.manualBolusRequested)
-        dosingDecision.algorithmExperiments = algorithmExperiments(for: currentDosingStrategy)
+        guard let dosingDecision = cycle.manualBolusDosingDecision(bolusDosingDecision, withDate: date) else { return }
         Task { await dosingDecisionStore.storeDosingDecision(dosingDecision) }
     }
 
@@ -1006,23 +767,6 @@ extension LoopDataManager {
     }
 
 
-}
-
-extension NewGlucoseSample {
-    var asStoredGlucoseSample: StoredGlucoseSample {
-        StoredGlucoseSample(
-            syncIdentifier: syncIdentifier,
-            syncVersion: syncVersion,
-            startDate: date,
-            quantity: quantity,
-            condition: condition,
-            trend: trend,
-            trendRate: trendRate,
-            isDisplayOnly: isDisplayOnly,
-            wasUserEntered: wasUserEntered,
-            device: device
-        )
-    }
 }
 
 
@@ -1370,13 +1114,6 @@ extension LoopDataManager: ManualDoseViewModelDelegate {
 
 }
 
-enum CancelActiveTempBasalReason: String {
-    case automaticDosingDisabled
-    case unreliableCGMData
-    case maximumBasalRateChanged
-    case pumpControlReturned
-    case pumpControlReleased
-}
 
 extension LoopDataManager : AlgorithmDisplayStateProvider {
     var algorithmState: AlgorithmDisplayState {

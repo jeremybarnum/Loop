@@ -97,36 +97,25 @@ enum WatchAlertPresenter {
                             content: UNNotificationContent) async {
         do {
             try await responder.acknowledgeAlert(alertIdentifier: identifier.alertIdentifier)
-            SportLog.event("alert", "ACKNOWLEDGED \(identifier.value) on the wrist — passed to its manager")
+            SportLog.event("alert", "alert \(identifier.value) acknowledged on the watch")
             retract(identifier)
         } catch {
-            SportLog.event("alert", "acknowledge FAILED for \(identifier.value) — \(error) — alert put back")
+            SportLog.event("alert", "could not acknowledge alert \(identifier.value), so it stays: \(error)")
             WristAlerts.scheduler.add(UNNotificationRequest(identifier: requestIdentifier(for: identifier),
                                                             content: content, trigger: nil))
         }
     }
 
-    /// What the wrist may present with, logged at loan start: during a loan it is the only alarm.
+    /// What the wrist may not present with, logged at loan start: during a loan it is the only alarm.
     static func logAuthorization(_ context: String) {
         UNUserNotificationCenter.current().getNotificationSettings { s in
-            func name(_ setting: UNNotificationSetting) -> String {
-                switch setting {
-                case .enabled: return "on"
-                case .disabled: return "OFF"
-                case .notSupported: return "n/a"
-                @unknown default: return "?"
-                }
-            }
-            let status: String
-            switch s.authorizationStatus {
-            case .authorized: status = "authorized"
-            case .denied: status = "DENIED"
-            case .notDetermined: status = "NOT DETERMINED"
-            case .provisional: status = "provisional"
-            case .ephemeral: status = "ephemeral"
-            @unknown default: status = "unknown"
-            }
-            SportLog.event("alert", "notification authorization (\(context)): \(status) · alerts \(name(s.alertSetting)) · sound \(name(s.soundSetting)) · time-sensitive \(name(s.timeSensitiveSetting)) · critical \(name(s.criticalAlertSetting))")
+            var off: [String] = []
+            if s.authorizationStatus == .denied || s.authorizationStatus == .notDetermined { off.append("notifications") }
+            if s.alertSetting == .disabled { off.append("alerts") }
+            if s.soundSetting == .disabled { off.append("sound") }
+            if s.timeSensitiveSetting == .disabled { off.append("time-sensitive") }
+            guard !off.isEmpty else { return }
+            SportLog.event("alert", "off on the watch at \(context): \(off.joined(separator: ", "))")
         }
     }
 }

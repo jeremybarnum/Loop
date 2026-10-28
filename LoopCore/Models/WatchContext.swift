@@ -40,9 +40,6 @@ public final class WatchContext: RawRepresentable {
     public var glucoseSyncIdentifier: String?
 
     public var predictedGlucose: WatchPredictedGlucose?
-
-    /// True only for a context the watch built during a loan; not encoded, so a relayed copy reads false.
-    public var isWatchAuthored: Bool = false
     public var eventualGlucose: LoopQuantity? {
         return predictedGlucose?.values.last?.quantity
     }

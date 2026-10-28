@@ -2,8 +2,7 @@
 //  PodLoanPhoneController+UIReads.swift
 //  Loop
 //
-//  What the pump tile reads about a loan. The UI reads a lock-guarded snapshot and never
-//  `queue.sync`s: a stalled settle can hold the queue for minutes.
+//  What the pump tile reads about a loan, from the live state on the main actor.
 //
 
 import Foundation
@@ -11,9 +10,25 @@ import HealthKit
 import LoopKit
 import LoopCore
 import UserNotifications
-import os.log
 
 extension PodLoanPhoneController {
+    /// The loan's state, for the Loop Report.
+    func generateDiagnosticReport() -> String {
+        let saved = persisted
+        return [
+            "## Sport Mode",
+            "* phase: \(saved.phase)",
+            "* loan: \(saved.epoch), started \(String(describing: saved.loanStartedAt))",
+            "* standing aside for a loan started without this phone: \(saved.yieldingToInferredLoan)",
+            "* watch last reported a cycle: \(String(describing: saved.holdRenewedAt))",
+            "* took the pod back on silence: \(String(describing: saved.tookOverOnSilenceAt))",
+            "* copy out for a start without the phone: \(saved.seizeToken != nil)",
+            "* take-back insulin check owed: \(saved.pendingForceAudit != nil)",
+            "* insulin estimates standing: \(saved.ledger.bookings.count)",
+            "* automatic dosing held: \(holdsAutomaticDosing)",
+        ].joined(separator: "\n")
+    }
+
     /// Holds anchors, not elapsed values, so a stale snapshot still renders the right time.
     struct UISnapshot: Equatable {
         var isLoanedOut = false
@@ -25,9 +40,10 @@ extension PodLoanPhoneController {
         var reclaimVerified = true
         var auditIsForceReclaim = false
         var displayAnchor: Date?
+        /// During a loan: when the watch's records last arrived.
+        var lastRecordsAt: Date?
     }
 
-    /// Must be called on the controller's queue — it reads the live state machine.
     func uiSnapshot() -> UISnapshot {
         var s = UISnapshot()
 
@@ -41,35 +57,12 @@ extension PodLoanPhoneController {
         s.reclaimVerified = reclaimVerifiedAt != nil
         s.auditIsForceReclaim = pendingHandbackAudit?.flavor == .forceReclaim
         s.displayAnchor = reclaimDisplayAnchor
+        s.lastRecordsAt = state == .loaned ? holdRenewedAt : nil
         return s
     }
 
-    /// Synchronous publish; transitions call it before notifying observers.
-    func syncUIMirror() {
-        let s = uiSnapshot()
-        uiMirrorLock.lock()
-        uiMirror = s
-        uiMirrorLock.unlock()
-    }
-
-    /// Updates the mirror for the next read.
-    func refreshUIMirror() {
-        queue.async { [weak self] in
-            guard let self else { return }
-            let s = self.uiSnapshot()
-            self.uiMirrorLock.lock()
-            self.uiMirror = s
-            self.uiMirrorLock.unlock()
-        }
-    }
-
-    /// The UI's only entry point; never waits on the controller's queue.
-    var uiState: UISnapshot {
-        refreshUIMirror()
-        uiMirrorLock.lock()
-        defer { uiMirrorLock.unlock() }
-        return uiMirror
-    }
+    /// What the screens read, built from the live state.
+    var uiState: UISnapshot { uiSnapshot() }
 
     /// Pure: snapshot plus clock. Covers a take-back's reach for the pod and the settle after it.
     static func reclaimProgress(from s: UISnapshot, now: Date) -> ReclaimProgress? {
@@ -115,6 +108,7 @@ extension PodLoanPhoneController {
     }
     var isPodLoanedOutForUI: Bool { return uiState.isLoanedOut }
     var isPodTakeoverInProgressForUI: Bool { return uiState.isTakeoverInProgress }
+    var lastRecordsAtForUI: Date? { return uiState.lastRecordsAt }
     var reclaimProgressForUI: ReclaimProgress? {
         return Self.reclaimProgress(from: uiState, now: Date())
     }

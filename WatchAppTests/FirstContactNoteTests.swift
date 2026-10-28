@@ -16,6 +16,7 @@ import LoopAlgorithm
 @testable import OmnipodKit
 @testable import WatchApp
 
+@MainActor
 final class FirstContactNoteTests: XCTestCase {
 
     private let address: UInt32 = 0x17A6219A
@@ -23,8 +24,8 @@ final class FirstContactNoteTests: XCTestCase {
     private var defaults: UserDefaults!
     private var dir: URL!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         defaults = UserDefaults(suiteName: "FirstContactNoteTests-\(UUID().uuidString)")!
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -55,44 +56,48 @@ final class FirstContactNoteTests: XCTestCase {
         let phonePump = try XCTUnwrap(OmniPumpManager(rawState: raw))
         let data = try PropertyListSerialization.data(fromPropertyList: phonePump.exportConfiguration().rawValue,
                                                       format: .binary, options: 0)
-        let grant = LoanGrant(epoch: 3, expiresAt: Date(), pumpConfiguration: data, podAddress: 0,
-                              therapySettingsRaw: Data([4, 5]), settingsTimeZoneID: "GMT", doseHistory: [])
+        let grant = LoanGrant(epoch: 3, expiresAt: Date(), pumpConfiguration: data, therapySettingsRaw: Data([4, 5]), settingsTimeZoneID: "GMT", doseHistory: [])
         return DormantGrant(grant: grant, issuedAt: Date(), seizeToken: UUID())
     }
 
     /// The pump manager a Start builds, installed as Start installs it.
-    private func adoptAsStartDoes(_ copy: DormantGrant, on controller: PodLoanWatchController) throws -> OmniPumpManager {
+    private func adoptAsStartDoes(_ copy: DormantGrant, on controller: PodLoanWatchController) async throws -> OmniPumpManager {
         let configuration = try XCTUnwrap(copy.grant.sharedPumpConfiguration)
         let manager = try XCTUnwrap(watchPumpManager(adopting: configuration,
                                                      localState: controller.pumpLocalState(for: configuration)) as? OmniPumpManager)
-        controller.queue.sync {
+        await controller.onMain {
             manager.pumpManagerDelegate = controller
-            manager.delegateQueue = controller.queue
+            manager.delegateQueue = .main
             controller.pumpManager = manager
             controller.savePumpLocalState(of: manager)
         }
         return manager
     }
 
-    private func firstContactExpected(_ controller: PodLoanWatchController) -> Bool {
-        controller.debugSnapshot().pumpFirstContactExpected
+    private func firstContactExpected(_ controller: PodLoanWatchController) async -> Bool {
+        await controller.fencedSnapshot().pumpFirstContactExpected
     }
 
     func testTheStartPageAsksForTheWristOnlyForAPodThisWatchHasNotMet() async throws {
         let controller = await makeController()
-        XCTAssertFalse(firstContactExpected(controller), "no standing copy yet: nothing to say")
+        let firstContact1 = await firstContactExpected(controller)
+        XCTAssertFalse(firstContact1, "no standing copy yet: nothing to say")
 
         let copy = try standingCopy()
-        controller.queue.sync { controller.handleDormantGrant(copy) }
-        XCTAssertTrue(firstContactExpected(controller), "a pod with no saved handle has to be found, which needs the screen on")
+        await controller.onMain { controller.handleDormantGrant(copy) }
+        let firstContact2 = await firstContactExpected(controller)
+        XCTAssertTrue(firstContact2, "a pod with no saved handle has to be found, which needs the screen on")
 
         controller.pumpLocalStateStore.wrappedValue = ["Omni": ["podAddress": address, "bleIdentifier": handle]]
-        XCTAssertFalse(firstContactExpected(controller), "a saved handle connects with the wrist down")
+        let firstContact3 = await firstContactExpected(controller)
+        XCTAssertFalse(firstContact3, "a saved handle connects with the wrist down")
 
         let relaunched = await makeController()
-        XCTAssertFalse(firstContactExpected(relaunched), "the stored copy and local state are read back after a relaunch")
+        let firstContact4 = await firstContactExpected(relaunched)
+        XCTAssertFalse(firstContact4, "the stored copy and local state are read back after a relaunch")
         relaunched.pumpLocalStateStore.wrappedValue = nil
-        XCTAssertTrue(firstContactExpected(relaunched))
+        let firstContact5 = await firstContactExpected(relaunched)
+        XCTAssertTrue(firstContact5)
     }
 
     /// Loan 1 finds the pod; its handle is saved as the kit's local state, survives the teardown
@@ -100,30 +105,34 @@ final class FirstContactNoteTests: XCTestCase {
     func testTheHandleALoanFoundReachesTheNextAdopt() async throws {
         let controller = await makeController()
         let copy = try standingCopy()
-        controller.queue.sync { controller.handleDormantGrant(copy) }
-        XCTAssertTrue(firstContactExpected(controller))
+        await controller.onMain { controller.handleDormantGrant(copy) }
+        let firstContact6 = await firstContactExpected(controller)
+        XCTAssertTrue(firstContact6)
 
         // Loan 1: nothing saved, so the kit searches and adopts the peripheral it finds.
-        let first = try adoptAsStartDoes(copy, on: controller)
+        let first = try await adoptAsStartDoes(copy, on: controller)
         XCTAssertTrue(first.takeControlNeedsSearch)
         let ble = try XCTUnwrap(first.podComms as? BlePodComms)
         ble.omnipodDidAdoptLoanPod(uuidString: handle)
-        controller.queue.sync { }
-        controller.queue.sync { controller.teardownPump() }
-        controller.queue.sync { }   // anything the release sent the delegate
+        await controller.onMain { }
+        await controller.onMain { controller.teardownPump() }
+        await controller.onMain { }   // anything the release sent the delegate
 
-        XCTAssertFalse(firstContactExpected(controller), "the handle outlived the loan")
+        let firstContact7 = await firstContactExpected(controller)
+        XCTAssertFalse(firstContact7, "the handle outlived the loan")
         let relaunched = await makeController()
-        XCTAssertFalse(firstContactExpected(relaunched), "and the relaunch")
+        let firstContact8 = await firstContactExpected(relaunched)
+        XCTAssertFalse(firstContact8, "and the relaunch")
 
         // A new pod: the saved handle is another pod's.
         let newPod = try standingCopy(address: address &+ 1)
-        relaunched.queue.sync { relaunched.handleDormantGrant(newPod) }
-        XCTAssertTrue(firstContactExpected(relaunched), "a new pod is found with the screen on")
+        await relaunched.onMain { relaunched.handleDormantGrant(newPod) }
+        let firstContact9 = await firstContactExpected(relaunched)
+        XCTAssertTrue(firstContact9, "a new pod is found with the screen on")
 
         // Loan 2, the same pod: the adopt gets the handle and dials it.
-        relaunched.queue.sync { relaunched.handleDormantGrant(copy) }
-        let second = try adoptAsStartDoes(copy, on: relaunched)
+        await relaunched.onMain { relaunched.handleDormantGrant(copy) }
+        let second = try await adoptAsStartDoes(copy, on: relaunched)
         XCTAssertEqual(second.state.podState?.bleIdentifier, handle)
         XCTAssertFalse(second.takeControlNeedsSearch)
     }
@@ -133,16 +142,17 @@ final class FirstContactNoteTests: XCTestCase {
     func testASavedHandleThatNeverConnectedIsDroppedAtRelease() async throws {
         let controller = await makeController()
         let copy = try standingCopy()
-        controller.queue.sync { controller.handleDormantGrant(copy) }
+        await controller.onMain { controller.handleDormantGrant(copy) }
         controller.pumpLocalStateStore.wrappedValue = ["Omni": ["podAddress": address, "bleIdentifier": handle]]
 
-        let manager = try adoptAsStartDoes(copy, on: controller)
+        let manager = try await adoptAsStartDoes(copy, on: controller)
         XCTAssertEqual(manager.state.podState?.bleIdentifier, handle)
-        controller.queue.sync { controller.teardownPump() }   // no radio here, so it never connected
-        controller.queue.sync { }
+        await controller.onMain { controller.teardownPump() }   // no radio here, so it never connected
+        await controller.onMain { }
 
         XCTAssertNil(manager.localState)
         XCTAssertNil(controller.pumpLocalState(for: try XCTUnwrap(copy.grant.sharedPumpConfiguration)))
-        XCTAssertTrue(firstContactExpected(controller), "the next adopt searches")
+        let firstContact10 = await firstContactExpected(controller)
+        XCTAssertTrue(firstContact10, "the next adopt searches")
     }
 }

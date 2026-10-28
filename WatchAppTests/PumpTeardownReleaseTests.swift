@@ -17,13 +17,14 @@ import LoopAlgorithm
 @testable import OmnipodKit
 @testable import WatchApp
 
+@MainActor
 final class PumpTeardownReleaseTests: XCTestCase {
 
     private var defaults: UserDefaults!
     private var dir: URL!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         defaults = UserDefaults(suiteName: "PumpTeardownReleaseTests-\(UUID().uuidString)")!
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -65,27 +66,27 @@ final class PumpTeardownReleaseTests: XCTestCase {
             weakPump = pump
             weakBluetooth = (pump.podComms as? BlePodComms)?.bluetoothManager
             XCTAssertNotNil(weakBluetooth, "a DASH manager owns a Bluetooth manager")
-            controller.queue.sync {
+            await controller.onMain {
                 pump.pumpManagerDelegate = controller
-                pump.delegateQueue = controller.queue
+                pump.delegateQueue = .main
                 controller.pumpManager = pump
                 controller.loopManager.pumpManager = pump
                 if takeControl { pump.takeControl() }
             }
         }
 
-        controller.queue.sync { controller.teardownPump() }
-        controller.queue.sync {}
-        controller.loopManager.dataAccessQueue.sync {}
+        await controller.onMain { controller.teardownPump() }
+        await controller.onMain {}
+        await controller.loopManager.laneSettled()
         return ({ weakPump == nil }, { weakBluetooth == nil })
     }
 
     /// Lets queued callbacks that briefly hold the object run before judging it leaked.
-    private func released(within seconds: TimeInterval = 3, _ isGone: () -> Bool) -> Bool {
+    private func released(within seconds: TimeInterval = 3, _ isGone: () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {
             if isGone() { return true }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            try? await Task.sleep(nanoseconds: 50_000_000)
         }
         return isGone()
     }
@@ -96,20 +97,20 @@ final class PumpTeardownReleaseTests: XCTestCase {
     func testAReleasedDriversLateReportIsDroppedNotCrashed() async throws {
         let controller = await makeController()
         let pump = try makePump()
-        controller.queue.sync {
+        await controller.onMain {
             pump.pumpManagerDelegate = controller
-            pump.delegateQueue = controller.queue
+            pump.delegateQueue = .main
             controller.pumpManager = pump
             controller.loopManager.pumpManager = pump
         }
-        controller.queue.sync { controller.teardownPump() }
-        controller.queue.sync {}
+        await controller.onMain { controller.teardownPump() }
+        await controller.onMain {}
         XCTAssertTrue((pump.pumpManagerDelegate as AnyObject?) === controller, "still the delegate: a late report must find one")
         XCTAssertNil(controller.pumpStateStore.wrappedValue, "precondition: the teardown cleared the saved state")
 
         let reported = expectation(description: "the late report completes")
         let event = NewPumpEvent(date: Date(), dose: nil, raw: Data([1]), title: "late")
-        controller.queue.sync {
+        await controller.onMain {
             controller.pumpManagerDidUpdateState(pump)
             controller.pumpManager(pump, hasNewPumpEvents: [event], lastReconciliation: Date(), replacePendingEvents: false) { error in
                 XCTAssertNil(error)
@@ -123,14 +124,18 @@ final class PumpTeardownReleaseTests: XCTestCase {
 
     func testTeardownReleasesThePodManagerAndItsBluetoothManager() async throws {
         let left = try await loanThenTeardown(takeControl: false)
-        XCTAssertTrue(released(left.pumpGone), "the pod manager outlives its loan")
-        XCTAssertTrue(released(left.bluetoothGone), "its Bluetooth manager outlives the loan, still holding the restore identifiers")
+        let pumpGone = await released(left.pumpGone)
+        let bluetoothGone = await released(left.bluetoothGone)
+        XCTAssertTrue(pumpGone, "the pod manager outlives its loan")
+        XCTAssertTrue(bluetoothGone, "its Bluetooth manager outlives the loan, still holding the restore identifiers")
     }
 
     /// As a real loan: the take has started the link before the teardown.
     func testTeardownReleasesAManagerThatHadTakenControl() async throws {
         let left = try await loanThenTeardown(takeControl: true)
-        XCTAssertTrue(released(left.pumpGone), "the pod manager outlives its loan")
-        XCTAssertTrue(released(left.bluetoothGone), "its Bluetooth manager outlives the loan, still holding the restore identifiers")
+        let pumpGone = await released(left.pumpGone)
+        let bluetoothGone = await released(left.bluetoothGone)
+        XCTAssertTrue(pumpGone, "the pod manager outlives its loan")
+        XCTAssertTrue(bluetoothGone, "its Bluetooth manager outlives the loan, still holding the restore identifiers")
     }
 }

@@ -12,7 +12,6 @@ import HealthKit
 import LoopKit
 import LoopCore
 import UserNotifications
-import os.log
 
 extension PodLoanPhoneController {
 
@@ -27,7 +26,6 @@ extension PodLoanPhoneController {
         let started = deps.now()
         reclaimStartedAt = started
         reclaimVerifiedAt = nil
-        syncUIMirror()
         reclaimVerifyInFlight = false
         reclaimLinkUpAt = nil
         reclaimStaleReads = 0
@@ -43,30 +41,27 @@ extension PodLoanPhoneController {
         reclaimSettleWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self, self.reclaimStartedAt == started else { return }
-            os_log("Reclaim settle CEILING reached (%.0fs) without a verified round-trip — clearing anyway",
-                   log: self.log, type: .error, Self.reclaimSettleTimeout)
-
             self.handbackDiag(self.epoch, String(
-                format: "settle CEILING at %.0fs — NO verified round-trip; clearing anyway", Self.reclaimSettleTimeout))
+                format: "gave up reconnecting to the pod after %.0f s without a verified round-trip, %d stale reads",
+                Self.reclaimSettleTimeout, self.reclaimStaleReads))
             self.reclaimStartedAt = nil
-            self.syncUIMirror()
             self.reclaimDisplayAnchor = nil
             self.deps.endReclaimBackgroundTask()
 
-            self.noteForceReclaimAuditStillOwed(why: "pod unreachable through the settle window")
+            self.noteForceReclaimAuditStillOwed(why: "the pod did not answer while reconnecting")
             self.deps.ownershipDidChange()
         }
         reclaimSettleWork = work
 
         // Wall deadline: a monotonic one stops while the app is suspended.
-        queue.asyncAfter(wallDeadline: .now() + Self.reclaimSettleTimeout, execute: work)
+        DispatchQueue.main.asyncAfter(wallDeadline: .now() + Self.reclaimSettleTimeout, execute: work)
         chaseReclaimVerification(started: started)
     }
 
     /// Ends the window early, for a phone that has stopped trying to hold the pod.
     func closeReclaimSettleWindow(reason: String) {
         guard reclaimStartedAt != nil else { return }
-        handbackDiag(epoch, "settle window CLOSED early — \(reason)")
+        handbackDiag(epoch, "stopped reconnecting to the pod: \(reason)")
 
         reclaimSettleWork?.cancel()
         reclaimSettleWork = nil
@@ -76,7 +71,6 @@ extension PodLoanPhoneController {
         deps.endReclaimBackgroundTask()
 
         noteForceReclaimAuditStillOwed(why: reason)
-        syncUIMirror()
     }
 
     /// The window closed without the pod answering, its link lost after the take-back. The check
@@ -84,42 +78,36 @@ extension PodLoanPhoneController {
     /// `considerOwedForceReclaimAudit` runs it later.
     func noteForceReclaimAuditStillOwed(why: String) {
         guard let pending = pendingHandbackAudit, pending.flavor == .forceReclaim else { return }
-        handbackDiag(pending.epoch, "force-reclaim audit still OWED — \(why). It runs when the pod next answers; dosing stays held until then")
+        handbackDiag(pending.epoch, "take-back check still owed: \(why); dosing stays paused until the pod answers")
     }
 
     /// Called every phone cycle. Reopens the settle for a check still owed once the pod is reachable.
     func considerOwedForceReclaimAudit() {
-        queue.async {
-            guard let pending = self.pendingHandbackAudit, pending.flavor == .forceReclaim,
-                  self.reclaimStartedAt == nil, self.state == .owner, !self.yieldingToInferredLoan,
-                  self.deps.isConnectionReady() else { return }
-            self.handbackDiag(pending.epoch, "force-reclaim audit owed and the pod is reachable — reading it now")
-            self.beginReclaimSettleWindow()
-        }
+        guard let pending = self.pendingHandbackAudit, pending.flavor == .forceReclaim,
+              self.reclaimStartedAt == nil, self.state == .owner, !self.yieldingToInferredLoan,
+              self.deps.isConnectionReady() else { return }
+        self.handbackDiag(pending.epoch, "take-back check owed and the pod is reachable: reading it now")
+        self.beginReclaimSettleWindow()
     }
 
     /// Polls every 2 s until the round-trip lands or the ceiling fires; `started` names the window.
-    func chaseReclaimVerification(started: Date, attempt: Int = 0) {
+    func chaseReclaimVerification(started: Date) {
         guard reclaimStartedAt == started, reclaimVerifiedAt == nil else { return }
 
         // Backstop: never chase a pod this phone is not holding.
         guard state == .owner, !yieldingToInferredLoan else {
-            handbackDiag(epoch, "settle chase STOOD DOWN at tick \(attempt) — the phone is not holding the pod (state \(state.rawValue)\(yieldingToInferredLoan ? ", yielded to an inferred loan" : ""))")
+            handbackDiag(epoch, "reconnect stopped: this phone is \(yieldingToInferredLoan ? "standing aside" : "in state \(state.rawValue)")")
             return
         }
 
         if reclaimLinkUpAt == nil, deps.isConnectionReady() {
-            let up = deps.now()
-            reclaimLinkUpAt = up
-            let waited = up.timeIntervalSince(started)
-
-            handbackDiag(epoch, String(format: "settle: link up +%.1fs (tick %d)", waited, attempt))
+            reclaimLinkUpAt = deps.now()
         }
 
         attemptReclaimVerificationNow(started: started)
         // Always re-arm: the ceiling, not this loop, ends a settle.
-        queue.asyncAfter(deadline: .now() + 2) { [weak self] in
-            self?.chaseReclaimVerification(started: started, attempt: attempt + 1)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.chaseReclaimVerification(started: started)
         }
     }
 
@@ -142,7 +130,7 @@ extension PodLoanPhoneController {
             }
             read { [weak self] lastSync in
                 guard let self = self else { return }
-                self.queue.async {
+                DispatchQueue.main.async {
                     self.reclaimVerifyInFlight = false
                     guard self.reclaimStartedAt == started, self.reclaimVerifiedAt == nil else { return }
 
@@ -151,30 +139,19 @@ extension PodLoanPhoneController {
                         self.reclaimVerifiedAt = self.deps.now()
                         self.reclaimSettleWork?.cancel()
                         self.reclaimStartedAt = nil
-                        self.syncUIMirror()
                         self.reclaimDisplayAnchor = nil
                         self.deps.endReclaimBackgroundTask()
 
                         let linkWait = self.reclaimLinkUpAt.map { $0.timeIntervalSince(started) } ?? elapsed
-                        let readWait = max(elapsed - linkWait, 0)
-
-                        // Log analysis parses this prefix: append fields, don't reword it.
                         self.handbackDiag(self.epoch,
-                            String(format: "reclaim VERIFIED — pod round-trip complete +%.0fs (link +%.1fs, stale reads %d, read +%.1fs)",
-                                   elapsed, linkWait, self.reclaimStaleReads, readWait))
+                            String(format: "back in control of the pod after %.0f s: link up at %.1f s, %d stale reads",
+                                   elapsed, linkWait, self.reclaimStaleReads))
                         self.deps.ownershipDidChange()
 
-                        self.finishPendingHandbackAudit(elapsed: elapsed)
+                        self.finishPendingHandbackAudit()
                     } else {
                         // Stale read: counted, to tell a caching failure from a radio one.
                         self.reclaimStaleReads += 1
-                        os_log("Settle: status read %d did not advance lastSync — link %{public}@",
-                               log: self.log, type: .default, self.reclaimStaleReads,
-                               self.reclaimLinkUpAt == nil ? "still down" : "already up")
-
-                        PhoneLog.event("loan", String(format: "e%d settle: read %d stale — link %@",
-                                                      self.epoch, self.reclaimStaleReads,
-                                                      self.reclaimLinkUpAt == nil ? "still down" : "already up"))
                     }
                 }
             }
@@ -183,7 +160,7 @@ extension PodLoanPhoneController {
 
     /// At the verified round-trip: read the pod's total, rule on the loan, then cancel the watch's
     /// temp. The reading ends the watch's window and starts this phone's, verdict or not.
-    func finishPendingHandbackAudit(elapsed: TimeInterval) {
+    func finishPendingHandbackAudit() {
         let reading = (deps.pumpManager() as? PumpDeliveryOdometer)?.deliveredUnits
         defer {
             if let reading { noteReading(units: reading.units, at: reading.at) }
@@ -205,11 +182,10 @@ extension PodLoanPhoneController {
 
             let drift = pending.watchLatest.map { latest - $0 }
             handbackDiag(pending.epoch, String(format:
-                "reconcile[%@]: delivered=%.3f expected=%.3f residual=%+.3f (band ±0.20) · loanMin=%.0f cycles=%d · odometer read by PHONE +%.0fs after reclaim · vs watch endpoint %@",
-                pending.flavor == .forceReclaim ? "FORCE-RECLAIM" : "AUTHORITATIVE",
-                delivered, pending.expected, residual,
-                pending.loanMinutes, pending.cycles, elapsed,
-                drift.map { String(format: "%+.3f", $0) } ?? "n/a"))
+                "%@ check: delivered %.3f U, expected %.3f U, residual %+.3f U over %.0f min%@",
+                pending.flavor == .forceReclaim ? "take-back" : "hand-back",
+                delivered, pending.expected, residual, pending.loanMinutes,
+                drift.map { String(format: "; %+.3f U since the watch's last reading", $0) } ?? ""))
 
             switch pending.flavor {
             case .handback:
@@ -220,11 +196,11 @@ extension PodLoanPhoneController {
             }
         } else if pending.flavor == .forceReclaim {
             // A pump that gives no delivered total: nothing to check against.
-            handbackDiag(pending.epoch, "** force-reclaim round-trip landed but no odometer — session UNVERIFIED **")
+            handbackDiag(pending.epoch, "insulin not verified after take-back: the pod gave no total")
             deps.issueUrgentNotice(Self.sessionUnverifiedTitle, Self.sessionUnverifiedBody)
         } else {
             // A clean hand-back keeps its committed records; nothing opens.
-            handbackDiag(pending.epoch, "reconcile[AUTHORITATIVE]: pod reachable but reported no odometer — keeping the provisional line")
+            handbackDiag(pending.epoch, "hand-back check: the pod gave no total; the watch's count stands")
         }
 
         // The watch's temp ends here, after the reading.
@@ -235,11 +211,11 @@ extension PodLoanPhoneController {
     private func cancelWatchTemp(epoch: Int) {
         deps.cancelTempBasalAfterPodReturn { [weak self] error in
             guard let self = self else { return }
-            self.queue.async {
+            DispatchQueue.main.async {
                 if let error = error {
-                    self.handbackDiag(epoch, "temp cancel FAILED — pod keeps the watch's temp until the next cycle · \(String(describing: error))")
+                    self.handbackDiag(epoch, "could not cancel the watch's temp; it runs until the next loop cycle: \(String(describing: error))")
                 } else {
-                    self.handbackDiag(epoch, "temp cancelled — pod reverts to the user's schedule until the phone's next reading")
+                    self.handbackDiag(epoch, "temp cancelled: the pod runs the scheduled basal until the phone's next cycle")
                 }
             }
         }

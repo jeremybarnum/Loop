@@ -11,6 +11,6 @@ extension CarbAndBolusFlow {
 
     /// Non-blocking read (a view must never sync onto the loan controller's queue).
     var loanIsActive: Bool {
-        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.isLoanActiveNonBlocking ?? false
+        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.isLoanActive ?? false
     }
 }

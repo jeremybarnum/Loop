@@ -14,12 +14,8 @@ import LoopKit
 extension LoanGrant {
     /// The pump's configuration, or nil if it does not decode.
     public var sharedPumpConfiguration: SharedDeviceConfiguration? {
-        SharedDeviceConfiguration(propertyList: pumpConfiguration)
-    }
-
-    /// The services' configurations that decode.
-    public var sharedServiceConfigurations: [SharedDeviceConfiguration] {
-        (serviceConfigurations ?? []).compactMap(SharedDeviceConfiguration.init(propertyList:))
+        let plist = try? PropertyListSerialization.propertyList(from: pumpConfiguration, options: [], format: nil)
+        return (plist as? SharedDeviceConfiguration.RawValue).flatMap(SharedDeviceConfiguration.init(rawValue:))
     }
 
     public func seedDoseEntries() -> [DoseEntry] {
@@ -103,21 +99,12 @@ public struct LoanPodStatus: Codable, Equatable {
     }
 }
 
-/// How the holder of the pod is dosing; the only mode built.
-public enum LoanDosingMode: String, Codable {
-    case closedDirect
-}
-
 /// The watch asking for the pod.
 public struct LoanRequest: Codable, Equatable {
     public let watchBuild: String
-    public let supportedVersions: [Int]
 
     /// Lets the phone recognise a redelivered copy of the same request.
     public let requestID: String?
-
-    /// The phone refreshes its standing copy only for a watch that can start alone.
-    public let supportsSeize: Bool?
 
     /// A request that sat in a queue is not granted.
     public let sentAt: Date?
@@ -127,15 +114,11 @@ public struct LoanRequest: Codable, Equatable {
     public let knownEpoch: Int?
 
     public init(watchBuild: String,
-                supportedVersions: [Int] = [LoanProtocol.version],
                 requestID: String = UUID().uuidString,
-                supportsSeize: Bool? = nil,
                 sentAt: Date? = nil,
                 knownEpoch: Int? = nil) {
         self.watchBuild = watchBuild
-        self.supportedVersions = supportedVersions
         self.requestID = requestID
-        self.supportsSeize = supportsSeize
         self.sentAt = sentAt
         self.knownEpoch = knownEpoch
     }
@@ -167,18 +150,10 @@ public struct LoanGrant: Codable, Equatable {
     /// The pump's `SharedDeviceConfiguration`, as a binary property list.
     public let pumpConfiguration: Data
 
-    public let podAddress: UInt32
-
     public let therapySettingsRaw: Data
     public let settingsTimeZoneID: String
 
     public let doseHistory: [LoanDoseRecord]
-
-    /// The phone can tell an interim offer from a final one.
-    public let supportsInterimHandback: Bool?
-
-    /// The phone understands override records; without it overrides stay local to the watch.
-    public let supportsOverrideRecords: Bool?
 
     public let integralRetrospectiveCorrectionEnabled: Bool?
 
@@ -212,20 +187,9 @@ public struct LoanGrant: Codable, Equatable {
     /// The phone's settings over the last 24 h, up to the grant.
     public let settingsHistory: LoanSettingsHistory?
 
-    /// The phone's remote services that share their configuration (Nightscout, Tidepool), each a binary
-    /// property list of its `SharedDeviceConfiguration`, so the wrist uploads during the loan. They
-    /// hold secrets: Start grants only, never the standing copy, never logged.
-    public var serviceConfigurations: [Data]? = nil
-
-    /// The phone's CGM's answer to "upload glucose?" (the CGM simulator's "Upload CGM Samples"),
-    /// which the wrist follows while it has no CGM of its own. Nil from an older phone.
-    public var phoneCGMUploadsGlucose: Bool? = nil
-
-    public init(epoch: Int, expiresAt: Date, pumpConfiguration: Data, podAddress: UInt32,
+    public init(epoch: Int, expiresAt: Date, pumpConfiguration: Data,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
                 doseHistory: [LoanDoseRecord],
-                supportsInterimHandback: Bool? = nil,
-                supportsOverrideRecords: Bool? = nil,
                 integralRetrospectiveCorrectionEnabled: Bool? = nil,
                 glucoseBasedApplicationFactorEnabled: Bool? = nil,
                 guardAndRunwayEnabled: Bool? = nil,
@@ -242,12 +206,9 @@ public struct LoanGrant: Codable, Equatable {
         self.epoch = epoch
         self.expiresAt = expiresAt
         self.pumpConfiguration = pumpConfiguration
-        self.podAddress = podAddress
         self.therapySettingsRaw = therapySettingsRaw
         self.settingsTimeZoneID = settingsTimeZoneID
         self.doseHistory = doseHistory
-        self.supportsInterimHandback = supportsInterimHandback
-        self.supportsOverrideRecords = supportsOverrideRecords
         self.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrectionEnabled
         self.glucoseBasedApplicationFactorEnabled = glucoseBasedApplicationFactorEnabled
         self.guardAndRunwayEnabled = guardAndRunwayEnabled
@@ -331,17 +292,11 @@ public struct HandbackOffer: Codable, Equatable {
 
     public let lastLoopCompleted: Date?
 
-    /// Per remote service (its `pluginIdentifier`), the data types the watch confirmed it uploaded
-    /// in full before releasing ("Glucose", "DosingDecision"): the phone skips those, and uploads
-    /// the rest itself. Released offers only; nil from an older watch.
-    public let uploadsConfirmed: [String: [String]]?
-
     public init(epoch: Int, handedBackAt: Date, finalStatus: LoanPodStatus?,
                 odometer: LoanOdometerSnapshot?, events: [LoanEvent], tombstones: [UUID],
                 recovered: Bool, released: Bool? = nil, watchClosedLoopEnabled: Bool? = nil,
                 seizeToken: UUID? = nil,
-                lastLoopCompleted: Date? = nil,
-                uploadsConfirmed: [String: [String]]? = nil) {
+                lastLoopCompleted: Date? = nil) {
         self.epoch = epoch
         self.handedBackAt = handedBackAt
         self.finalStatus = finalStatus
@@ -353,12 +308,6 @@ public struct HandbackOffer: Codable, Equatable {
         self.watchClosedLoopEnabled = watchClosedLoopEnabled
         self.seizeToken = seizeToken
         self.lastLoopCompleted = lastLoopCompleted
-        self.uploadsConfirmed = uploadsConfirmed
-    }
-
-    /// The services whose `type` the watch confirmed it uploaded in full.
-    public func servicesConfirming(_ type: String) -> Set<String> {
-        Set((uploadsConfirmed ?? [:]).filter { $0.value.contains(type) }.keys)
     }
 }
 
@@ -392,7 +341,6 @@ public struct StatusQuery: Codable, Equatable {
 
 public struct StatusReport: Codable, Equatable {
     public let epoch: Int
-    public let mode: LoanDosingMode
 
     public let lastDirectGlucoseAge: TimeInterval?
     public let lastEventSeq: Int
@@ -408,11 +356,10 @@ public struct StatusReport: Codable, Equatable {
     /// revived claim from a fresh Start. Absent from older watches.
     public let loanStartedAt: Date?
 
-    public init(epoch: Int, mode: LoanDosingMode, lastDirectGlucoseAge: TimeInterval?,
+    public init(epoch: Int, lastDirectGlucoseAge: TimeInterval?,
                 lastEventSeq: Int, podFault: String?, holdsPod: Bool, knowsGrant: Bool? = nil,
                 podReachable: Bool? = nil, loanStartedAt: Date? = nil) {
         self.epoch = epoch
-        self.mode = mode
         self.lastDirectGlucoseAge = lastDirectGlucoseAge
         self.lastEventSeq = lastEventSeq
         self.podFault = podFault
@@ -436,28 +383,6 @@ public struct ProtocolNack: Codable, Equatable {
 public struct LoanDenied: Codable, Equatable {
     public let reason: String
     public init(reason: String) { self.reason = reason }
-}
-
-public struct LoanDiag: Codable, Equatable {
-    public let epoch: Int
-    public let text: String
-    public init(epoch: Int, text: String) {
-        self.epoch = epoch
-        self.text = text
-    }
-}
-
-extension SharedDeviceConfiguration {
-    /// As a grant carries it: a binary property list.
-    public var propertyList: Data? {
-        try? PropertyListSerialization.data(fromPropertyList: rawValue, format: .binary, options: 0)
-    }
-
-    public init?(propertyList data: Data) {
-        let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)
-        guard let raw = plist as? RawValue else { return nil }
-        self.init(rawValue: raw)
-    }
 }
 
 extension PumpManagerStatus.BolusState {

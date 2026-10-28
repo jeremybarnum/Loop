@@ -107,8 +107,7 @@ private final class LoanBooksDriver {
     func seed(_ records: [LoanDoseRecord], at instant: Date, epoch: Int = 1) {
         seedRecords = records
         let grant = LoanGrant(epoch: epoch, expiresAt: instant.addingTimeInterval(.minutes(5)),
-                              pumpConfiguration: Data(), podAddress: 0,
-                              therapySettingsRaw: Data(), settingsTimeZoneID: TimeZone.current.identifier,
+                              pumpConfiguration: Data(), therapySettingsRaw: Data(), settingsTimeZoneID: TimeZone.current.identifier,
                               doseHistory: records)
         let split = grant.seedDoseEntries(finishedBy: instant)
 
@@ -292,6 +291,7 @@ private final class LoanBooksDriver {
 
 // MARK: - The tests
 
+@MainActor
 final class LoanBooksHarnessTests: XCTestCase {
 
     /// One isolated PersistenceController per driver — two DoseStores must never share a
@@ -514,45 +514,6 @@ final class LoanBooksHarnessTests: XCTestCase {
         XCTAssertGreaterThan(store1, 0.3, "sanity: the session book carries insulin at hand-back")
         XCTAssertEqual(sample2, store1, accuracy: 0.05,
                        "cross-epoch fidelity: IOB is conserved through fold → re-grant → reseed")
-    }
-
-    // MARK: - 5. The bolus-crash queue invariant (shape)
-
-    /// The bolus path's reclaim completion runs on the loan queue; delivery must hop to the
-    /// dosing queue with `.async` (a `.sync` would trap). Pins that the fixed shape completes.
-    func testBolusDeliveryQueueShapeDoesNotTrap() {
-        let loanQueue = DispatchQueue(label: "test.loan-controller")   // PodLoanWatchController's serial queue
-        let dosingQueue = DispatchQueue(label: "test.dataAccessQueue") // WatchLoopManager.dataAccessQueue
-
-        // The journal mint, as loanWillEnactBolus does it: queue.sync onto the LOAN queue.
-        // Safe if and only if the caller is NOT already on the loan queue — the invariant.
-        func mintJournalIntent() -> Bool {
-            var minted = false
-            loanQueue.sync { minted = true }
-            return minted
-        }
-
-        // Leg 1: completion on the loan queue, async hop, mint syncs back.
-        let reclaimLeg = expectation(description: "reclaim-path delivery completes")
-        loanQueue.async {
-            dosingQueue.async {
-                XCTAssertTrue(mintJournalIntent(),
-                              "mint must complete before the pod command — the bug trapped here")
-                reclaimLeg.fulfill()   // stands in for pumpManager.enactBolus reaching the pod
-            }
-        }
-
-        // Leg 2: already on the dosing queue; `.async` makes the re-dispatch legal.
-        let shortCircuitLeg = expectation(description: "short-circuit delivery completes")
-        dosingQueue.async {
-            dosingQueue.async {
-                XCTAssertTrue(mintJournalIntent(),
-                              "the mint must also clear when the hop was a same-queue re-dispatch")
-                shortCircuitLeg.fulfill()
-            }
-        }
-
-        wait(for: [reclaimLeg, shortCircuitLeg], timeout: 5)
     }
 
     // MARK: - 6. The bolus-crash fix — books land after the hop
@@ -967,6 +928,7 @@ final class LoanWireQuantizationTests: XCTestCase {
 
 /// Overrides carry both ways through the stock override history. Fixture: 60% insulin needs,
 /// target 140-160.
+@MainActor
 final class LoanOverrideTests: XCTestCase {
 
     private var cacheDir: URL?
@@ -1093,7 +1055,6 @@ final class LoanOverrideTests: XCTestCase {
             epoch: 1,
             expiresAt: Date().addingTimeInterval(.minutes(5)),
             pumpConfiguration: Data(),
-            podAddress: 0,
             therapySettingsRaw: Data(),
             settingsTimeZoneID: TimeZone.current.identifier,
             doseHistory: [])
@@ -1354,6 +1315,7 @@ final class LoanOverrideTests: XCTestCase {
 // MARK: - Phone-side override harness (part B)
 
 /// The real `PodLoanPhoneController` in LOANED via persisted state, capturing override applies.
+@MainActor
 private final class PhoneOverrideHarness {
 
     /// Every applyScheduleOverride call, in order (`nil` element = a clear), and its change time.
@@ -1368,7 +1330,6 @@ private final class PhoneOverrideHarness {
     private let stateDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
 
     init(epoch: Int = 1) {
-        PhoneLog.directoryOverride = PodLoanPhoneControllerTests.phoneLogDirectory
         try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         // Persisted-state derivation is how this controller boots: write LOANED at `epoch` and
         // it comes up mid-loan, ready to receive the hand-back offer.
@@ -1405,12 +1366,12 @@ private final class PhoneOverrideHarness {
             removeNotifications: { _ in }))
     }
 
-    /// Delivers a final offer and waits deterministically via `queue.sync` round-trips.
+    /// Delivers a final offer and lets the write's callbacks run.
     func deliverFinalOffer(events: [LoanEvent], at date: Date) {
         let offer = HandbackOffer(epoch: 1, handedBackAt: date, finalStatus: nil, odometer: nil,
                                   events: events, tombstones: [], recovered: false, released: true)
         controller.handleIncoming(userInfo: try! LoanMessage.handbackOffer(offer).transportDictionary())
-        for _ in 0..<4 { _ = controller.isPodLoanedOut }
+        drainMainQueue(hops: 4)
     }
 
     func tearDown() {

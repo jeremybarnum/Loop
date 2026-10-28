@@ -12,8 +12,8 @@ import HealthKit
 import LoopKit
 import LoopCore
 import UserNotifications
-import os.log
 
+@MainActor
 final class PodLoanPhoneController {
     /// Loan: owner → grantOffered → loaned → reconciling → owner. A take-back goes through
     /// reclaimPending. The phone doses only at owner, and not while yielding to an inferred loan.
@@ -56,13 +56,6 @@ final class PodLoanPhoneController {
 
         var send: ([String: Any]) -> Void
 
-        /// The active remote services' shared configurations for the Start grant; none leaves the
-        /// wrist without uploads.
-        var serviceConfigurations: () -> [SharedDeviceConfiguration] = { [] }
-
-        /// The phone's CGM's answer to "upload glucose?".
-        var cgmUploadsGlucose: () -> Bool? = { nil }
-
         var addPumpEvents: ([NewPumpEvent], _ lastReconciliation: Date?, @escaping (Error?) -> Void) -> Void
 
         var addCarb: (NewCarbEntry, @escaping (Error?) -> Void) -> Void
@@ -79,10 +72,6 @@ final class PodLoanPhoneController {
         var scheduleOverride: () -> TemporaryScheduleOverride? = { nil }
         /// Recorded in the override history at `changedAt`, when the wrist made the change.
         var applyScheduleOverride: (TemporaryScheduleOverride?, _ changedAt: Date) -> Void = { _, _ in }
-
-        /// After a clean hand-back, for the services the watch confirmed: the phone's glucose uploads
-        /// resume after the loan, not across it.
-        var skipLoanGlucoseUploads: (_ services: Set<String>) -> Void = { _ in }
 
         var noteWatchClosedLoop: (Bool) -> Void = { _ in }
 
@@ -129,8 +118,7 @@ final class PodLoanPhoneController {
 
         /// The watch's dosing decisions into this phone's store, skipping any already there; the
         /// result is how many were added.
-        /// Adds the watch's decisions; `uploadedBy` are the services the watch confirmed it uploaded them to.
-        var addDosingDecisions: (_ decisions: [StoredDosingDecision], _ uploadedBy: Set<String>, _ completion: @escaping (Result<Int, Error>) -> Void) -> Void = { _, _, done in done(.success(0)) }
+        var addDosingDecisions: (_ decisions: [StoredDosingDecision], _ completion: @escaping (Result<Int, Error>) -> Void) -> Void = { _, done in done(.success(0)) }
 
         /// The watch's alert records into this phone's `AlertStore`, one per sync identifier; the
         /// result is how many were added or updated.
@@ -154,8 +142,8 @@ final class PodLoanPhoneController {
 
         var isBluetoothPoweredOff: () -> Bool = { false }
 
-        /// During a loan the watch reports every cycle, so silence means something.
-        var lastWatchContactAt: () -> Date? = { nil }
+        /// The loan's log lines.
+        var logLoanLine: (String) -> Void = { PhoneLog.event("loan", $0) }
 
         /// Proxy for the phone being near the user.
         var latestGlucoseDate: () -> Date? = { nil }
@@ -172,17 +160,12 @@ final class PodLoanPhoneController {
         }
     }
 
-    let log = OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanPhoneController")
+    let log = DiagnosticLog(category: "PodLoanPhoneController")
 
-    /// All state mutation happens here; the UI reads a mirror instead.
-    let queue = DispatchQueue(label: "com.loopkit.Loop.PodLoanPhoneController", qos: .utility)
     var deps: Dependencies
 
+    /// One message at a time, in arrival order: `WatchDataManager` delivers on main.
     func handleIncoming(userInfo: [String: Any]) {
-        queue.async { self.handleIncomingOnQueue(userInfo) }
-    }
-
-    func handleIncomingOnQueue(_ userInfo: [String: Any]) {
         let message: LoanMessage?
         do {
             message = try LoanMessage.decode(fromTransport: userInfo)
@@ -212,16 +195,16 @@ final class PodLoanPhoneController {
         // The watch could not read something this phone sent.
         case .nack:
 
-            os_log("Loan protocol skew — the WATCH could not decode a message from this phone", log: log, type: .fault)
+            log.error("the watch could not read a message from this phone; the apps may be on different versions")
         // Phone-authored kinds, seen only if something loops a message back.
-        case .grant, .handbackAck, .revoke, .statusQuery, .denied, .diag, .dormantGrant:
+        case .grant, .handbackAck, .revoke, .statusQuery, .denied, .dormantGrant:
             break
         }
     }
 
     /// Back to the phone without a hand-back, for a loan that never really started.
     func reclaimToOwner(alert: (title: String, body: String)?, reason: String) {
-        handbackDiag(epoch, "loan ABANDONED — back to phone control: \(reason)")
+        handbackDiag(epoch, "loan abandoned, this phone keeps the pod: \(reason)")
 
         cancelTakeBackAttempt()
         deps.endReclaimBackgroundTask()
@@ -249,44 +232,40 @@ final class PodLoanPhoneController {
     /// Restores the loan and re-arms what was owed; a loaned state pauses dosing at once.
     init(dependencies: Dependencies) {
         self.deps = dependencies
-        var store = dependencies.stateDirectory.map { PersistedProperty<[String: Any]>(key: Self.stateFileKey, directory: $0) }
+        let store = dependencies.stateDirectory.map { PersistedProperty<[String: Any]>(key: Self.stateFileKey, directory: $0) }
             ?? PersistedProperty(key: Self.stateFileKey)
-        self._persisted = store.wrappedValue.flatMap(PodLoanPhoneState.init(rawValue:)) ?? PodLoanPhoneState()
+        self.persisted = store.wrappedValue.flatMap(PodLoanPhoneState.init(rawValue:)) ?? PodLoanPhoneState()
         self.stateStore = store
         loadStaged()
-        installPodLinkCensus()
 
         // Re-arm an unruled force-reclaim audit.
-        if let saved = _persisted.pendingForceAudit {
+        if let saved = persisted.pendingForceAudit {
             let e = saved.epoch
             pendingHandbackAudit = PendingHandbackAudit(
                 epoch: e, deliveredAtStart: saved.deliveredAtStart, windowStart: saved.from, expected: saved.expected,
-                loanMinutes: saved.loanMinutes, cycles: 0,
+                loanMinutes: saved.loanMinutes,
                 watchLatest: nil, flavor: .forceReclaim)
-            queue.async { [weak self] in
+            DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                self.handbackDiag(e, "force-reclaim audit RE-ARMED after relaunch — verdict still owed")
+                self.handbackDiag(e, "take-back check still owed after a relaunch")
                 self.beginReclaimSettleWindow()
             }
         }
 
         deps.whenProtectedDataAvailable { [weak self] in
-            guard let self = self else { return }
-            self.queue.async {
-                self.settleEstimatesAtLaunch()
-            }
+            DispatchQueue.main.async { self?.settleEstimatesAtLaunch() }
         }
 
         if podIsOnLoan {
             // Heal only transient states; a relaunch during a real loan is ordinary.
             if state == .reconciling {
-                queue.asyncAfter(deadline: .now() + 120) { [weak self] in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 120) { [weak self] in
                     guard let self = self, self.state == .reconciling else { return }
-                    self.forceReclaimToOwner(reason: "relaunched into reconciling, no hand-back")
+                    self.forceReclaimToOwner(reason: "the app relaunched during a hand-back and none followed")
                 }
             } else if state == .reclaimPending {
                 // A take-back cut short by the relaunch: finish the attempt, which refuses if the pod is away.
-                queue.async { [weak self] in
+                DispatchQueue.main.async { [weak self] in
                     guard let self = self, self.state == .reclaimPending else { return }
                     self.beginTakeBack(from: self.yieldingToInferredLoan ? .owner : .loaned)
                 }
@@ -298,12 +277,7 @@ final class PodLoanPhoneController {
 
     /// The persisted state (+State); written whole by `updateState`.
     var stateStore: PersistedProperty<[String: Any]>
-    var _persisted: PodLoanPhoneState
-    let stateLock = NSLock()
-
-    /// The tile's lock-guarded view; the UI never touches `queue`.
-    let uiMirrorLock = NSLock()
-    var uiMirror = UISnapshot()
+    var persisted: PodLoanPhoneState
 
     var reclaimStartedAt: Date?
     var reclaimSettleWork: DispatchWorkItem?

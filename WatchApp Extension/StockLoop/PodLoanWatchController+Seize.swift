@@ -19,11 +19,11 @@ extension PodLoanWatchController {
     /// Activates the stored credential: an epoch clear of every one this watch has seen, and a
     /// fresh lease (the credential arrives expired).
     func confirmSeize() {
-        queue.async {
+        DispatchQueue.main.async {
             // Only from rest, and only for the credential the offer was raised for.
             guard self.phase == .idle || self.phase == .recoveredDrain, let offer = self.seizeOffer,
                   let dormant = self.storedDormantGrant(), dormant.seizeToken == offer.token else {
-                SportLog.event("seize", "confirm arrived with no live offer — ignored [seize]")
+                SportLog.event("seize", "offline start confirmed with no offer standing; ignored")
                 return
             }
             self.seizeOffer = nil
@@ -39,10 +39,8 @@ extension PodLoanWatchController {
 
             // Drop queued requests before the pod changes hands.
             self.cancelStaleQueuedRequests(context: "seize confirmed")
-            SportLog.event("seize", String(format: "SEIZE confirmed — activating dormant grant (issued %@, epoch %d→%d, lease +%.0fs, token …%@) [seize]",
-                                           DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .short, timeStyle: .short),
-                                           dormant.grant.epoch, newEpoch, Self.seizeActivationLease,
-                                           String(dormant.seizeToken.uuidString.suffix(8))))
+            SportLog.event("seize", String(format: "offline start confirmed as loan %d, from the grant stored %@",
+                                           newEpoch, DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .short, timeStyle: .short)))
             self.phase = .requested
             self.attemptStartedAt = self.now()
             // Through the ordinary grant path, so seized and granted loans cannot drift.
@@ -54,13 +52,13 @@ extension PodLoanWatchController {
 
     /// The user declined the offline start. The credential stays stored for the next attempt.
     func dismissSeize() {
-        queue.async {
+        DispatchQueue.main.async {
             guard self.seizeOffer != nil else { return }
             self.seizeOffer = nil
             // The Start is withdrawn: a grant that still arrives for it starts nothing (transfer G).
             self.startCancelled = true
             self.cancelStaleQueuedRequests(context: "offer declined")
-            SportLog.event("seize", "seize offer DISMISSED [seize]")
+            SportLog.event("seize", "offline start declined")
             self.notifyUI()
         }
     }
@@ -68,9 +66,9 @@ extension PodLoanWatchController {
     /// The phone in reach during a seized loan is told at once that this watch holds the pod, so it
     /// stands aside. Reachability only prompts the message; nothing is decided on it.
     func noteReachabilityChanged(_ reachable: Bool) {
-        queue.async {
+        DispatchQueue.main.async {
             guard reachable, self.phase == .active, self.persisted.seizeToken != nil, !self.handbackRequested else { return }
-            self.sendHoldsPodStatusReport(reason: "phone reachable")
+            self.sendHoldsPodStatusReport(reason: "the phone is in reach")
         }
     }
 
@@ -79,7 +77,6 @@ extension PodLoanWatchController {
         guard phase == .active, let current = epoch else { return }
         sendMessage(.statusReport(StatusReport(
             epoch: current,
-            mode: currentMode(),
             lastDirectGlucoseAge: loopManager.latestGlucoseAge,
             lastEventSeq: journal.lastEventSeq,
             podFault: pumpFaultDescription,
@@ -87,22 +84,17 @@ extension PodLoanWatchController {
             knowsGrant: true,
             podReachable: podReachedLately,
             loanStartedAt: persisted.deliveredAtTakeoverAt)))
-        SportLog.event("seize", "statusReport sent — holdsPod e\(current)\(podReachedLately == false ? ", cannot reach the pod" : "") (\(reason)) [seize]")
+        SportLog.event("seize", "told the phone this watch holds the pod\(podReachedLately == false ? " but cannot reach it" : ""): \(reason)")
     }
 
     /// Latest-only: a new copy replaces the old.
     func handleDormantGrant(_ dormant: DormantGrant) {
         guard let data = try? LoanProtocol.encoder.encode(dormant) else {
-            SportLog.event("seize", "dormant grant arrived but failed to re-encode — NOT stored [seize]")
+            SportLog.event("seize", "grant for an offline start could not be encoded; not stored")
             return
         }
         dormantGrantStore.wrappedValue = data
         standingPumpConfiguration = dormant.grant.sharedPumpConfiguration
-        SportLog.event("seize", String(format: "dormant grant refreshed — issued %@, %d dose record(s), token …%@, pump %@ [seize]",
-                                       DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .none, timeStyle: .medium),
-                                       dormant.grant.doseHistory.count,
-                                       String(dormant.seizeToken.uuidString.suffix(8)),
-                                       dormant.grant.sharedPumpConfiguration?.managerIdentifier ?? "unknown"))
     }
 
     /// nil if absent or undecodable.
@@ -147,7 +139,7 @@ extension PodLoanWatchController {
                                                              pulseUnits: pulseUnits)
         let minutes = reading.at.timeIntervalSince(last.at) / 60
         guard unexplained > Self.unexplainedInsulinBand else {
-            SportLog.event("loan", String(format: "[odometer] (own) %.1f min: pump total %.2f → %.2f, residual %+.3f",
+            SportLog.event("loan", String(format: "insulin check over %.1f min: pump total %.2f → %.2f U, residual %+.3f U",
                                           minutes, last.units, reading.units, unexplained))
             return
         }
@@ -158,21 +150,16 @@ extension PodLoanWatchController {
         do {
             try await loopManager.seedInsulinHistory([entry])
         } catch {
-            SportLog.event("loan", String(format: "** over the last %.1f min: %.2f U UNEXPLAINED and the booking FAILED — %@ **",
-                                          minutes, unexplained, String(describing: error)))
+            SportLog.event("loan", String(format: "could not book %.2f U unexplained over %.1f min: %@",
+                                          unexplained, minutes, String(describing: error)))
             return
         }
-        SportLog.event("loan", String(format: "** pod total %.2f → %.2f U over %.1f min; %.2f U the records cannot explain — BOOKED as a bolus now (insulin on board errs high, dosing errs low) **",
-                                      last.units, reading.units, minutes, unexplained))
-        queue.async {
+        SportLog.event("loan", String(format: "booked %.2f U the records cannot explain as a bolus: pump total %.2f → %.2f U over %.1f min",
+                                      unexplained, last.units, reading.units, minutes))
+        DispatchQueue.main.async {
             self.startNote = (at, String(format: NSLocalizedString("%.2f U the watch had no record of — counted as insulin on board", comment: "Glance: unexplained insulin booked (1: units)"), unexplained))
             self.notifyUI()
         }
-    }
-
-    /// For log tags, from activation until the loan closes.
-    var seizeMarkerActive: Bool {
-        pendingSeizeToken != nil || persisted.seizeToken != nil
     }
 
     /// Bounds the handshake, not the credential.

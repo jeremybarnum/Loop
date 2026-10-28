@@ -15,7 +15,6 @@ import LoopKit
 import LoopCore
 import LoopAlgorithm
 import UserNotifications
-import os.log
 
 extension PodLoanPhoneController {
     /// Identity lives only in `raw` on this path; seeding it with the identifier's bytes would
@@ -99,14 +98,12 @@ extension PodLoanPhoneController {
         }
     }
 
-    /// Blocking; the tile uses `reclaimProgressForUI`.
     var reclaimProgress: ReclaimProgress? {
-        return Self.reclaimProgress(from: queue.sync { uiSnapshot() }, now: deps.now())
+        Self.reclaimProgress(from: uiSnapshot(), now: deps.now())
     }
 
     /// The phone loop's dosing gate: a grant is under way, the pod is lent out, a take-back is
-    /// reaching for it, or a take-back's audit has not ruled. Never blocks: it reads the pump and the
-    /// locked state (`grantInFlight` is a plain flag; a torn read costs one cycle, never a dose).
+    /// reaching for it, or a take-back's audit has not ruled.
     var holdsAutomaticDosing: Bool {
         let saved = persisted
         return grantInFlight
@@ -121,9 +118,8 @@ extension PodLoanPhoneController {
         saved.phase == .grantOffered || saved.phase == .loaned || saved.yieldingToInferredLoan
     }
 
-    /// Blocking; never from the controller's queue or a UI draw path.
     var isPodLoanedOut: Bool {
-        return queue.sync { state != .owner || yieldingToInferredLoan }
+        state != .owner || yieldingToInferredLoan
     }
 
     /// The lent pump's delivery pulse; nil with no pump, which no audit can be judged without.
@@ -169,7 +165,7 @@ extension PodLoanPhoneController {
     func noteTakeoverReading(units: Double, at: Date) {
         let last = ledgerLast
         if let last, at <= last.at {
-            PhoneLog.event("loan", String(format: "window start kept — this phone read the pod after the watch took over: %.2f U at %@",
+            PhoneLog.event("loan", String(format: "the watch's window starts at this phone's later reading, %.2f U at %@",
                                           last.units, ISO8601DateFormatter().string(from: last.at)))
             return
         }
@@ -179,7 +175,7 @@ extension PodLoanPhoneController {
         ownRecords(from: last.at) { records in
             let residual = LoanReconciler.insulinNotInRecords(totalThen: last.units, then: last.at, totalNow: units, now: at,
                                                               records: records, schedule: schedule, pulseUnits: pulseUnits)
-            PhoneLog.event("loan", String(format: "[odometer] (own) %.1f min until the watch took over: pump total %.2f → %.2f, residual %+.3f",
+            PhoneLog.event("loan", String(format: "this phone's insulin check until the watch took over: %.1f min, pod total %.2f to %.2f U, residual %+.3f U",
                                           at.timeIntervalSince(last.at) / 60, last.units, units, residual))
         }
     }
@@ -190,38 +186,36 @@ extension PodLoanPhoneController {
     /// once: a loan started away from the phone can be minutes long. Not while a reclaim's verdict
     /// is owed: that closes the watch's window. `completion` fires once any booking is in the store.
     func checkOwnPumpTotal(completion: @escaping () -> Void = {}) {
-        queue.async {
-            // The window is the watch's, judged when the pod comes back.
-            if Self.watchLoopsThePod(self.persisted) {
-                self.letGoAgainIfKept()
-                return completion()
-            }
-            guard self.state == .owner, self.pendingHandbackAudit == nil,
-                  let pump = self.deps.pumpManager() as? PumpDeliveryOdometer,
-                  (pump as? ExclusiveDeviceControl)?.isControlReleased != true,
-                  let reading = pump.deliveredUnits else { return completion() }
-            guard let last = self.ledgerLast else {
-                self.noteReading(units: reading.units, at: reading.at)
-                return completion()
-            }
-            guard reading.at > last.at else { return completion() }
+        // The window is the watch's, judged when the pod comes back.
+        if Self.watchLoopsThePod(self.persisted) {
+            self.letGoAgainIfKept()
+            return completion()
+        }
+        guard self.state == .owner, self.pendingHandbackAudit == nil,
+              let pump = self.deps.pumpManager() as? PumpDeliveryOdometer,
+              (pump as? ExclusiveDeviceControl)?.isControlReleased != true,
+              let reading = pump.deliveredUnits else { return completion() }
+        guard let last = self.ledgerLast else {
             self.noteReading(units: reading.units, at: reading.at)
-            // A lower total is a different pod: start again from it.
-            guard reading.units >= last.units else { return completion() }
-            let gap = reading.at.timeIntervalSince(last.at)
-            let acts = self.persisted.seizeToken != nil
-            let schedule = self.deps.settings().basalRateSchedule
-            let pulseUnits = pump.deliveryPulseUnits
-            self.ownRecords(from: last.at) { records in
-                let residual = LoanReconciler.insulinNotInRecords(totalThen: last.units, then: last.at,
-                                                                  totalNow: reading.units, now: reading.at,
-                                                                  records: records, schedule: schedule, pulseUnits: pulseUnits)
-                PhoneLog.event("loan", String(format: "[odometer] (own) %.1f min: pump total %.2f → %.2f, residual %+.3f",
-                                              gap / 60, last.units, reading.units, residual))
-                guard acts else { return completion() }
-                self.queue.async {
-                    self.applyGapVerdict(residual: residual, window: DateInterval(start: last.at, end: reading.at), completion: completion)
-                }
+            return completion()
+        }
+        guard reading.at > last.at else { return completion() }
+        self.noteReading(units: reading.units, at: reading.at)
+        // A lower total is a different pod: start again from it.
+        guard reading.units >= last.units else { return completion() }
+        let gap = reading.at.timeIntervalSince(last.at)
+        let acts = self.persisted.seizeToken != nil
+        let schedule = self.deps.settings().basalRateSchedule
+        let pulseUnits = pump.deliveryPulseUnits
+        self.ownRecords(from: last.at) { records in
+            let residual = LoanReconciler.insulinNotInRecords(totalThen: last.units, then: last.at,
+                                                              totalNow: reading.units, now: reading.at,
+                                                              records: records, schedule: schedule, pulseUnits: pulseUnits)
+            PhoneLog.event("loan", String(format: "this phone's insulin check: %.1f min, pod total %.2f to %.2f U, residual %+.3f U",
+                                          gap / 60, last.units, reading.units, residual))
+            guard acts else { return completion() }
+            DispatchQueue.main.async {
+                self.applyGapVerdict(residual: residual, window: DateInterval(start: last.at, end: reading.at), completion: completion)
             }
         }
     }
@@ -242,10 +236,10 @@ extension PodLoanPhoneController {
                                                       pulseUnits: pulseUnits, from: base.at, to: asOf,
                                                       includingBolusesAtEnd: false)
         let delivered = snap.deliveredLatest - base.units
-        let line = String(format: "e%d [odometer] (%@) loan so far %.1f min: delivered %.3f expected %.3f residual %+.3f%@",
+        let line = String(format: "e%d loan so far, from the watch's %@: %.1f min, delivered %.3f U, expected %.3f U, running residual %+.3f U%@",
                           epoch, context, asOf.timeIntervalSince(base.at) / 60, delivered, expected,
                           ((delivered - expected) * 1000).rounded() / 1000,
-                          delivering ? " · a bolus was delivering" : "")
+                          delivering ? ", a bolus was being given" : "")
         guard line != lastRunningAuditLine else { return }
         lastRunningAuditLine = line
         PhoneLog.event("loan", line)
@@ -261,7 +255,6 @@ extension PodLoanPhoneController {
         let windowStart: Date
         let expected: Double
         let loanMinutes: Double
-        let cycles: Int
         let watchLatest: Double?
         var flavor: Flavor = .handback
     }
@@ -273,14 +266,14 @@ extension PodLoanPhoneController {
     func applyReconciliationVerdict(residual: Double, epoch: Int) {
         if residual > Self.unexplainedInsulinBand {
             handbackDiag(epoch, String(format:
-                "** WARN — residual %+.3f U exceeds +%.2f: the pod delivered insulin the watch's complete records do not contain. Nothing booked; still looping. **",
+                "insulin warning: residual %+.3f U exceeds +%.2f U; the watch's records are complete, so nothing is booked",
                 residual, Self.unexplainedInsulinBand))
 
             deps.issueUrgentNotice("Unexplained Insulin",
                              String(format: "Unexpected: the pod delivered %.2f U more than the watch recorded. It isn't counted in insulin on board. Consider reporting it with a Loop Report.", residual))
         } else if residual < -Self.warnNegativeResidual {
             handbackDiag(epoch, String(format:
-                "** WARN — residual %+.3f U beyond -%.2f: records claim more delivery than the pod made (phantom IOB). Still looping — this direction under-doses and decays out. **",
+                "insulin warning: residual %+.3f U is beyond -%.2f U; the records claim more than the pod delivered",
                 residual, Self.warnNegativeResidual))
 
             deps.issueUrgentNotice("Insulin On Board May Be Overstated",
@@ -293,20 +286,20 @@ extension PodLoanPhoneController {
     func applyForceReclaimVerdict(residual: Double, epoch: Int, window: DateInterval) {
         if residual > Self.unexplainedInsulinBand {
             handbackDiag(epoch, String(format:
-                "** WARN — force-reclaim residual %+.3f U exceeds +%.2f: the pod delivered insulin the records cannot explain (watch died mid-session?). Still looping. **",
+                "insulin warning after take-back: residual %+.3f U exceeds +%.2f U; booking it as an estimate",
                 residual, Self.unexplainedInsulinBand))
 
             bookEstimate(units: residual, window: window, epoch: epoch,
                          notice: String(format: "%.2f U booked as a bolus because the watch's records haven't arrived. Its records replace this when the watch is back.", residual))
         } else if residual < -Self.warnNegativeResidual {
             handbackDiag(epoch, String(format:
-                "** WARN — force-reclaim residual %+.3f U beyond -%.2f: records claim more than the pod delivered (phantom IOB). Looping resumes — this direction under-doses and decays out. **",
+                "insulin warning after take-back: residual %+.3f U is beyond -%.2f U; the records claim more than the pod delivered",
                 residual, Self.warnNegativeResidual))
 
             deps.issueUrgentNotice(Self.overstatedTitle, Self.overstatedBody(-residual))
         } else {
             handbackDiag(epoch, String(format:
-                "force-reclaim audit CLEAN — residual %+.3f U within ±%.2f; automatic dosing resumes", residual, Self.unexplainedInsulinBand))
+                "insulin after take-back is clean: residual %+.3f U within ±%.2f U", residual, Self.unexplainedInsulinBand))
         }
     }
 
@@ -317,17 +310,17 @@ extension PodLoanPhoneController {
     func applyGapVerdict(residual: Double, window: DateInterval, completion: @escaping () -> Void = {}) {
         let gapMinutes = window.duration / 60
         decideAndAct(.podReading(differenceBeyondBand: abs(residual) > Self.unexplainedInsulinBand),
-                     why: String(format: "the pod shows %+.2f U this phone's records cannot explain — Sport Mode inferred", residual))
+                     why: String(format: "the pod shows %+.2f U this phone's records cannot explain", residual))
         if residual > Self.unexplainedInsulinBand {
             handbackDiag(epoch, String(format:
-                "** WARN — over the last %.0f min: %+.3f U the phone's records cannot explain (Sport Mode started away from the phone?). Still looping. **",
-                gapMinutes, residual))
+                "insulin warning: %+.3f U over the last %.0f min that this phone's records cannot explain; booking it as an estimate",
+                residual, gapMinutes))
             bookEstimate(units: residual, window: window, epoch: epoch,
                          notice: String(format: "%.2f U booked as a bolus: insulin the iPhone didn't record, probably from Sport Mode started on the watch. The watch's records replace it when it's back.", residual),
                          completion: completion)
         } else if residual < -Self.warnNegativeResidual {
             handbackDiag(epoch, String(format:
-                "** WARN — over the last %.0f min: records claim %.3f U more than the pod delivered. Still looping. **", gapMinutes, -residual))
+                "insulin warning: this phone's records claim %.3f U more than the pod delivered over the last %.0f min", -residual, gapMinutes))
             deps.issueUrgentNotice(Self.overstatedTitle, Self.overstatedBody(-residual))
             completion()
         } else {
@@ -361,10 +354,10 @@ extension PodLoanPhoneController {
         deps.issueUrgentNotice(Self.estimatedTitle, notice)
         deps.bookGapDose(entry) { [weak self] ok in
             guard let self = self else { return completion() }
-            self.queue.async {
+            DispatchQueue.main.async {
                 defer { completion() }
                 guard ok else {
-                    self.handbackDiag(epoch, String(format: "** estimate booking FAILED to save — %.2f U is NOT in the books. **", units))
+                    self.handbackDiag(epoch, String(format: "estimate not saved: %.2f U is not in the books", units))
                     return
                 }
                 self.updateState {
@@ -373,8 +366,8 @@ extension PodLoanPhoneController {
                 }
                 self.armPlaceholderReminders(units: units, bookedAt: now)
                 let iso = ISO8601DateFormatter()
-                self.handbackDiag(epoch, String(format: "estimate BOOKED — %.2f U bolus now (sync %@) for the window %@ to %@; retired by that window's records",
-                                                units, sync, iso.string(from: window.start), iso.string(from: window.end)))
+                self.handbackDiag(epoch, String(format: "estimate booked: %.2f U as a bolus for %@ to %@, sync %@",
+                                                units, iso.string(from: window.start), iso.string(from: window.end), sync))
             }
         }
     }
@@ -388,7 +381,7 @@ extension PodLoanPhoneController {
             doses.contains { $0.endDate > booking.window.start && $0.startDate < booking.window.end }
         }
         guard !covered.isEmpty else {
-            handbackDiag(epoch, "gap estimate STANDS — these records do not cover the gap it was booked for")
+            handbackDiag(epoch, "estimate stands: these records do not cover its window")
             return
         }
         let boluses = doses.filter { $0.type == .bolus }
@@ -397,13 +390,13 @@ extension PodLoanPhoneController {
         for booking in covered {
             deps.deleteGapDose(booking.sync) { [weak self] ok in
                 guard let self = self else { return }
-                self.queue.async {
+                DispatchQueue.main.async {
                     if ok {
                         self.updateState { $0.ledger.bookings.removeAll { $0.sync == booking.sync } }
                         self.deps.insulinHistoryRewritten(booking.bookedAt)
                         self.handbackDiag(epoch, String(format:
-                            "estimate RETIRED — %d real dose(s) cover its window: %.2f U bolus + %d rate record(s) and %d carb(s); the %.2f U estimate is replaced by actual timing",
-                            doses.count, bolusUnits, rateCount, carbs, booking.units))
+                            "estimate retired: %.2f U replaced by the watch's records, %d doses with %.2f U of bolus, %d rate records, %d carbs",
+                            booking.units, doses.count, bolusUnits, rateCount, carbs))
 
                         self.rearmPlaceholderReminders()
                         self.deps.issueNotice("Watch Records Recovered", carbs > 0
@@ -416,7 +409,7 @@ extension PodLoanPhoneController {
                             }
                         }
                         self.handbackDiag(epoch, String(format:
-                            "** gap DELETE FAILED — the %.2f U estimate AND the real records are both booked; IOB is over-counted until this retries **", booking.units))
+                            "estimate not deleted: the %.2f U estimate and the watch's records are both booked until a retry", booking.units))
                     }
                 }
             }
@@ -441,20 +434,19 @@ extension PodLoanPhoneController {
         }
         for booking in persisted.ledger.bookings {
             guard booking.deleteFailed else {
-                handbackDiag(epoch, String(format: "estimate STANDS — %.2f U (sync %@) still unexplained; the records that would retire it have not arrived", booking.units, booking.sync))
+                handbackDiag(epoch, String(format: "estimate stands at launch: %.2f U, sync %@", booking.units, booking.sync))
                 continue
             }
-            handbackDiag(epoch, String(format: "estimate DELETE retrying at launch — %.2f U (sync %@) was unretired last session", booking.units, booking.sync))
             deps.deleteGapDose(booking.sync) { [weak self] ok in
                 guard let self = self else { return }
-                self.queue.async {
+                DispatchQueue.main.async {
                     if ok {
                         self.updateState { $0.ledger.bookings.removeAll { $0.sync == booking.sync } }
                         self.deps.insulinHistoryRewritten(booking.bookedAt)
                         self.rearmPlaceholderReminders()
-                        self.handbackDiag(self.epoch, String(format: "estimate RETIRED on launch retry — %.2f U cleared", booking.units))
+                        self.handbackDiag(self.epoch, String(format: "estimate retired at launch: %.2f U, sync %@", booking.units, booking.sync))
                     } else {
-                        self.handbackDiag(self.epoch, String(format: "** estimate DELETE FAILED AGAIN at launch — %.2f U still stands; will retry next launch or the next matching offer **", booking.units))
+                        self.handbackDiag(self.epoch, String(format: "estimate not deleted at launch: %.2f U, sync %@, still stands", booking.units, booking.sync))
                     }
                 }
             }

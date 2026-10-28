@@ -25,6 +25,13 @@ extension StatusTableViewController {
         } else {
             subtitle = NSLocalizedString("Apple Watch is controlling the pod. Tap to reclaim.", comment: "The subtitle of the banner indicating the pod is controlled by the watch")
         }
+        // How current the phone's copy is: the time the watch's records last arrived.
+        var freshness: String?
+        if !deviceManager.isPodTakeoverInProgress, !deviceManager.isPodLoanReclaiming,
+           let lastRecordsAt = deviceManager.podLoanLastRecordsAt {
+            let time = DateFormatter.localizedString(from: lastRecordsAt, dateStyle: .none, timeStyle: .short)
+            freshness = String(format: NSLocalizedString("Updated from Apple Watch at %@", comment: "Banner line during a loan: when the watch's records last arrived (1: time)"), time)
+        }
         cell.contentConfiguration = UIHostingConfiguration {
             HStack {
                 Text(Image(systemName: "applewatch")).font(.title) + Text(" ")
@@ -36,6 +43,12 @@ extension StatusTableViewController {
                     Text(subtitle)
                         .font(.subheadline)
                         .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if let freshness {
+                        Text(freshness)
+                            .font(.footnote)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
 
                 Spacer()

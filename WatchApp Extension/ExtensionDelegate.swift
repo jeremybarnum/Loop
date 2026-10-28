@@ -28,7 +28,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     var stockLoopSessionStarting = false
     /// Loan messages that arrived before the stack was ready, replayed once it is —
     /// ExtensionDelegate+PodLoan.swift.
-    var earlyLoanMessages: [([String: Any], LoanTransportChannel)] = []
+    var earlyLoanMessages: [[String: Any]] = []
     let earlyLoanMessagesLock = NSLock()
 
     private var observers: [NSKeyValueObservation] = []
@@ -73,15 +73,6 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         notifications.append(NotificationCenter.default.addObserver(forName: LoopDataManager.didUpdateContextNotification, object: loopManager, queue: nil) { [weak self] (_) in
             DispatchQueue.main.async {
                 self?.loopManagerDidUpdateContext()
-            }
-        })
-
-        // During a loan the glance complication shows the WATCH's loop: the glance mirror is
-        // republished at every landed cycle.
-        notifications.append(NotificationCenter.default.addObserver(forName: WatchLoopManager.glanceMirrorDidUpdate, object: nil, queue: nil) { [weak self] (_) in
-            DispatchQueue.main.async {
-                guard let self, self.stockLoopSession?.loanController.isLoanActiveNonBlocking == true else { return }
-                GlanceComplicationPublisher.publish(from: self)
             }
         })
 
@@ -132,8 +123,6 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
             DispatchQueue.main.async { self.handle(backgroundTasks) }
             return
         }
-        podLoanNoteBackgroundTasks(backgroundTasks)
-
         loopManager.requestGlucoseBackfillIfNecessary()
 
         for task in backgroundTasks {
@@ -284,8 +273,6 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
             log.default("Reloading complication timeline")
             server.reloadTimeline(for: complication)
         }
-        ComplicationPublisher.publish(from: loopManager)
-        GlanceComplicationPublisher.publish(from: self)
     }
 }
 

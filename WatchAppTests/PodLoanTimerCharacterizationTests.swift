@@ -31,7 +31,7 @@ final class TimerRecorder {
     var armed: [Armed] { lock.lock(); defer { lock.unlock() }; return _armed }
     var labels: [String] { armed.map(\.label) }
 
-    func install(on controller: PodLoanWatchController) {
+    @MainActor func install(on controller: PodLoanWatchController) {
         controller.scheduler = { [weak self] delay, label, work in
             guard let self = self else { return }
             self.lock.lock()
@@ -66,6 +66,7 @@ final class TimerRecorder {
     func reset() { lock.lock(); _armed.removeAll(); _work.removeAll(); lock.unlock() }
 }
 
+@MainActor
 final class PodLoanTimerCharacterizationTests: XCTestCase {
 
     private var cacheDir: URL!
@@ -76,8 +77,8 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
     /// than widening production API for a test's convenience.
     private var loopManager: WatchLoopManager!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         cacheStore = PersistenceController(directoryURL: cacheDir)
         journalDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -85,11 +86,11 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
         defaults = UserDefaults(suiteName: "PodLoanTimerCharacterization-\(UUID().uuidString)")!
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         // Never unlink a live store's directory synchronously — the async-init race answers
         // later reads with zero rows. Unique names mean nothing collides.
         cacheStore = nil; cacheDir = nil; journalDir = nil; defaults = nil; loopManager = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     private func makeController() async -> PodLoanWatchController {
@@ -120,7 +121,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
     }
 
     /// Waits for armings; `drain` alone races the controller's queue on a loaded machine.
-    private func waitForArmed(_ rec: TimerRecorder, atLeast count: Int, timeout: TimeInterval = 5) {
+    private func waitForArmed(_ rec: TimerRecorder, atLeast count: Int, timeout: TimeInterval = 5) async {
         let e = expectation(description: "recorder saw \(count) arming(s)")
         let deadline = Date().addingTimeInterval(timeout)
         DispatchQueue.global().async {
@@ -130,14 +131,14 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
             }
             e.fulfill()
         }
-        wait(for: [e], timeout: timeout + 1)
+        await fulfillment(of: [e], timeout: timeout + 1)
     }
 
     /// Fixed settle; only for asserting an absence.
-    private func drain(_ controller: PodLoanWatchController, _ seconds: TimeInterval = 0.3) {
+    private func drain(_ controller: PodLoanWatchController, _ seconds: TimeInterval = 0.3) async {
         let done = expectation(description: "queue settled")
         DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { done.fulfill() }
-        wait(for: [done], timeout: seconds + 5)
+        await fulfillment(of: [done], timeout: seconds + 5)
     }
 
     // MARK: - The real request path
@@ -151,7 +152,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
         controller.send = { _ in }
 
         controller.requestLoan(watchBuild: "characterization")
-        waitForArmed(rec, atLeast: 1)
+        await waitForArmed(rec, atLeast: 1)
 
         XCTAssertEqual(rec.armed, [.init(label: "request-timeout", delay: PodLoanWatchController.requestTimeout)])
     }
@@ -166,7 +167,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
 
         controller.requestLoan(watchBuild: "characterization")
         controller.requestLoan(watchBuild: "characterization")
-        drain(controller)
+        await drain(controller)
 
         XCTAssertEqual(rec.labels, ["request-timeout"], "the second tap must not arm its own timeout")
     }
@@ -180,73 +181,14 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
         controller.send = { _ in }
 
         controller.requestLoan(watchBuild: "characterization")
-        waitForArmed(rec, atLeast: 1)
+        await waitForArmed(rec, atLeast: 1)
         XCTAssertTrue(rec.fire("request-timeout"), "the timeout must have been armed")
 
         controller.requestLoan(watchBuild: "characterization")
-        waitForArmed(rec, atLeast: 2)
+        await waitForArmed(rec, atLeast: 2)
 
         XCTAssertEqual(rec.labels, ["request-timeout", "request-timeout"],
                        "the recovered controller arms its own timeout rather than reusing the dead one")
-    }
-
-    // MARK: - The simulator flow driver
-    // A pure phase machine on timers: the only multi-timer path without a real grant.
-
-    /// The sim driver arms its grant and active hops together, up front — not chained.
-    func testSimFlowArmsGrantAndActiveTogether() async {
-        let controller = await makeController()
-        controller.simFakeLoanFlow = true
-        let rec = TimerRecorder()
-        rec.install(on: controller)
-        controller.send = { _ in }
-
-        controller.requestLoan(watchBuild: "characterization")
-        waitForArmed(rec, atLeast: 2)
-
-        XCTAssertEqual(rec.armed, [.init(label: "sim-grant", delay: 0.8),
-                                   .init(label: "sim-active", delay: 2.4)],
-                       "both hops are armed at start; each guards on the phase it expects to find")
-    }
-
-    /// Firing both hops in order walks idle → requested → takingOver → active, and the
-    /// loan starts OPEN. The phase guards are what make out-of-order firing safe.
-    func testSimFlowHopsWalkToActiveAndOpenLoop() async {
-        let controller = await makeController()
-        controller.simFakeLoanFlow = true
-        let rec = TimerRecorder()
-        rec.install(on: controller)
-        controller.send = { _ in }
-
-        controller.requestLoan(watchBuild: "characterization")
-        waitForArmed(rec, atLeast: 2)
-        XCTAssertEqual(controller.phase, .requested)
-
-        rec.fire("sim-grant")
-        XCTAssertEqual(controller.phase, .takingOver)
-
-        rec.fire("sim-active")
-        XCTAssertEqual(controller.phase, .active)
-        XCTAssertFalse(loopManager.closedLoopEnabled,
-                       "a loan starts OPEN — the wearer closes it deliberately")
-    }
-
-    /// Out-of-order firing is inert, which is what makes arming both up front safe.
-    func testSimActiveIsInertWhenItsPhaseGuardFails() async {
-        let controller = await makeController()
-        controller.simFakeLoanFlow = true
-        let rec = TimerRecorder()
-        rec.install(on: controller)
-        controller.send = { _ in }
-
-        controller.requestLoan(watchBuild: "characterization")
-        waitForArmed(rec, atLeast: 2)
-
-        rec.fire("sim-active")   // phase is .requested, not .takingOver
-        XCTAssertEqual(controller.phase, .requested, "the guard held; no phase moved")
-
-        rec.fire("sim-grant")
-        XCTAssertEqual(controller.phase, .takingOver, "and the correct hop still works afterwards")
     }
 
     // MARK: - Harness integrity
@@ -259,7 +201,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
         controller.send = { _ in }
 
         controller.requestLoan(watchBuild: "characterization")
-        waitForArmed(rec, atLeast: 1)
+        await waitForArmed(rec, atLeast: 1)
         XCTAssertEqual(controller.phase, .requested)
 
         rec.fire("request-timeout")

@@ -34,7 +34,7 @@ extension PodLoanWatchController: PumpManagerDelegate {
     func reportPumpFaultOnce() {
         guard pumpFaultDescription != nil, phase == .active, let current = epoch, faultReportedEpoch != current else { return }
         faultReportedEpoch = current
-        sendHoldsPodStatusReport(reason: "pump fault")
+        sendHoldsPodStatusReport(reason: "the pod faulted")
     }
 
     /// Book, close the ledger's window, complete, then journal. On a failed write nothing is acked or
@@ -42,7 +42,7 @@ extension PodLoanWatchController: PumpManagerDelegate {
     /// closes before the completion, so the cycle this report feeds sees anything it books.
     func pumpManager(_ pumpManager: PumpManager, hasNewPumpEvents events: [NewPumpEvent], lastReconciliation: Date?, replacePendingEvents: Bool, completion: @escaping (Error?) -> Void) {
         guard isCurrentDriver(pumpManager) else {
-            SportLog.event("loan", "\(events.count) pump event(s) from a released pod driver — ignored; the phone's check counts any insulin they carry")
+            SportLog.event("loan", "ignored \(events.count) pump event(s) from a released pod driver")
             completion(nil)
             return
         }
@@ -57,9 +57,9 @@ extension PodLoanWatchController: PumpManagerDelegate {
                     await self.checkOwnPumpTotal(reading: reading, pulseUnits: odometer.deliveryPulseUnits, insulinType: insulinType)
                 }
                 completion(nil)
-                self.queue.async { self.journalPumpEvents(events) }
+                DispatchQueue.main.async { self.journalPumpEvents(events) }
             } catch {
-                SportLog.event("book", "** pump events NOT stored — \(String(describing: error)) — \(events.count) event(s) held back by the pod for the next report **")
+                SportLog.event("book", "could not store \(events.count) pump event(s); the pod reports them again: \(String(describing: error))")
                 completion(error)
             }
         }
@@ -90,7 +90,7 @@ extension PodLoanWatchController: PumpManagerDelegate {
     }
 
     func pumpManager(_ pumpManager: PumpManager, didError error: PumpManagerError) {
-        os_log("PumpManager error: %{public}@", log: log, type: .error, String(describing: error))
+        log.error("PumpManager error: %{public}@", String(describing: error))
     }
 
     func pumpManager(_ pumpManager: PumpManager, didUpdatePumpRecordsBasalProfileStartEvents pumpRecordsBasalProfileStartEvents: Bool) {
@@ -98,7 +98,7 @@ extension PodLoanWatchController: PumpManagerDelegate {
     }
 
     func pumpManager(_ pumpManager: PumpManager, didAdjustPumpClockBy adjustment: TimeInterval) {
-        os_log("Pump clock adjusted by %f", log: log, type: .default, adjustment)
+        log.default("Pump clock adjusted by %f", adjustment)
     }
 
     /// Refused: the schedule is frozen to the grant, and the phone's audit uses the same one.
@@ -108,11 +108,11 @@ extension PodLoanWatchController: PumpManagerDelegate {
     }
 
     func pumpManagerWillDeactivate(_ pumpManager: PumpManager) {
-        os_log("PumpManager will deactivate", log: log, type: .default)
+        log.default("PumpManager will deactivate")
     }
 
     func pumpManagerPumpWasReplaced(_ pumpManager: PumpManager) {
-        os_log("Pump was replaced", log: log, type: .default)
+        log.default("Pump was replaced")
     }
 
     /// No trusted second clock on the wrist.
@@ -123,7 +123,7 @@ extension PodLoanWatchController: PumpManagerDelegate {
     /// Stock returns `dosingEnabled`; here, the wrist's loop switch during a live loan. A watch
     /// mid-takeover or mid-drain is not dosing automatically.
     var automaticDosingEnabled: Bool {
-        return phase == .active && loopManager.closedLoopEnabledNonBlocking
+        return phase == .active && loopManager.closedLoopEnabled
     }
 
     /// Judged against the override-applied schedule. Simpler than stock's: only MockKit's phone UI
@@ -143,7 +143,7 @@ extension PodLoanWatchController {
     /// The loaned pump, for an alert it raised, while the loan is live.
     func pumpAlertResponder(for managerIdentifier: String) async -> AlertResponder? {
         await withCheckedContinuation { continuation in
-            queue.async {
+            DispatchQueue.main.async {
                 let pump = self.phase == .active ? self.pumpManager : nil
                 continuation.resume(returning: pump?.pluginIdentifier == managerIdentifier ? pump : nil)
             }
@@ -154,7 +154,7 @@ extension PodLoanWatchController {
 extension PodLoanWatchController: PumpManagerStatusObserver {
     func pumpManager(_ pumpManager: PumpManager, didUpdate status: PumpManagerStatus, oldStatus: PumpManagerStatus) {
         guard isCurrentDriver(pumpManager) else { return }
-        os_log("Pump status: %{public}@", log: log, type: .default, String(describing: status.basalDeliveryState))
+        log.default("Pump status: %{public}@", String(describing: status.basalDeliveryState))
         // As stock `DeviceDataManager.pumpManager(_:didUpdate:oldStatus:)`.
         loopManager.doseStore.device = status.device
         loopManager.bolusStateDidChange(to: status.bolusState, from: oldStatus.bolusState, pumpManager: pumpManager)
@@ -202,10 +202,8 @@ extension LoanGrant {
     /// A dormant grant is issued expired; a seize re-stamps the epoch and lease.
     func withEpoch(_ newEpoch: Int, leaseUntil: Date) -> LoanGrant {
         LoanGrant(epoch: newEpoch, expiresAt: leaseUntil, pumpConfiguration: pumpConfiguration,
-                  podAddress: podAddress, therapySettingsRaw: therapySettingsRaw,
+                  therapySettingsRaw: therapySettingsRaw,
                   settingsTimeZoneID: settingsTimeZoneID, doseHistory: doseHistory,
-                  supportsInterimHandback: supportsInterimHandback,
-                  supportsOverrideRecords: supportsOverrideRecords,
                   integralRetrospectiveCorrectionEnabled: integralRetrospectiveCorrectionEnabled,
                   glucoseBasedApplicationFactorEnabled: glucoseBasedApplicationFactorEnabled,
                   guardAndRunwayEnabled: guardAndRunwayEnabled,

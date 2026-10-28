@@ -13,6 +13,7 @@ import LoopCore
 import HealthKit
 @testable import WatchApp
 
+@MainActor
 final class InsulinBookTests: XCTestCase {
 
     private var cacheDir: URL!
@@ -104,17 +105,15 @@ final class InsulinBookTests: XCTestCase {
         catch { XCTFail("report failed: \(error)") }
     }
 
-    private func settle(_ seconds: TimeInterval = 2.0) {
-        let done = expectation(description: "settled")
-        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { done.fulfill() }
-        wait(for: [done], timeout: seconds + 5)
+    private func settle(_ seconds: TimeInterval = 2.0) async {
+        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
 
     /// The IOB the automatic loop dosed with (its own run), not the glance's display run.
-    private func dosingIOB(_ manager: WatchLoopManager) -> Double? {
+    private func dosingIOB(_ manager: WatchLoopManager) async -> Double? {
         manager.loop()
-        settle()
-        return manager.glanceData().dosingIOB
+        await settle()
+        return await manager.settledGlanceData().dosingIOB
     }
 
     // MARK: -
@@ -126,7 +125,7 @@ final class InsulinBookTests: XCTestCase {
         await seed(manager, [bolus(2.0, minutesAgo: 2)])
         await report(manager)   // the takeover's first status read
 
-        guard let onBoard = dosingIOB(manager) else {
+        guard let onBoard = await dosingIOB(manager) else {
             return XCTFail("a seeded book with a pump report must produce an IOB figure, not nil")
         }
         XCTAssertGreaterThan(onBoard, 1.5,
@@ -140,9 +139,9 @@ final class InsulinBookTests: XCTestCase {
         await seedGlucose(manager)
         await report(manager)
 
-        let before = dosingIOB(manager) ?? 0
+        let before = await dosingIOB(manager) ?? 0
         await report(manager, [bolus(1.5, minutesAgo: 0)])
-        let after = dosingIOB(manager) ?? 0
+        let after = await dosingIOB(manager) ?? 0
 
         XCTAssertGreaterThan(after - before, 1.0,
                              "delivering 1.5 U must move IOB — this is the seam between the book that records doses and the input the algorithm reasons from")
@@ -157,7 +156,7 @@ final class InsulinBookTests: XCTestCase {
         let empty = expectation(description: "first recommendation")
         var first: Double?
         manager.recommendManualBolus { if case .success(let r) = $0 { first = r?.amount }; empty.fulfill() }
-        wait(for: [empty], timeout: 20)
+        await fulfillment(of: [empty], timeout: 20)
 
         guard let firstAmount = first, firstAmount > 0.2 else {
             return XCTFail("a flat 250 mg/dL against a 100-115 target must recommend a correction; got \(String(describing: first))")
@@ -168,7 +167,7 @@ final class InsulinBookTests: XCTestCase {
         let second = expectation(description: "second recommendation")
         var next: Double?
         manager.recommendManualBolus { if case .success(let r) = $0 { next = r?.amount }; second.fulfill() }
-        wait(for: [second], timeout: 20)
+        await fulfillment(of: [second], timeout: 20)
 
         guard let nextAmount = next else {
             return XCTFail("the second recommendation must compute")
@@ -186,8 +185,8 @@ final class InsulinBookTests: XCTestCase {
         await report(manager)
 
         manager.loop()
-        settle()
-        let data = manager.glanceData()
+        await settle()
+        let data = await manager.settledGlanceData()
 
         guard let shown = data.iob, let dosed = data.dosingIOB else {
             return XCTFail("both IOB figures must exist before they can be compared")
@@ -215,9 +214,9 @@ final class InsulinBookTests: XCTestCase {
         await report(manager, [liveTemp])
 
         manager.loop()
-        settle(4.0)
+        await settle(4.0)
 
-        let error = manager.glanceData().lastLoopErrorText ?? ""
+        let error = await manager.settledGlanceData().lastLoopErrorText ?? ""
         XCTAssertFalse(error.lowercased().contains("futurebasal"),
                        "a temp still running must not make the automatic cycle decline; got: \(error)")
     }
@@ -231,7 +230,7 @@ final class InsulinBookTests: XCTestCase {
         let unscaled = expectation(description: "no override")
         var before: Double?
         manager.recommendManualBolus { if case .success(let r) = $0 { before = r?.amount }; unscaled.fulfill() }
-        wait(for: [unscaled], timeout: 20)
+        await fulfillment(of: [unscaled], timeout: 20)
 
         guard let baseline = before, baseline > 0.3 else {
             return XCTFail("a flat 250 mg/dL must recommend a correction to compare against; got \(String(describing: before))")
@@ -248,12 +247,12 @@ final class InsulinBookTests: XCTestCase {
             enactTrigger: .local,
             syncIdentifier: UUID())
         manager.applyWristOverride(override)
-        settle()
+        await settle()
 
         let scaled = expectation(description: "override active")
         var after: Double?
         manager.recommendManualBolus { if case .success(let r) = $0 { after = r?.amount }; scaled.fulfill() }
-        wait(for: [scaled], timeout: 20)
+        await fulfillment(of: [scaled], timeout: 20)
 
         guard let overridden = after else { return XCTFail("the recommendation must still compute under an override") }
         XCTAssertLessThan(overridden, baseline * 0.8,
@@ -269,9 +268,9 @@ final class InsulinBookTests: XCTestCase {
         // Deliberately no report — the pod has never spoken to this book.
 
         manager.loop()
-        settle()
+        await settle()
 
-        let error = manager.glanceData().lastLoopErrorText ?? ""
+        let error = await manager.settledGlanceData().lastLoopErrorText ?? ""
         XCTAssertTrue(error.contains("pumpDataTooOld"),
                       "with no pump report the loop must refuse; a temp here would be computed against a book the pod never wrote; got: \(error)")
     }
@@ -282,12 +281,14 @@ final class InsulinBookTests: XCTestCase {
         await seedGlucose(manager)
         await seed(manager, [bolus(2.0, minutesAgo: 2)])
         await report(manager)
-        XCTAssertGreaterThan(dosingIOB(manager) ?? 0, 1.5, "sanity: the seeded bolus is on board")
+        let seeded = await dosingIOB(manager) ?? 0
+        XCTAssertGreaterThan(seeded, 1.5, "sanity: the seeded bolus is on board")
 
         await manager.resetInsulinBook(reason: "test")
         await report(manager)
 
-        XCTAssertLessThan(dosingIOB(manager) ?? 0, 0.1,
+        let afterReset = await dosingIOB(manager) ?? 0
+        XCTAssertLessThan(afterReset, 0.1,
                           "after a reset the book must be empty — a leftover row is the wipe leak this store used to have")
     }
 }

@@ -11,12 +11,11 @@ import LoopCore
 import WatchConnectivity
 import os.log
 
+@MainActor
 final class StockLoopSession {
     let stack: StockLoopStack.Stack
 
     let loanController: PodLoanWatchController
-
-    private let log = OSLog(subsystem: "com.loopkit.Loop", category: "StockLoopSession")
 
     /// Fails only if the stores cannot be opened; then there is no Sport Mode at all.
     init?() async {
@@ -24,14 +23,16 @@ final class StockLoopSession {
         stack = assembled
         loanController = PodLoanWatchController(loopManager: stack.loopManager)
 
-        RuntimeStateLog.startMainStallDetector()
-
         loanController.isPhoneReachable = { WCSession.default.isReachable }
         loanController.isLinkActivated = { WCSession.default.activationState == .activated }
 
         // The per-cycle renewal is the phone's liveness signal.
-        stack.loopManager.onCycleLanded = { [weak loanController] in loanController?.renewHold() }
-        stack.loopManager.onLoopOpened = { [weak loanController] in loanController?.endPreMealOverride(reason: "loop opened on the wrist") }
+        stack.loopManager.onCycleLanded = { [weak loanController] in
+            loanController?.renewHold()
+        }
+        stack.loopManager.onLoopOpened = { [weak loanController] in
+            loanController?.endPreMealOverride(reason: "loop opened on the watch")
+        }
 
         // Cancel queued requests that have not started transferring: delivered at reunion they could
         // re-grant over a running loan.
@@ -43,13 +44,12 @@ final class StockLoopSession {
             return stale.count
         }
 
-        // sendMessage when reachable, transferUserInfo otherwise; every send logs its channel.
+        // sendMessage when reachable, transferUserInfo otherwise.
         loanController.send = { [weak self, weak loanController] dictionary in
 
             let session = WCSession.default
             // Sent before the link has started up, a message is lost: hold it until it has.
             guard session.activationState == .activated else {
-                SportLog.event("wc", "send \(dictionary.keys.joined(separator: ",")) HELD — the link to the phone has not started yet")
                 self?.holdUntilActivated(dictionary)
                 return
             }
@@ -58,7 +58,6 @@ final class StockLoopSession {
             let urgent = LoanMessage.isInteractiveHandshake(transport: dictionary)
                 && session.isReachable && !wedged
             let ridesBothChannels = urgent && LoanMessage.ridesBothChannels(transport: dictionary)
-            SportLog.event("wc", "send \(dictionary.keys.joined(separator: ",")) — session \(session.activationState.rawValue), reachable \(session.isReachable), path \(urgent ? (ridesBothChannels ? "urgent+queued" : "urgent") : "queued")")
 
             // At most one queued hand-back offer. Capture the stale list before enqueueing, cancel after.
             let enqueueSuperseding = { (payload: [String: Any]) in
@@ -70,22 +69,17 @@ final class StockLoopSession {
                     : []
                 session.transferUserInfo(payload)
                 let cancelled = stale.filter { !$0.isTransferring }
-                guard !cancelled.isEmpty else { return }
                 cancelled.forEach { $0.cancel() }
-                SportLog.event("wc", "superseded \(cancelled.count) queued offer(s) with the fresh one")
             }
 
             guard urgent else {
                 enqueueSuperseding(dictionary)
                 return
             }
-            session.sendMessage(dictionary, replyHandler: nil, errorHandler: { error in
+            session.sendMessage(dictionary, replyHandler: nil, errorHandler: { _ in
                 loanController?.noteUrgentSendFailed()
-                guard !ridesBothChannels else {
-                    SportLog.event("wc", "urgent send FAILED (\(error.localizedDescription)) — the queued copy carries it")
-                    return
-                }
-                SportLog.event("wc", "urgent send FAILED (\(error.localizedDescription)) — falling back to the queued path")
+                // The queued copy already carries a message that rides both channels.
+                guard !ridesBothChannels else { return }
                 enqueueSuperseding(dictionary)
             })
             if ridesBothChannels { enqueueSuperseding(dictionary) }
@@ -108,46 +102,31 @@ final class StockLoopSession {
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 try data.write(to: url)
             } catch {
-                SportLog.event("wc", "loan history file NOT written — \(error.localizedDescription)")
+                SportLog.event("wc", "could not write the loan history file: \(error.localizedDescription)")
                 return false
             }
             session.transferFile(url, metadata: metadata)
             return true
         }
 
-        // The takeover, bracketed by log snapshots.
-        loanController.onTakeoverRadioHold = { [weak self] holding in
-            self?.sendLogSnapshot(holding ? "takeover start" : "takeover verdict")
-        }
-
         // Everything that holds only for the length of a loan, armed and disarmed together.
         loanController.onLoanActiveChanged = { [weak self] active in
             guard let self = self else { return }
             if active {
-                os_log("Loan active: starting G7 transport", log: self.log, type: .default)
-
                 LoopStallWatchdog.refresh()
-                SportLog.event("deadman", "ladder ARMED — 20/40m + 1/2h rungs, time-sensitive [deadman]")
 
                 NotificationCenter.default.post(name: .podLoanPhaseDidChange, object: nil)
 
+
                 self.startLogPulse()
-
                 RuntimeStateLog.startHeartbeat()
-
-                // Uploads, when the Start grant carried service configurations.
-                LoanRemoteUploads.shared.begin(loopManager: self.stack.loopManager)
             } else {
-                // Normally already done by teardownPump.
-                LoanRemoteUploads.shared.end()
-
-                os_log("Loan ended: stopping G7 transport", log: self.log, type: .default)
-                LoopStallWatchdog.disarm()
-                SportLog.event("deadman", "ladder CLEARED — loan ended, coverage transfers to the phone [deadman]")
                 self.stopLogPulse()
                 RuntimeStateLog.stopHeartbeat()
-
                 self.sendLogSnapshot("loan end")
+
+
+                LoopStallWatchdog.disarm()
 
                 // Loop mode is per session.
                 self.stack.loopManager.resetClosedLoopForSessionEnd()
@@ -159,36 +138,10 @@ final class StockLoopSession {
         // Last, with every closure in place.
         loanController.resumeIfNeeded()
 
-        let build = BuildDetails.default.codeIdentity
-        SportLog.event("session", "Sport Mode ready — build \(build); tap Start to request a loan\(Self.launchForensics())")
-        startLinkCensus()
-
-        // No radio arbiter between G7 and pod; contention during acquisition is unmeasured.
-        SportLog.event("policy", "link policy AUTOMATIC: pod orphaned between doses, reclaim per cycle, acquisition-gated while un-adopted")
+        SportLog.event("session", "Sport Mode ready, build \(BuildDetails.default.codeIdentity)")
     }
 
-    private static let previousLaunchKey = "SportMode.previousLaunchAt"
-
-    /// Time since the last launch and resident footprint. Writes the stamp: call once per launch.
-    private static func launchForensics() -> String {
-        let now = Date()
-        let previous = UserDefaults.standard.object(forKey: previousLaunchKey) as? Date
-        UserDefaults.standard.set(now, forKey: previousLaunchKey)
-        let sincePrevious = previous.map { String(format: "%.0fs", now.timeIntervalSince($0)) } ?? "first"
-        return " · sincePrevLaunch=\(sincePrevious) footprint=\(residentFootprint())"
-    }
-
-    private static func residentFootprint() -> String {
-        var info = task_vm_info_data_t()
-        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
-        let ok = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
-            }
-        }
-        guard ok == KERN_SUCCESS else { return "?" }
-        return String(format: "%.0fMB", Double(info.phys_footprint) / 1024 / 1024)
-    }
+    // MARK: - Bench only: the watch's log file to the phone
 
     /// Queued file transfer to the phone; the reason is logged first.
     func sendLogSnapshot(_ reason: String) {
@@ -216,14 +169,12 @@ final class StockLoopSession {
         logPulse = nil
     }
 
-    /// false: not loan traffic; the caller continues with stock handling.
-    func handleIncomingIfLoanMessage(_ userInfo: [String: Any], channel: LoanTransportChannel) -> Bool {
+    /// false: not loan traffic; the caller continues with stock handling. From the link's thread.
+    nonisolated func handleIncomingIfLoanMessage(_ userInfo: [String: Any]) -> Bool {
         guard userInfo[LoanProtocol.userInfoKey] != nil else { return false }
-        loanController.handleIncoming(userInfo: userInfo, channel: channel)
+        loanController.handleIncoming(userInfo: userInfo)
         return true
     }
-
-    private var linkCensusTimer: DispatchSourceTimer?
 
     /// Messages sent before the link to the phone started up; sent at `sessionDidActivate`.
     private var heldUntilActivated: [[String: Any]] = []
@@ -235,18 +186,6 @@ final class StockLoopSession {
         heldLock.unlock()
     }
 
-    /// One line a minute on the link, regardless of loan state.
-    private func startLinkCensus() {
-        let t = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
-        t.schedule(deadline: .now() + 60, repeating: 60, leeway: .seconds(5))
-        t.setEventHandler {
-            let s = WCSession.default
-            SportLog.event("link", "phone reachable=\(s.isReachable) activation=\(s.activationState.rawValue) companionInstalled=\(s.isCompanionAppInstalled)")
-        }
-        t.resume()
-        linkCensusTimer = t
-    }
-
     /// The first moment anything can be sent: what was held goes, then an interrupted takeover is
     /// failed, a parked drain re-offered, and work waiting on the link runs.
     func sessionDidActivate() {
@@ -254,7 +193,6 @@ final class StockLoopSession {
         let held = heldUntilActivated
         heldUntilActivated = []
         heldLock.unlock()
-        if !held.isEmpty { SportLog.event("wc", "link started — sending \(held.count) held message(s)") }
         held.forEach { loanController.send?($0) }
         loanController.drainRecoveredIfNeeded()
         loanController.linkDidActivate()

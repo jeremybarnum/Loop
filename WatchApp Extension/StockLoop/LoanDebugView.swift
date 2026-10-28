@@ -88,7 +88,6 @@ struct LoanDebugView: View {
 
                 row("phase", snapshot.map { String(describing: $0.phase) } ?? "—")
                 row("epoch", snapshot?.epoch.map(String.init) ?? "—")
-                row("mode", snapshot.map { $0.mode.rawValue } ?? "—")
                 row("pump", (snapshot?.hasPumpManager ?? false) ? "constructed" : "nil")
                 row("odometer", snapshot?.deliveredUnits.map { String(format: "%.2f U", $0) } ?? "—")
                 row("loop IOB", iobText)
@@ -145,15 +144,13 @@ struct LoanDebugView: View {
         }
     }
 
-    /// Asks owners to republish, then reads the existing mirror; keeps the old value on nil.
+    /// Reads the controller, and asks the loop to rebuild its glance snapshot; keeps the old values on nil.
     private func tick() {
-        session?.loanController.refreshDebugSnapshot()
-        snapshot = session?.loanController.mirroredDebugSnapshot ?? snapshot
+        snapshot = session?.loanController.debugSnapshot() ?? snapshot
         cgm = (WatchCGMHost.shared.cgmManager as? G7CGMManager).map(CGMHealth.init) ?? cgm
 
-        RuntimeStateLog.mark("debug.tick")
         session?.stack.loopManager.refreshGlanceData()
-        if let gd = session?.stack.loopManager.mirroredGlanceData {
+        if let gd = session?.stack.loopManager.glanceData {
             dosing = gd
             iobText = gd.dosingIOB.map { String(format: "%.2f U", $0) } ?? "—"
             cobText = gd.dosingCOB.map { String(format: "%.0f g", $0) } ?? "—"

@@ -2,9 +2,9 @@
 //  WatchLoopManager+Glucose.swift
 //  WatchApp Extension
 //
-//  The watch's own G7 reading (from stock's `WatchCGMHost`) and the phone's relayed reading feed
-//  the one store the loop doses from. Both paths run on `deviceQueue`; each guard holds even though
-//  store writes can overlap.
+//  The loop's reaction to readings the watch's `LoopDataManager` has stored: its own G7 reading
+//  (from stock's `WatchCGMHost`) and, during a loan, the phone's relayed reading. Both run right after
+//  the store's write, in arrival order.
 //
 
 import Foundation
@@ -16,32 +16,29 @@ import WatchConnectivity
 import os.log
 
 extension WatchLoopManager {
-    /// The watch's own reading, from stock's `WatchCGMHost`. Stock `DeviceDataManager.cgmManager(_:hasNew:)`,
-    /// including the 4.2-minute gate; the cycle runs after the store write lands, and only when it
-    /// stored a reading the store lacked.
-    func ingestDirectGlucose(_ samples: [NewGlucoseSample]) {
-        deviceQueue.async {
-            self.log.default("Direct CGM reading: %d sample(s)", samples.count)
-            self.processDirectGlucose(samples) { storedNewGlucose in
-                let now = self.now()
+    /// The watch's own reading, from stock's `WatchCGMHost`, once `LoopDataManager` has stored it. As
+    /// stock `DeviceDataManager.cgmManager(_:hasNew:)`: the glucose alerts see every delivered reading,
+    /// and a cycle runs, at most every 4.2 minutes, only when the store took a reading it lacked.
+    func didStoreDirectGlucose(_ samples: [NewGlucoseSample], storedNew: Bool) {
+        guard let latest = samples.max(by: { $0.date < $1.date }) else { return }
+        noteGlucoseSource(directG7: true)
+        evaluateGlucoseAlerts(samples)
 
-                if storedNewGlucose, self.claimCGMLoopTrigger(at: now) {
-                    self.log.default("Triggering loop from new CGM data at %{public}@", String(describing: now))
-                    self.checkPumpDataAndLoop()
-                }
+        let mgdl = Int(latest.quantity.doubleValue(for: .milligramsPerDeciliter).rounded())
+        SportLog.event("glucose", "G7 reading \(mgdl) mg/dL, \(Int(self.now().timeIntervalSince(latest.date))) s old"
+            + (samples.count > 1 ? ", with \(samples.count - 1) backfilled" : "") + (storedNew ? "" : ", already stored"))
 
-                Self.queueLogTransferThrottled()
-            }
+        let now = self.now()
+        if storedNew, claimCGMLoopTrigger(at: now) {
+            log.default("Triggering loop from new CGM data at %{public}@", String(describing: now))
+            checkPumpDataAndLoop()
         }
+
+        Self.queueLogTransferThrottled()
     }
 
-    /// Newest stored reading from either source; for the watch's own radio use `lastGlucoseSourceStamps.direct`.
-    var latestGlucoseAge: TimeInterval? {
-        return glucoseStore.latestGlucose.map { self.now().timeIntervalSince($0.startDate) }
-    }
-
-    /// 4.5 minutes, deliberately NOT 5. Readings land every ~4.98-5.0 min, so a 5-minute gate
-    /// races the cadence and skips alternate transfers, halving the log's resolution.
+    /// Bench only: the log file to the phone every 4.5 minutes, deliberately not 5: readings land
+    /// every ~4.98-5.0 min, so a 5-minute gate would skip alternate transfers.
     private static var lastLogTransfer = Date.distantPast
     static func queueLogTransferThrottled() {
         guard Date().timeIntervalSince(lastLogTransfer) > 4.5 * 60 else { return }
@@ -50,121 +47,46 @@ extension WatchLoopManager {
         WCSession.default.transferFile(url, metadata: ["kind": "g7watch.log"])
     }
 
-    /// Stock `processCGMReadingResult`'s new-data case plus a source stamp and a post-write check; no
-    /// staleness monitor. Glucose alerts see every delivered reading, as stock's do. The phone's relay
-    /// of the same reading carries the same sync identifier, so the store's own dedup drops the second.
-    /// Completes with stock's `storedNewGlucose`: whether the write stored anything.
-    private func processDirectGlucose(_ values: [NewGlucoseSample], completion: @escaping (_ storedNewGlucose: Bool) -> Void) {
-        let deliveredCount = values.count
-        let latest = values.max(by: { $0.date < $1.date })
-        let latestDesc: String = {
-            guard let s = latest else { return "none" }
-            let mgdl = Int(s.quantity.doubleValue(for: .milligramsPerDeciliter).rounded())
-            return "\(mgdl) mg/dL age \(Int(self.now().timeIntervalSince(s.date)))s"
-        }()
-        let batchTag = deliveredCount > 1 ? " BATCH(backfill+live)" : ""
-
-        // Stamped on arrival, since the phone's relay of the same reading usually lands first.
-        if deliveredCount > 0 { self.noteGlucoseSource(directG7: true) }
-        if !values.isEmpty { self.evaluateGlucoseAlerts(values) }
-
-        SportLog.event("glucose",
-            "INGEST src=direct-G7 n=\(deliveredCount) · latest \(latestDesc)\(batchTag)")
-        guard !values.isEmpty else { completion(false); return }
-        Task {
-            var storedNewGlucose = false
-            do {
-                storedNewGlucose = try await !self.glucoseStore.addGlucoseSamples(values).isEmpty
-
-                // A successful write has left the store pinned to an older sample before; check it moved.
-                if let newest = values.map(\.date).max(),
-                   (self.glucoseStore.latestGlucose?.startDate ?? .distantPast) < newest.addingTimeInterval(-1) {
-                    SportLog.event("glucose", "STORE LATEST IS STALE after a write — wrote up to \(newest), store says \(self.glucoseStore.latestGlucose.map { String(describing: $0.startDate) } ?? "nil") [glucose-store]")
-                }
-            } catch {
-                self.log.error("Failure adding glucose samples: %{public}@", String(describing: error))
-                SportLog.event("glucose", "STORE WRITE FAILED — \(values.count) reading(s) NOT written: \(error) [glucose-store]")
-            }
-
-            self.dataAccessQueue.async { self.publishOwnGlucoseContextWhenIdle() }
-            completion(storedNewGlucose)
+    /// Stock `DeviceDataManager.receivedUnreliableCGMReading`: with the sensor's data unreliable, a
+    /// temp above the scheduled basal is cancelled. Only while the watch holds the pod.
+    func receivedUnreliableGlucose() {
+        onLane {
+            guard case .tempBasal(let tempBasal)? = self.pumpManager?.status.basalDeliveryState,
+                  let scheduledBasalRate = self.settingsProvider.settings.basalRateSchedule?.value(at: tempBasal.startDate),
+                  tempBasal.unitsPerHour > scheduledBasalRate else { return }
+            SportLog.event("cgm", "sensor data unreliable; cancelling the high temp basal")
+            await self.cancelActiveTempBasal(reason: .unreliableCGMData)
         }
     }
 
-    /// The phone's reading as a gap-filler while the wrist owns the alarms (the caller gates on the
-    /// loan), including mid-takeover and mid-resume. Guards, in order: syncId latch (correct under
-    /// the async-add race), newer than stored, the store's dedup. A stored reading goes to the
-    /// glucose alerts too, as the watch's own readings do; it runs a cycle only once a pod is held.
-    func ingestPhoneGlucose(_ sample: NewGlucoseSample) {
-        deviceQueue.async {
-            if sample.syncIdentifier == self.lastPhoneFallbackSyncId { return }
-            self.lastPhoneFallbackSyncId = sample.syncIdentifier
+    /// Newest stored reading from either source; for the watch's own radio use `lastGlucoseSourceStamps.direct`.
+    var latestGlucoseAge: TimeInterval? {
+        return glucoseStore.latestGlucose.map { self.now().timeIntervalSince($0.startDate) }
+    }
 
-            if let latest = self.glucoseStore.latestGlucose?.startDate, latest >= sample.date { return }
-            Task {
-                do {
-                    // Empty when the watch's own reading of this sample is already stored.
-                    guard try await !self.glucoseStore.addGlucoseSamples([sample]).isEmpty else { return }
-                } catch {
-                    self.log.error("phone-BG fallback add failed: %{public}@", String(describing: error))
-                    return
-                }
-                let mgdl = Int(sample.quantity.doubleValue(for: .milligramsPerDeciliter))
-                // Stamped AFTER the write, unlike the direct path. The relay arrives constantly;
-                // only a reading that actually filled a gap counts as the phone having delivered.
-                self.noteGlucoseSource(directG7: false)
-                self.evaluateGlucoseAlerts([sample])
-                SportLog.event("glucose",
-                    "INGEST src=phone-relay stored=1/1 · latest \(mgdl) mg/dL age \(Int(self.now().timeIntervalSince(sample.date)))s (direct-G7 gap)")
-                SportLog.event("loan", "phone-BG fallback: ingested \(mgdl) mg/dL syncId=\(sample.syncIdentifier ?? "?") (direct-G7 gap) — triggering loop")
-                if self.claimCGMLoopTrigger(at: self.now()) {
-                    self.checkPumpDataAndLoop()
-                }
-            }
+    /// The phone's reading during a loan, once `LoopDataManager` stored it as a gap-filler while the
+    /// wrist owns the alarms. It goes to the glucose alerts too, as the watch's own readings do, unless
+    /// the store already holds a newer one; it runs a cycle only once a pod is held.
+    func didStorePhoneGlucose(_ sample: NewGlucoseSample) {
+        if let latest = glucoseStore.latestGlucose?.startDate, latest > sample.date { return }
+        let mgdl = Int(sample.quantity.doubleValue(for: .milligramsPerDeciliter))
+        // Only a reading that actually filled a gap counts as the phone having delivered.
+        noteGlucoseSource(directG7: false)
+        evaluateGlucoseAlerts([sample])
+        SportLog.event("glucose", "phone reading \(mgdl) mg/dL, \(Int(self.now().timeIntervalSince(sample.date))) s old, fills a gap in the watch's own readings")
+        if claimCGMLoopTrigger(at: now()) {
+            checkPumpDataAndLoop()
         }
     }
 
-    #if targetEnvironment(simulator)
-
-    /// Simulator only: the phone's context stands in for a CGM.
-    @MainActor
-    func simIngestPhoneGlucose() {
-        let ctx = ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext
-        guard let quantity = ctx?.glucose, let date = ctx?.glucoseDate else { return }
-        deviceQueue.async {
-            if let latest = self.glucoseStore.latestGlucose?.startDate, latest >= date { return }
-            let sample = NewGlucoseSample(
-                date: date,
-                quantity: quantity,
-                condition: nil,
-                trend: ctx?.glucoseTrend,
-                trendRate: ctx?.glucoseTrendRate,
-                isDisplayOnly: false,
-                wasUserEntered: false,
-                syncIdentifier: "sim-\(Int(date.timeIntervalSince1970))")
-            Task {
-                do {
-                    _ = try await self.glucoseStore.addGlucoseSamples([sample])
-                } catch {
-                    self.log.error("SIM glucose add failed: %{public}@", String(describing: error))
-                }
-
-                if self.claimCGMLoopTrigger(at: self.now()) {
-                    SportLog.event("sim", "SIM CGM \(Int(quantity.doubleValue(for: .milligramsPerDeciliter))) mg/dL (phone sim) — triggering real loop")
-                    self.checkPumpDataAndLoop()
-                }
-            }
-        }
-    }
-    #endif
 
 }
 
 /// Alerts from the pump the watch holds, and from the wrist's glucose alerts; and the pump's device log.
 extension WatchLoopManager: AlertIssuer, PersistedAlertStore {
     /// Device-log sink for the pump manager. While the watch holds the pod every line goes to stock's
-    /// device log, as stock `DeviceDataManager` writes it (the watch has a pump only during a loan);
-    /// the text log gets each line, throttled. The CGM's lines are `WatchCGMHost`'s.
+    /// device log, as stock `DeviceDataManager` writes it (the watch has a pump only during a loan).
+    /// The CGM's lines are `WatchCGMHost`'s.
     func deviceManager(_ manager: DeviceManager, logEventForDeviceIdentifier deviceIdentifier: String?, type: DeviceLogEntryType, message: String, completion: ((Error?) -> Void)?) {
         log.default("Device %{public}@: %{public}@", deviceIdentifier ?? "unknown", message)
 
@@ -173,19 +95,6 @@ extension WatchLoopManager: AlertIssuer, PersistedAlertStore {
         } else {
             completion?(nil)
         }
-
-        let source = manager is CGMManager ? "cgm" : "pod-ble"
-
-        let line = "\(type) \(deviceIdentifier ?? "—"): \(message)"
-        switch deviceLogThrottle.admit(line, at: now()) {
-        case .suppress:
-            return
-        case .write(let flushing):
-            if flushing > 0 {
-                SportLog.event(source, "(previous line repeated ×\(flushing) — suppressed)")
-            }
-        }
-        SportLog.event(source, line)
     }
 
     // MARK: - Alerts
@@ -196,8 +105,7 @@ extension WatchLoopManager: AlertIssuer, PersistedAlertStore {
 
     /// The watch is the only device hearing the pump during a loan.
     func issueAlert(_ alert: LoopKit.Alert) {
-        log.default("Alert issued: %{public}@", alert.identifier.value)
-        SportLog.event("alert", "ISSUED \(alert.identifier.value) — \(alert.backgroundContent.title): \(alert.backgroundContent.body)")
+        SportLog.event("alert", "alert \(alert.identifier.value) issued: \(alert.backgroundContent.title)")
         WatchAlertPresenter.present(alert)
         guard pumpManager != nil else { return }
         recordAlert { await $0.recordIssued(alert: alert) }
@@ -206,8 +114,7 @@ extension WatchLoopManager: AlertIssuer, PersistedAlertStore {
     /// Withdraw it. A driver retracts when the condition clears, and an alarm left standing after
     /// the pod recovered costs the next one its weight.
     func retractAlert(identifier: LoopKit.Alert.Identifier) {
-        log.default("Alert retracted: %{public}@", identifier.value)
-        SportLog.event("alert", "RETRACTED \(identifier.value)")
+        SportLog.event("alert", "alert \(identifier.value) retracted")
         WatchAlertPresenter.retract(identifier)
         recordAlert { try? await $0.recordRetraction(of: identifier) }
     }
@@ -248,8 +155,6 @@ extension WatchLoopManager: AlertIssuer, PersistedAlertStore {
     /// Runs after every record asked for before it.
     func recordAlert(_ record: @escaping (AlertStore) async -> Void) {
         guard let alertStore else { return }
-        alertRecordsLock.lock()
-        defer { alertRecordsLock.unlock() }
         let previous = alertRecords
         alertRecords = Task {
             await previous?.value
@@ -259,10 +164,7 @@ extension WatchLoopManager: AlertIssuer, PersistedAlertStore {
 
     /// The store, once every record asked for so far has landed.
     func settledAlertStore() async -> AlertStore? {
-        alertRecordsLock.lock()
-        let pending = alertRecords
-        alertRecordsLock.unlock()
-        await pending?.value
+        await alertRecords?.value
         return alertStore
     }
 
@@ -277,13 +179,13 @@ extension WatchLoopManager: AlertIssuer, PersistedAlertStore {
 extension WatchLoopManager: DoseStoreDelegate {
     /// The store nets basal-relative doses against this, so it must be the GRANT's schedule —
     /// the same one the algorithm runs on — and not anything the wrist derived locally.
-    func scheduledBasalHistory(from start: Date, to end: Date) async throws -> [AbsoluteScheduleValue<Double>] {
+    /// Asked from the store's own queue; the provider answers there.
+    nonisolated func scheduledBasalHistory(from start: Date, to end: Date) async throws -> [AbsoluteScheduleValue<Double>] {
         try await settingsProvider.getBasalHistory(startDate: start, endDate: end)
     }
 
-    /// Stock uses this to trigger a remote upload. So does the wrist, while a loan carries
-    /// upload services; otherwise a no-op. Pump events also travel home in the loan journal.
-    func doseStoreHasUpdatedPumpEventData(_ doseStore: DoseStore) {
-        LoanRemoteUploads.shared.trigger(.pumpEvent)
+    /// Deliberately empty. Stock uses this to trigger a remote upload; the wrist has no upload
+    /// services, and its pump events travel home in the loan journal instead.
+    nonisolated func doseStoreHasUpdatedPumpEventData(_ doseStore: DoseStore) {
     }
 }

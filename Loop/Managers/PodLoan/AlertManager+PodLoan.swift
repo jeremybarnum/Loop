@@ -27,7 +27,7 @@ extension AlertManager {
             let delivered = await center.deliveredNotifications()
                 .filter { $0.request.content.categoryIdentifier == category }.map(\.request.identifier)
             center.removeDeliveredNotifications(withIdentifiers: delivered)
-            PhoneLog.event("deadman", "pump released — \(pending.count) pending, \(delivered.count) delivered Loop-Failure warning(s) removed [deadman]")
+            PhoneLog.event("deadman", "pump released: removed \(pending.count) pending and \(delivered.count) delivered Loop Failure warnings")
         }
     }
 }
@@ -73,13 +73,9 @@ extension AlertStore {
             }
             return changed
         }
-        alertStoreLog.default("Recorded %d alerts from another device", changed)
         if changed > 0 {
             await delegate?.alertStoreHasUpdatedAlertData(self)
         }
         return changed
     }
 }
-
-/// `AlertStore`'s own log is private to its file; same category.
-private let alertStoreLog = DiagnosticLog(category: "AlertStore")

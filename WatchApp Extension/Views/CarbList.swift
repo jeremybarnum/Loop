@@ -34,12 +34,11 @@ struct CarbList: View {
 
     func reloadCarbEntries() async {
         let start = min(Calendar.current.startOfDay(for: Date()), Date(timeIntervalSinceNow: -CarbMath.maximumAbsorptionTimeInterval))
-        let store = loanSession?.stack.loopManager.carbStore ?? loopManager.carbStore
-        entries = (try? await store.getCarbEntries(start: start)) ?? []
+        entries = (try? await loopManager.carbStore.getCarbEntries(start: start)) ?? []
     }
 
     var activeCarbs: String? {
-        guard let activeContext = loopManager.activeContext,
+        guard let activeContext = loopManager.displayContext,
               let activeCarbohydrates = activeContext.activeCarbohydrates
         else {
             return nil
@@ -98,6 +97,16 @@ struct CarbList: View {
             }
         }
         .onAppear {
+            loopManager.requestCarbBackfill()
+            Task {
+                await reloadCarbEntries()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: LoopDataManager.didUpdateContextNotification)) { _ in
+            loopManager.requestCarbBackfill()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: CarbStore.carbEntriesDidChange, object: loopManager.carbStore)
+            .receive(on: DispatchQueue.main)) { _ in
             Task {
                 await reloadCarbEntries()
             }

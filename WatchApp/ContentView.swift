@@ -49,7 +49,7 @@ struct ContentView: View {
                         .tag(Self.sportPage)
                 }
 
-                // Diagnostics, last. Loan carbs are retracted in the stock CarbList.
+                // Bench only: diagnostics.
                 if FeatureFlags.sportModeEnabled {
                     LoanDebugView()
                         .tag(Self.sportPage + 1)
@@ -75,7 +75,7 @@ struct ContentView: View {
         .onChange(of: selectedPage, { oldValue, newValue in
             podLoanRememberPage(newValue)
         })
-        // A loan activating shows the glance. Posted from the loan queue, hence `.receive(on:)`.
+        // A loan activating shows the glance; handled once the phase change has finished.
         .onReceive(NotificationCenter.default.publisher(for: .podLoanPhaseDidChange).receive(on: RunLoop.main)) { _ in
             podLoanPhaseDidChange()
         }

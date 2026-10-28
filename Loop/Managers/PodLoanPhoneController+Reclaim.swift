@@ -11,7 +11,6 @@ import HealthKit
 import LoopKit
 import LoopCore
 import UserNotifications
-import os.log
 
 extension PodLoanPhoneController {
 
@@ -58,12 +57,10 @@ extension PodLoanPhoneController {
     /// reach for the pod first. With the link up the phone holds the pod, so it tells the watch to
     /// stop and takes over; without it nothing has changed and the user is asked to try again.
     func reclaimNow(onSilence: Bool = false) {
-        queue.async {
-            // A hand-back already being written ends the loan by itself.
-            guard self.podIsOnLoan, self.state != .reconciling, self.state != .reclaimPending else { return }
-            self.takeBackOnSilence = onSilence
-            self.beginTakeBack(from: self.state)
-        }
+        // A hand-back already being written ends the loan by itself.
+        guard self.podIsOnLoan, self.state != .reconciling, self.state != .reclaimPending else { return }
+        self.takeBackOnSilence = onSilence
+        self.beginTakeBack(from: self.state)
     }
 
     /// `.reclaimPending` holds the phone's dosing for the attempt, while the pump is not released.
@@ -75,7 +72,7 @@ extension PodLoanPhoneController {
 
         // Background time from the tap, so pocketing the phone cannot freeze the attempt.
         deps.beginReclaimBackgroundTask()
-        handbackDiag(epoch, String(format: "take-back: reaching for the pod (limit %.0fs)", Self.takeBackLinkLimit))
+        handbackDiag(epoch, String(format: "take-back: reaching for the pod, giving up after %.0f s", Self.takeBackLinkLimit))
         state = .reclaimPending
         reclaimPodConnection()
         awaitPodForTakeBack(started: started, tick: 0)
@@ -92,12 +89,12 @@ extension PodLoanPhoneController {
 
         // Giving up needs the pump to release; without one, keep holding.
         if waited >= Self.takeBackLinkLimit, let control = deps.pumpManager() as? ExclusiveDeviceControl {
-            refuseTakeBack(control: control, why: String(format: "no pod link after %.1fs", waited),
+            refuseTakeBack(control: control, why: String(format: "no pod link after %.1f s", waited),
                            notice: (NSLocalizedString("Couldn't Reach the Pod", comment: "Phone notice title when a take-back found the pod out of reach"),
                                     NSLocalizedString("The watch is still looping. Try again.", comment: "Phone notice body when a take-back found the pod out of reach")))
             return
         }
-        queue.asyncAfter(deadline: .now() + Self.takeBackPollInterval) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.takeBackPollInterval) { [weak self] in
             self?.awaitPodForTakeBack(started: started, tick: tick + 1)
         }
     }
@@ -112,17 +109,17 @@ extension PodLoanPhoneController {
         Task { [weak self] in
             let read = await odometer.refreshDeliveredUnits()
             guard let self else { return }
-            self.queue.async {
+            DispatchQueue.main.async {
                 guard self.takeBackStartedAt == started, self.state == .reclaimPending else { return }
                 guard let endsAt = odometer.bolusUnderWayEndsAt else {
-                    self.handbackDiag(self.epoch, read ? "take-back: pod read — no bolus being given" : "take-back: pod read FAILED — going ahead on the link")
+                    if !read { self.handbackDiag(self.epoch, "take-back: the pod read failed; going ahead on the link") }
                     self.finishTakeBack(waited: waited)
                     return
                 }
                 let left = max(1, endsAt.timeIntervalSince(self.deps.now())).rounded(.up)
                 if self.takeBackOnSilence {
-                    self.handbackDiag(self.epoch, String(format: "take-back: the pod is giving the watch's bolus, %.0f s left — waiting for it to finish", left))
-                    self.queue.asyncAfter(deadline: .now() + min(left, 10) + 1) { [weak self] in
+                    self.handbackDiag(self.epoch, String(format: "take-back: waiting for the watch's bolus to finish, %.0f s left", left))
+                    DispatchQueue.main.asyncAfter(deadline: .now() + min(left, 10) + 1) { [weak self] in
                         self?.awaitPodForTakeBack(started: started, tick: 0)
                     }
                 } else if let control = pump as? ExclusiveDeviceControl {
@@ -139,8 +136,8 @@ extension PodLoanPhoneController {
         // Aim at the newest loan the watch reported; a stale-epoch revoke would be refused.
         let revokeEpoch = supersededByLiveLoan(epoch) ? (newestForeignLoanEvidence?.epoch ?? epoch) : epoch
         sendMessage(.revoke(Revoke(epoch: revokeEpoch)))
-        handbackDiag(epoch, String(format: "take-back: pod link up +%.1fs — watch told to stop (revoke e%d)", waited, revokeEpoch))
-        clearInferredLoanYield(reason: "take-back — this phone holds the pod")
+        handbackDiag(epoch, String(format: "take-back: pod link up after %.1f s, telling the watch to stop e%d", waited, revokeEpoch))
+        clearInferredLoanYield(reason: "take-back, this phone holds the pod")
         forceReclaimToOwner(reason: "take-back from the pod tile")
     }
 
@@ -155,11 +152,10 @@ extension PodLoanPhoneController {
         deps.pumpControlChanged(true)
         // Not through `state`: going back to `.owner` under a yield is not the pod coming home.
         updateState { $0.phase = previous }
-        syncUIMirror()
         deps.ownershipDidChange()
         deps.endReclaimBackgroundTask()
 
-        handbackDiag(epoch, "take-back REFUSED — \(why); loan unchanged (\(previous.rawValue)), nothing sent to the watch")
+        handbackDiag(epoch, "take-back refused: \(why); the loan is unchanged and nothing was sent to the watch")
         deps.issueNotice(notice.title, notice.body)
     }
 
@@ -172,11 +168,11 @@ extension PodLoanPhoneController {
     /// Take the pod without waiting for the watch: commit what it streamed, arm an audit, take the
     /// link, open the settle, clear staging last. The armed audit holds automatic dosing until it rules.
     func forceReclaimToOwner(reason: String) {
-        os_log("Force reclaim to OWNER: %{public}@", log: log, type: .default, reason)
+        log.default("taking the pod back without a hand-back: %{public}@", reason)
 
         // Defer behind a write in flight, so the salvage does not re-commit what it is writing.
         if commitInFlight {
-            handbackDiag(epoch, "force reclaim DEFERRED — a hand-back commit is writing; runs when it lands")
+            handbackDiag(epoch, "take-back waits for the hand-back being saved")
             pendingForceReclaimReason = reason
             return
         }
@@ -198,7 +194,7 @@ extension PodLoanPhoneController {
             let bolusUnits = boluses.reduce(0.0) { $0 + ($1.deliveredUnits ?? $1.programmedUnits) }
             let rateGross = outcome.doses.filter { $0.type != .bolus }.reduce(0.0) { $0 + $1.programmedUnits }
             handbackDiag(epoch, String(format:
-                "force reclaim SALVAGE — %d staged event(s) → %d dose(s): %.3f U bolus + %d rate record(s) (%.3f U gross programmed), %d carb(s), %d delete(s)",
+                "take-back: saving %d staged records as %d doses, %.3f U of bolus and %d rate records programming %.3f U, %d carbs, %d carb deletes",
                 events.count, outcome.doses.count, bolusUnits, outcome.doses.count - boluses.count,
                 rateGross, outcome.carbs.count, outcome.deletedCarbs.count))
             deps.addPumpEvents(newPumpEvents(from: outcome.doses), deps.now()) { _ in }
@@ -210,8 +206,9 @@ extension PodLoanPhoneController {
             for gone in outcome.deletedCarbs {
                 deps.deleteCarb(gone) { error in
                     self.handbackDiag(self.epoch, error == nil
-                        ? String(format: "carb DELETE applied on phone (recovery) — %.0f g", gone.grams)
-                        : String(format: "carb DELETE MISSED on phone (recovery) — %.0f g: %@", gone.grams, String(describing: error!)))
+                        ? String(format: "carb delete from the watch applied: %.0f g", gone.grams)
+                        : String(format: "carb delete from the watch failed: %.0f g at %@: %@",
+                                 gone.grams, String(describing: gone.startDate), String(describing: error!)))
                 }
             }
 
@@ -240,7 +237,7 @@ extension PodLoanPhoneController {
     private func armForceReclaimAudit() -> Bool {
         let start = loanStartedAt ?? deps.now().addingTimeInterval(-.hours(2))
         guard let anchor = ledgerLast, let schedule = deps.settings().basalRateSchedule, let pulseUnits = pumpPulseUnits else {
-            handbackDiag(epoch, "** force-reclaim audit IMPOSSIBLE — no start odometer/schedule/pump; session UNVERIFIED **")
+            handbackDiag(epoch, "take-back check impossible: no starting pod total, basal schedule or pump")
             deps.issueUrgentNotice(Self.sessionUnverifiedTitle, Self.sessionUnverifiedBody)
             return false
         }
@@ -249,11 +246,11 @@ extension PodLoanPhoneController {
                                                       from: anchor.at, to: deps.now())
         pendingHandbackAudit = PendingHandbackAudit(
             epoch: epoch, deliveredAtStart: anchor.units, windowStart: anchor.at, expected: expected,
-            loanMinutes: deps.now().timeIntervalSince(start) / 60, cycles: 0,
+            loanMinutes: deps.now().timeIntervalSince(start) / 60,
             watchLatest: nil, flavor: .forceReclaim)
 
         handbackDiag(epoch, String(format:
-            "force-reclaim audit armed — expected %.3f U from %d record(s) + schedule fill over %.0f min since takeover; verdict on the reclaim round-trip",
+            "take-back check armed: expected %.3f U from %d records and the schedule over %.0f min",
             expected, allEvents.count, deps.now().timeIntervalSince(anchor.at) / 60))
         return true
     }

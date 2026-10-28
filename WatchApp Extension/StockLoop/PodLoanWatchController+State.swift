@@ -21,18 +21,12 @@ struct PodLoanWatchState: RawRepresentable {
     /// The newest revoke heard; any grant at or below it is refused, across relaunches too.
     var lastRevokedEpoch: Int?
 
-    /// What a resume needs from the grant: the settings, and the phone's capability flags.
+    /// What a resume needs from the grant: the settings.
     struct GrantedSettings {
         var therapySettingsRaw: Data
         var supplementRaw: Data?
-        var supportsInterimHandback: Bool
-        var supportsOverrideRecords: Bool
         var glucoseAlertSettings: Data? = nil
         var settingsHistory: LoanSettingsHistory? = nil
-        /// The phone's shared upload services, so a relaunch mid-loan uploads again. Kept beside
-        /// the pump's own state, and gone with it at teardown.
-        var serviceConfigurations: [Data]? = nil
-        var phoneCGMUploadsGlucose: Bool? = nil
     }
     var grantedSettings: GrantedSettings?
 
@@ -74,13 +68,10 @@ struct PodLoanWatchState: RawRepresentable {
         raw["epoch"] = epoch
         raw["lastRevokedEpoch"] = lastRevokedEpoch
         raw["grantedSettings"] = grantedSettings.map {
-            var d: [String: Any] = ["raw": $0.therapySettingsRaw, "interim": $0.supportsInterimHandback,
-                                    "overrideRecords": $0.supportsOverrideRecords]
+            var d: [String: Any] = ["raw": $0.therapySettingsRaw]
             d["supplement"] = $0.supplementRaw
             d["glucoseAlerts"] = $0.glucoseAlertSettings
             d["settingsHistory"] = $0.settingsHistory.flatMap { try? LoanProtocol.encoder.encode($0) }
-            d["serviceConfigurations"] = $0.serviceConfigurations
-            d["phoneCGMUploadsGlucose"] = $0.phoneCGMUploadsGlucose
             return d
         }
         raw["deliveredAtTakeover"] = deliveredAtTakeover
@@ -98,14 +89,10 @@ struct PodLoanWatchState: RawRepresentable {
     static func grantedSettings(from d: [String: Any]) -> GrantedSettings? {
         guard let raw = d["raw"] as? Data else { return nil }
         return GrantedSettings(therapySettingsRaw: raw, supplementRaw: d["supplement"] as? Data,
-                               supportsInterimHandback: d["interim"] as? Bool ?? false,
-                               supportsOverrideRecords: d["overrideRecords"] as? Bool ?? false,
                                glucoseAlertSettings: d["glucoseAlerts"] as? Data,
                                settingsHistory: (d["settingsHistory"] as? Data).flatMap {
                                    try? LoanProtocol.decoder.decode(LoanSettingsHistory.self, from: $0)
-                               },
-                               serviceConfigurations: d["serviceConfigurations"] as? [Data],
-                               phoneCGMUploadsGlucose: d["phoneCGMUploadsGlucose"] as? Bool)
+                               })
     }
 
 }
@@ -130,26 +117,21 @@ extension PodLoanWatchController {
         pumpLocalStateStore.wrappedValue = saved
     }
 
-    /// The persisted state, readable from any queue.
+    /// The persisted state.
     var persisted: PodLoanWatchState {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return _persisted
+        _persisted
     }
 
     /// Applies one change and writes the whole value once, before returning. Phase observers
-    /// run afterwards, outside the lock.
+    /// run afterwards.
     func updateState(_ change: (inout PodLoanWatchState) -> Void) {
-        stateLock.lock()
         let old = _persisted.phase
         change(&_persisted)
         stateStore.wrappedValue = _persisted.rawValue
-        let new = _persisted.phase
-        stateLock.unlock()
-        phaseDidChange(from: old, to: new)
+        phaseDidChange(from: old, to: _persisted.phase)
     }
 
-    /// The loan phase; its observers drive the mirrors, runtime holds and the glance.
+    /// The loan phase; its observers drive the runtime holds and the glance.
     var phase: Phase {
         get { persisted.phase }
         set { updateState { $0.phase = newValue } }
@@ -172,19 +154,20 @@ extension PodLoanWatchController {
         set { updateState { $0.deliveredAtTakeover = newValue; if newValue == nil { $0.deliveredAtTakeoverAt = nil; $0.ledgerLast = nil } } }
     }
 
-    /// Mirrored synchronously, so main-thread readers never lag the queue.
+    /// While the loan is live the screens show the override the loop doses with; otherwise the
+    /// phone's. Published when the loan goes live or ends, and when the loop's override changes.
+    func publishOverrideForScreens() {
+        publishOverride(isLoanActive ? .some(loopManager.scheduleOverride) : .none)
+    }
+
     func phaseDidChange(from oldValue: Phase, to phase: Phase) {
         // A loan runs: the watch's own ladder covers it, not the silent-phone warning.
         if phase == .takingOver || phase == .active { NotHearingFromPhoneAlert.disarm() }
-        loanActiveMirrorLock.lock()
-        _loanActiveMirror = (phase == .active)
         // A loan that ends while a watch back from off is still checking (the phone's stop) ends the check.
-        if phase != .active { _resumingMirror = false }
-        _wristAlarmsMirror = [.takingOver, .active, .handingBack, .recoveredDrain].contains(phase)
-        loanActiveMirrorLock.unlock()
+        if phase != .active { isResuming = false }
+        if (oldValue == .active) != (phase == .active) { publishOverrideForScreens() }
         // Edge-triggered, so re-asserting a phase cannot fire twice.
         if (oldValue == .takingOver) != (phase == .takingOver) {
-            onTakeoverRadioHold?(phase == .takingOver)
             setTakeoverSessionListener(phase == .takingOver)
         }
         if oldValue != phase {

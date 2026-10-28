@@ -25,8 +25,7 @@ extension PodLoanPhoneController {
         set { updateState { $0.holdRenewedAt = newValue } }
     }
 
-    /// The watch raises this user's glucose alerts while it has the pod. Read on main by the phone's
-    /// alert managers, so it never waits on the loan queue.
+    /// The watch raises this user's glucose alerts while it has the pod.
     var watchOwnsAlerts: Bool {
         isLoanedOutForUI
     }
@@ -85,11 +84,11 @@ extension PodLoanPhoneController {
             }
         case .keepPodOnSilence:
             updateState { $0.tookOverOnSilenceAt = deps.now() }
-            handbackDiag(epoch, "no answer from the watch, or it cannot reach the pod — this phone keeps the pod and keeps looping (\(why))")
+            handbackDiag(epoch, "this phone keeps the pod and keeps looping: no answer from the watch, or it cannot reach the pod; \(why)")
         case .takeOnSilence(let tell):
             guard state == .loaned || (state == .owner && yieldingToInferredLoan) else { return }
             updateState { $0.tookOverOnSilenceAt = deps.now() }
-            handbackDiag(epoch, "the watch did NOT answer, or cannot reach the pod — taking the pod back (\(why))")
+            handbackDiag(epoch, "taking the pod back: no answer from the watch, or it cannot reach the pod; \(why)")
             tellLooper(tell)
             reclaimNow(onSilence: true)
         case .takeOnTap:
@@ -122,10 +121,6 @@ extension PodLoanPhoneController {
 
     /// Called every phone cycle: the watch's report overdue is rows 10, 11, 14 and 15.
     func considerHoldLapse() {
-        queue.async { self.queue_considerHoldLapse() }
-    }
-
-    func queue_considerHoldLapse() {
         guard state == .loaned || (state == .owner && yieldingToInferredLoan), watchAskedAt == nil,
               let heard = watchLastHeard else { return }
         let silence = deps.now().timeIntervalSince(heard)
@@ -135,7 +130,7 @@ extension PodLoanPhoneController {
 
     /// The Take Back tap: row 9.
     func takeBackTapped() {
-        queue.async { self.decideAndAct(.takeBackTapped, why: "Take Back tapped") }
+        decideAndAct(.takeBackTapped, why: "Take Back tapped")
     }
 
     // MARK: - The query
@@ -150,15 +145,15 @@ extension PodLoanPhoneController {
         let heardBefore = watchLastHeard
         let foreignBefore = newestForeignLoanEvidence?.at
         watchAskedAt = askedAt
-        handbackDiag(epoch, "asking the watch whether it holds the pod — \(why)")
+        handbackDiag(epoch, "asking the watch whether it holds the pod: \(why)")
         sendMessage(.statusQuery(StatusQuery(epoch: epoch)))
-        queue.asyncAfter(deadline: .now() + Self.answerWait) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.answerWait) { [weak self] in
             guard let self = self, self.watchAskedAt == askedAt else { return }
             self.watchAskedAt = nil
             // The question was about one situation, this loan and this phone's role; a verdict for
             // another is moot (a hand-back and a new Start fit inside the wait).
             guard self.epoch == askedEpoch, self.controlRole == askedRole else {
-                self.handbackDiag(askedEpoch, "the question about e\(askedEpoch) is moot — the loan or this phone's role changed while it waited (\(why))")
+                self.handbackDiag(askedEpoch, "question to the watch dropped: the loan or this phone's role changed while waiting")
                 return
             }
             let reported = self.lastWatchAnswerAt.map { $0 >= askedAt } == true
@@ -172,7 +167,7 @@ extension PodLoanPhoneController {
             } else {
                 answer = .silence
             }
-            if answer == .answered { self.handbackDiag(self.epoch, "the watch answered — nothing changes hands on silence") }
+            if answer == .answered { self.handbackDiag(self.epoch, "the watch answered: nothing changes hands") }
             then(answer)
         }
     }

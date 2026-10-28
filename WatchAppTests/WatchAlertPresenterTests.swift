@@ -11,6 +11,7 @@ import XCTest
 import LoopKit
 import UserNotifications
 @testable import WatchApp
+import LoopCore
 
 final class WatchAlertPresenterTests: XCTestCase {
 

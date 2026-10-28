@@ -2,14 +2,13 @@
 //  PhoneLog.swift
 //  Loop
 //
-//  The phone's loan log, beside the watch's SportLog, appended to a file in Documents.
+//  Bench only: the phone's Sport Mode log, also appended to a file in Documents.
 //
 
 import Foundation
-import os.log
 
 enum PhoneLog {
-    private static let oslog = OSLog(subsystem: "com.loopkit.Loop", category: "PhoneLog")
+    private static let log = DiagnosticLog(category: "SportMode")
 
     /// Serial, so lines land in order.
     private static let queue = DispatchQueue(label: "com.loopkit.Loop.phoneLog", qos: .utility)
@@ -20,20 +19,17 @@ enum PhoneLog {
         return f
     }()
 
-    /// Categories are grepped by field analysis; keep them stable.
+    /// `category` names the part of Sport Mode the line is about.
     static func event(_ category: String, _ message: String) {
-        os_log("%{public}@ %{public}@", log: oslog, type: .default, category, message)
+        log.default("[%{public}@] %{public}@", category, message)
         let line = "\(stamp.string(from: Date())) [\(category)] \(message)"
         queue.async {
             appendLocally(line)
         }
     }
 
-    /// Tests point the log at their own folder.
-    static var directoryOverride: URL?
-
     private static var localURL: URL? {
-        guard let dir = directoryOverride ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
+        guard let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
         return dir.appendingPathComponent("g7phone-latest.log")
     }
 

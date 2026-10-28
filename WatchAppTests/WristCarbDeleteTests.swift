@@ -14,13 +14,14 @@ import LoopCore
 import LoopAlgorithm
 @testable import WatchApp
 
+@MainActor
 final class WristCarbDeleteTests: XCTestCase {
 
     private var defaults: UserDefaults!
     private var dir: URL!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         defaults = UserDefaults(suiteName: "WristCarbDeleteTests-\(UUID().uuidString)")!
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -32,7 +33,7 @@ final class WristCarbDeleteTests: XCTestCase {
                                 startDate: Date().addingTimeInterval(-600), foodType: nil, absorptionTime: .hours(3))
 
         controller.loanDidRecordCarbs(meal)
-        controller.queue.sync { }
+        await controller.onMain { }
         let local = try await localCarb(controller)
         guard let carbEvent = controller.journal.unackedEvents().first(where: { $0.record.kind == .carb }) else {
             return XCTFail("the carb is journaled")
@@ -50,7 +51,7 @@ final class WristCarbDeleteTests: XCTestCase {
 
         // Deleted on the wrist, as the Active Carbs list passes it.
         controller.loanDidDeleteCarb(syncIdentifier: local.syncIdentifier, startDate: local.startDate, grams: 30)
-        controller.queue.sync { }
+        await controller.onMain { }
 
         let drain = LoanReconciler.reconcile(.init(events: controller.journal.unackedEvents(), schedule: nil,
                                                    loanStart: Date().addingTimeInterval(-3600), loanEnd: Date(),
@@ -73,7 +74,7 @@ final class WristCarbDeleteTests: XCTestCase {
             saved.fulfill()
         }
         await fulfillment(of: [saved], timeout: 10)
-        controller.queue.sync { }
+        await controller.onMain { }
 
         let stored = try XCTUnwrap(answer, "the save succeeded")
         let carbEvent = try XCTUnwrap(controller.journal.unackedEvents().first { $0.record.kind == .carb })
@@ -96,7 +97,7 @@ final class WristCarbDeleteTests: XCTestCase {
         let controller = await makeController()
         controller.send = { _ in }
         try controller.journal.begin(epoch: 5)
-        controller.queue.sync {
+        await controller.onMain {
             controller.epoch = 5
             controller.phase = .active
         }

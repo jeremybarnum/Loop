@@ -11,7 +11,6 @@ import HealthKit
 import LoopKit
 import LoopCore
 import UserNotifications
-import os.log
 
 extension PodLoanPhoneController {
     func scheduleNotification(id: String, title: String, body: String, delay: TimeInterval, repeats: Bool,
@@ -33,7 +32,7 @@ extension PodLoanPhoneController {
     /// Once per stretch of version skew; the first message that decodes re-arms it. Time-sensitive:
     /// a skewed loan can leave the pod with nobody dosing.
     func warnProtocolMismatch() {
-        os_log("Loan protocol skew — payload undecodable in this build", log: log, type: .error)
+        log.error("could not read a message from the watch; the apps may be on different versions")
         guard !hasWarnedProtocolMismatch else { return }
         hasWarnedProtocolMismatch = true
         deps.issueUrgentNotice(

@@ -15,6 +15,22 @@ import MockKit
 import UserNotifications
 @testable import Loop
 
+/// Lets the main queue run for `seconds`: the controller, its timers and its stores' callbacks run there.
+@MainActor func spinMain(_ seconds: TimeInterval) {
+    let until = Date().addingTimeInterval(seconds)
+    repeat { RunLoop.main.run(until: min(until, Date().addingTimeInterval(0.01))) } while Date() < until
+}
+
+/// Runs what is already queued on main, `hops` deep: each pass also runs what the last one queued.
+@MainActor func drainMainQueue(hops: Int = 1) {
+    final class Flag { var raised = false }
+    for _ in 0..<hops {
+        let flag = Flag()
+        DispatchQueue.main.async { flag.raised = true }
+        while !flag.raised { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+    }
+}
+
 /// The test pump's hand-off state, shared by every instance.
 extension MockPumpManager {
     static var testConnectionReleased = false
@@ -26,6 +42,8 @@ extension MockPumpManager {
     static var testOdometerAt: Date?
     /// Counts forced reads, so a test can assert the settle forces without flooding the radio.
     static var testForcedReadCount = 0
+    /// A forced read settles the unconfirmed command, so the driver lets go when asked again.
+    static var testReadSettlesCommand = false
     /// What the pod's own status says about a bolus being given, whoever started it.
     static var testPodBolusEndsAt: Date?
 }
@@ -45,11 +63,13 @@ final class LendableMockPumpManager: MockPumpManager, ExclusiveDeviceControl, Pu
     var deliveryPulseUnits: Double { 0.05 }
     func refreshDeliveredUnits() async -> Bool {
         Self.testForcedReadCount += 1
+        if Self.testReadSettlesCommand { Self.testKeepsControl = false }
         return true
     }
     var bolusUnderWayEndsAt: Date? { Self.testPodBolusEndsAt }
 }
 
+@MainActor
 final class PodLoanPhoneControllerTests: XCTestCase {
 
     var sent: [LoanMessage] = []
@@ -61,13 +81,11 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     var notices: [String] = []
     /// Drives Dependencies.isConnectionReady — false = pod still returning from a reclaim.
     var connectionReady = true
-    /// Every HANDBACK-DIAG line the controller emitted (the harness otherwise drops .diag).
+    /// Every loan log line the controller emitted.
     var diags: [String] = []
     /// How many times the phone enacted the post-return temp cancel, and its result.
     var cancelCalls = 0
     var cancelError: Error?
-    var glucoseUploadSkips: [Set<String>] = []
-    var decisionsUploadedBy: [Set<String>] = []
     /// What the phone's dose store returns.
     var phoneDoseHistory: [DoseEntry] = []
     /// Parks the grant's temp cancel so a test can look at the phone while it is in flight.
@@ -99,7 +117,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     var holdPumpEventWrites = false
     var heldPumpEventWrite: ((Error?) -> Void)?
     private let lock = NSLock()
-    /// Called for every non-diag send, before it is recorded: lets a test inspect disk at send time.
+    /// Called for every send, before it is recorded: lets a test inspect disk at send time.
     var onSend: ((LoanMessage) -> Void)?
     var stateDir: URL!
     /// What `Dependencies.glucoseAlertSettings` hands the grant.
@@ -114,14 +132,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     var phoneScheduleOverride: TemporaryScheduleOverride?
     var appliedOverrideChanges: [(override: TemporaryScheduleOverride?, changedAt: Date)] = []
 
-    /// Never reset: a controller's late log lines must not reach the host app's Documents either.
-    static let phoneLogDirectory: URL = {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneLogTests", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }()
-
     override func tearDown() {
+        // The controller runs on main: finish this test's queued work before the next test resets the shared fakes.
+        drainMainQueue(hops: 3)
         try? FileManager.default.removeItem(at: stateDir)
         super.tearDown()
     }
@@ -129,10 +142,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     override func setUp() {
         super.setUp()
         // Every test gets a fresh state folder.
-        PhoneLog.directoryOverride = Self.phoneLogDirectory
         stateDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         MockPumpManager.testForcedReadCount = 0
+        MockPumpManager.testReadSettlesCommand = false
         MockPumpManager.testPodBolusEndsAt = nil
         PodLoanPhoneController.takeBackLinkLimit = 5
         backgroundTaskBegins = 0
@@ -196,7 +209,6 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// Defaults are a watch that is out of reach and a pod that answers.
     func makeController(watchReachable: @escaping () -> Bool = { false },
                         bluetoothPoweredOff: @escaping () -> Bool = { false },
-                        lastWatchContact: @escaping () -> Date? = { nil },
                         latestGlucose: (() -> Date?)? = nil,
                         now: @escaping () -> Date = { Date() },
                         watchReadsCGM: @escaping () -> Bool = { true },
@@ -210,11 +222,6 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             },
             send: { [weak self] dictionary in
                 guard let self = self else { return }
-                // Diag lines are kept out of `sent` but their text is captured (the audit's output is one).
-                if let message = try? LoanMessage.decode(fromTransport: dictionary), case .diag(let d) = message {
-                    self.lock.lock(); self.diags.append(d.text); self.lock.unlock()
-                    return
-                }
                 if let message = try? LoanMessage.decode(fromTransport: dictionary) { self.onSend?(message) }
                 self.lock.lock()
                 if let message = try? LoanMessage.decode(fromTransport: dictionary) {
@@ -249,9 +256,6 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             applyScheduleOverride: { [weak self] override, changedAt in
                 guard let self = self else { return }
                 self.lock.lock(); self.appliedOverrideChanges.append((override, changedAt)); self.phoneScheduleOverride = override; self.lock.unlock()
-            },
-            skipLoanGlucoseUploads: { [weak self] services in
-                self?.lock.lock(); self?.glucoseUploadSkips.append(services); self?.lock.unlock()
             },
             doseHistory: { [weak self] _, completion in
                 guard let self = self else { return completion([]) }
@@ -298,9 +302,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 self.lock.lock(); self.deletedGapSyncs.append(sync); let ok = self.gapDeleteSucceeds; self.lock.unlock()
                 completion(ok)
             },
-            addDosingDecisions: { [weak self] decisions, uploadedBy, completion in
+            addDosingDecisions: { [weak self] decisions, completion in
                 guard let self = self else { return completion(.success(0)) }
-                self.lock.lock(); self.addedDosingDecisions.append(decisions); self.decisionsUploadedBy.append(uploadedBy); self.lock.unlock()
+                self.lock.lock(); self.addedDosingDecisions.append(decisions); self.lock.unlock()
                 completion(.success(decisions.count))
             },
             addAlerts: { [weak self] alerts, completion in
@@ -324,7 +328,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             },
             isWatchReachable: watchReachable,
             isBluetoothPoweredOff: bluetoothPoweredOff,
-            lastWatchContactAt: lastWatchContact,
+            logLoanLine: { [weak self] line in
+                guard let self = self else { return }
+                self.lock.lock(); self.diags.append(line); self.lock.unlock()
+            },
             latestGlucoseDate: latestGlucose ?? { now() },   // by default the phone is beside the body: a reading just now
             now: now,
             stateDirectory: stateDir,
@@ -362,15 +369,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         return sent.last
     }
 
-    /// The ack fires the send expectation a hair before the controller's queue runs
-    /// its post-commit transition; poll instead of racing it.
+    /// The ack fires the send expectation a hair before the post-commit transition runs; poll
+    /// instead of racing it.
     func waitForState(_ controller: PodLoanPhoneController, _ state: PodLoanPhoneController.State) {
-        let e = expectation(description: "state \(state.rawValue)")
-        DispatchQueue.global().async {
-            while controller.state != state { usleep(20_000) }
-            e.fulfill()
-        }
-        wait(for: [e], timeout: 5)
+        waitUntil(timeout: 5, "state \(state.rawValue)") { controller.state == state }
     }
 
     /// Carbs the phone actually committed, for the watch->phone round-trip tests.
@@ -404,7 +406,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             controller.handleIncoming(userInfo: try! LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
             wait(for: [grantSent], timeout: 5)
             if case .grant(let g)? = lastSent() { grant = g; break }
-            if case .denied? = lastSent() { usleep(100_000); continue }
+            if case .denied? = lastSent() { spinMain(0.1); continue }
             break
         }
         guard let grant else {
@@ -422,7 +424,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 controller.handleIncoming(userInfo: confirmation)
                 lastSentAt = Date()
             }
-            usleep(20_000)
+            spinMain(0.02)
         }
         XCTAssertEqual(controller.state, .loaned, "setup: the loan did not become active")
         return grant
@@ -450,15 +452,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
 
         // The refusal is observed on the wire; the watch shows the reason.
-        let refused = expectation(description: "refused")
-        DispatchQueue.global().async {
-            while true {
-                // lastSent() takes `lock` itself — do NOT wrap it, the lock is not recursive.
-                if case .denied? = self.lastSent() { refused.fulfill(); return }
-                usleep(20_000)
-            }
+        waitUntil(timeout: 5, "refused") {
+            if case .denied? = self.lastSent() { return true }
+            return false
         }
-        wait(for: [refused], timeout: 5)
         XCTAssertEqual(controller.state, .owner)
         XCTAssertFalse(controller.holdsAutomaticDosing, "denied grant must not touch dosing")
         XCTAssertTrue(controlCalls.isEmpty, "the pump was never released, so the warnings stand")
@@ -693,8 +690,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         wait(for: [deleted], timeout: 5)
 
         lock.lock(); XCTAssertTrue(phoneCarbs.isEmpty, "the phone's copy is gone"); lock.unlock()
-        XCTAssertNotNil(diagMatching("carb DELETE applied on phone"))
-        XCTAssertNil(diagMatching("carb DELETE MISSED"))
+        XCTAssertNotNil(diagMatching("carb delete from the watch applied"))
+        XCTAssertNil(diagMatching("carb delete from the watch failed"))
     }
 
     /// A force reclaim records committed IDs, so a redelivered offer does not re-add the carb.
@@ -755,9 +752,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
         XCTAssertNil(controller.pendingForceReclaimReason,
                      "the hand-back satisfies the force: records committed, radio back, judged by the close")
-        XCTAssertNil(diagMatching("force-reclaim audit armed"),
+        XCTAssertNil(diagMatching("take-back check armed"),
                      "no second audit — its expectation is bare schedule fill against an emptied staging area")
-        XCTAssertNil(diagMatching("force-reclaim audit IMPOSSIBLE"))
+        XCTAssertNil(diagMatching("take-back check impossible"))
         XCTAssertTrue(urgentNotices.isEmpty, "a hand-back that went perfectly raises no urgent notice")
     }
 
@@ -844,19 +841,6 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(addedDosingDecisions.first?.map(\.id), decisions.map(\.id))
     }
 
-    /// The services the watch confirmed it uploaded the decisions to reach the import, which skips
-    /// their uploads; none confirmed, none skipped.
-    func testTheWatchsUploadConfirmationReachesTheDecisionImport() throws {
-        let controller = makeController()
-        let grant = establishLoan(controller)
-        controller.handleWatchLoanHistory(LoanHistory(epoch: grant.epoch, decisions: [StoredDosingDecision(reason: "loop")],
-                                                      uploadsConfirmed: ["NightscoutService": ["Glucose", "DosingDecision"]]))
-        controller.handleWatchLoanHistory(LoanHistory(epoch: grant.epoch, decisions: [StoredDosingDecision(reason: "loop")]))
-        waitUntil(timeout: 5, "both handed over") { self.lock.lock(); defer { self.lock.unlock() }; return self.decisionsUploadedBy.count == 2 }
-        lock.lock(); let uploadedBy = decisionsUploadedBy; lock.unlock()
-        XCTAssertEqual(uploadedBy, [["NightscoutService"], []])
-    }
-
     /// The watch's alert records for a loan this phone granted go to the alert store, with the
     /// decisions; a loan it never granted is ignored.
     func testWatchAlertsAreAddedOnlyForALoanThisPhoneGranted() throws {
@@ -906,7 +890,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         // The phone concludes another controller is running the pod and stands down.
         controller.engageInferredLoanYield(evidence: "test: evidence of a live foreign loan")
         waitUntil(timeout: 5, "settle window closed") { !controller.isReclaimSettling }
-        XCTAssertNotNil(diagMatching("settle window CLOSED early"))
+        XCTAssertNotNil(diagMatching("stopped reconnecting to the pod"))
         // The hold the settle was carrying is released with it. Counts are not symmetric here —
         // production's `begin` ends any previous hold first, so only one is ever outstanding.
         lock.lock(); let ends = backgroundTaskEnds; lock.unlock()
@@ -942,6 +926,21 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertTrue(addedDoses.isEmpty, "nothing booked while standing aside")
     }
 
+    /// Standing aside while the pod driver keeps the pod: the phone runs no loop cycle to talk to the pod,
+    /// so it reads the pod itself. The read settles the command, and the driver lets go when asked again.
+    func testStandingAsideReadsThePodSoTheDriverLetsGo() {
+        let controller = makeController()
+        MockPumpManager.testKeepsControl = true
+        MockPumpManager.testReadSettlesCommand = true
+        controller.engageInferredLoanYield(evidence: "test: the watch started without this phone")
+        XCTAssertTrue(controller.holdsAutomaticDosing, "the phone does not dose beside the watch")
+
+        waitUntil(timeout: 5, "the driver let go after the read") { MockPumpManager.testConnectionReleased }
+        XCTAssertEqual(MockPumpManager.testForcedReadCount, 1, "one read of the pod")
+        XCTAssertTrue(controller.holdsAutomaticDosing)
+        XCTAssertTrue(addedDoses.isEmpty, "nothing booked while standing aside")
+    }
+
     /// A re-Start while the pod is still returning is denied until the pod is back.
     func testGrantDeferredWhilePodStillReturningFromReclaim() throws {
         let controller = makeController()
@@ -970,17 +969,13 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         }
     }
 
-    /// Spin-wait for conditions settled on background queues.
-    private func waitUntil(timeout: TimeInterval, _ label: String, _ condition: @escaping () -> Bool) {
-        let exp = expectation(description: label)
-        DispatchQueue.global().async {
-            let deadline = Date().addingTimeInterval(timeout)
-            while Date() < deadline {
-                if condition() { exp.fulfill(); return }
-                usleep(100_000)
-            }
+    /// Lets the main queue run until `condition` holds; fails after `timeout`.
+    func waitUntil(timeout: TimeInterval, _ label: String, _ condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            guard Date() < deadline else { return XCTFail("timed out waiting: \(label)") }
+            spinMain(0.02)
         }
-        wait(for: [exp], timeout: timeout + 1)
     }
 
     // MARK: - Hand-back ordering + idempotency
@@ -1039,7 +1034,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         saved.committedCursor = 3
         saved.committedIDs = [committed]
         saved.holdRenewedAt = renewed
-        saved.watchSupportsSeize = true
+        saved.watchUsesSportMode = true
         saved.seizeToken = token
         saved.loanStartedAt = started
         saved.ledger.last = .init(units: 13.0, at: started)
@@ -1053,10 +1048,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(p.committedCursor, 3)
         XCTAssertEqual(p.committedIDs, [committed])
         XCTAssertEqual(p.holdRenewedAt, renewed)
-        XCTAssertTrue(p.watchSupportsSeize)
+        XCTAssertTrue(p.watchUsesSportMode)
         XCTAssertEqual(p.seizeToken, token)
         XCTAssertEqual(p.ledger.last?.units, 13.0, "the ledger's last reading is kept")
-        XCTAssertEqual(controller.queue.sync { controller.pendingHandbackAudit?.flavor }, .forceReclaim, "the owed verdict re-arms")
+        XCTAssertEqual(controller.pendingHandbackAudit?.flavor, .forceReclaim, "the owed verdict re-arms")
         XCTAssertTrue(controller.holdsAutomaticDosing, "dosing is held from launch")
         XCTAssertTrue(controlCalls.isEmpty, "a relaunch mid-loan changes nothing: the pump manager keeps the release itself")
     }
@@ -1083,14 +1078,14 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         waitForState(controller, .owner)
 
         // The provisional line still prints — it is all we have if the pod never comes home.
-        XCTAssertNotNil(diagMatching("reconcile[provisional]"), "the provisional audit must still be logged")
+        XCTAssertNotNil(diagMatching("the watch's count at hand-back"), "the provisional audit must still be logged")
 
         // Then the reclaim round-trip lands and supersedes it.
-        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("reconcile[AUTHORITATIVE]") != nil }
-        let line = diagMatching("reconcile[AUTHORITATIVE]")!
-        XCTAssertTrue(line.contains("delivered=0.900"),
+        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("hand-back check:") != nil }
+        let line = diagMatching("hand-back check:")!
+        XCTAssertTrue(line.contains("delivered 0.900 U"),
                       "delivered must be phone-read latest (10.900) minus the watch's start (10.000) — got: \(line)")
-        XCTAssertTrue(line.contains("vs watch endpoint +0.500"),
+        XCTAssertTrue(line.contains("+0.500 U since the watch's last reading"),
                       "the line must state how much delivery the watch's stale endpoint missed — got: \(line)")
     }
 
@@ -1118,7 +1113,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         waitUntil(timeout: 8, "reclaim temp cancel") { self.lock.lock(); defer { self.lock.unlock() }; return self.cancelCalls > 0 }
         XCTAssertEqual(cancelCalls, 1, "cancel exactly once per loan, on the verified round-trip")
         // The outcome is logged on the controller's queue after the cancel returns.
-        waitUntil(timeout: 5, "cancel outcome logged") { self.diagMatching("temp cancelled — pod reverts to the user's schedule until") != nil }
+        waitUntil(timeout: 5, "cancel outcome logged") { self.diagMatching("temp cancelled: the pod runs the scheduled basal until") != nil }
 
         // The chase keeps ticking after verification; the audit must not re-fire on later ticks.
         let settle = expectation(description: "no second cancel")
@@ -1142,8 +1137,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         waitForState(controller, .owner)
 
         waitUntil(timeout: 8, "reclaim temp cancel") { self.lock.lock(); defer { self.lock.unlock() }; return self.cancelCalls > 0 }
-        waitUntil(timeout: 5, "cancel outcome logged") { self.diagMatching("temp cancelled — pod reverts to the user's schedule until") != nil }
-        XCTAssertNil(diagMatching("reconcile[AUTHORITATIVE]"), "no reading from the watch means no audit")
+        waitUntil(timeout: 5, "cancel outcome logged") { self.diagMatching("temp cancelled: the pod runs the scheduled basal until") != nil }
+        XCTAssertNil(diagMatching("hand-back check:"), "no reading from the watch means no audit")
         XCTAssertEqual(cancelCalls, 1)
     }
 
@@ -1164,10 +1159,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         wait(for: [ackSent], timeout: 5)
         waitForState(controller, .owner)
 
-        waitUntil(timeout: 8, "failed-cancel diag") { self.diagMatching("temp cancel FAILED — pod keeps") != nil }
+        waitUntil(timeout: 8, "failed-cancel diag") { self.diagMatching("could not cancel the watch's temp") != nil }
         XCTAssertEqual(controller.state, .owner, "a failed cancel must not strand the loan state")
         // The audit is independent of the cancel and must still have landed.
-        XCTAssertNotNil(diagMatching("reconcile[AUTHORITATIVE]"))
+        XCTAssertNotNil(diagMatching("hand-back check:"))
     }
 
     /// If the pod never comes home there is no authoritative reading — and no invented one. The
@@ -1188,9 +1183,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         let settle = expectation(description: "settle")
         DispatchQueue.global().asyncAfter(deadline: .now() + 3) { settle.fulfill() }
         wait(for: [settle], timeout: 5)
-        XCTAssertNil(diagMatching("reconcile[AUTHORITATIVE]"), "no reading means no audit — never a fabricated one")
+        XCTAssertNil(diagMatching("hand-back check:"), "no reading means no audit — never a fabricated one")
         XCTAssertEqual(cancelCalls, 0, "no cancel at an unreachable pod")
-        XCTAssertNotNil(diagMatching("reconcile[provisional]"), "the provisional line is what stands")
+        XCTAssertNotNil(diagMatching("the watch's count at hand-back"), "the provisional line is what stands")
     }
 
     // MARK: - A hand-over lost in transit
@@ -1201,7 +1196,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         controller.handleIncoming(userInfo: try! LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
         wait(for: [grantSent], timeout: 5)
         // Barrier: `grantOfferedAt` is stamped on the controller's queue.
-        controller.queue.sync { }
+        drainMainQueue()
         guard case .grant(let grant)? = lastSent() else {
             XCTFail("expected a grant, got \(String(describing: lastSent()))")
             fatalError()
@@ -1214,7 +1209,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         MockPumpManager.testOdometer = 10.0
         let grant = offerGrant(makeController())
         let relaunched = makeController()
-        relaunched.queue.sync { }
+        drainMainQueue()
         XCTAssertEqual(relaunched.epoch, grant.epoch)
         XCTAssertEqual(relaunched.ledgerLast?.units, 10.0, "the grant's reading survives the relaunch")
     }
@@ -1227,7 +1222,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         let grantSent = expectSend()
         controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t", knownEpoch: 111)).transportDictionary())
         wait(for: [grantSent], timeout: 5)
-        controller.queue.sync { }
+        drainMainQueue()
         guard case .grant(let grant)? = lastSent() else { return XCTFail("expected a grant") }
         XCTAssertEqual(grant.epoch, 112)
         XCTAssertEqual(controller.epoch, 112)
@@ -1258,7 +1253,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         let grant = offerGrant(controller)
         XCTAssertTrue(MockPumpManager.testConnectionReleased, "the phone releases the pod to hand over")
 
-        let report = StatusReport(epoch: grant.epoch, mode: .closedDirect, lastDirectGlucoseAge: nil,
+        let report = StatusReport(epoch: grant.epoch, lastDirectGlucoseAge: nil,
                                   lastEventSeq: 0, podFault: nil, holdsPod: false, knowsGrant: false)
         controller.handleIncoming(userInfo: try LoanMessage.statusReport(report).transportDictionary())
 
@@ -1272,7 +1267,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         let controller = makeController()
         let grant = offerGrant(controller)
 
-        let report = StatusReport(epoch: grant.epoch, mode: .closedDirect, lastDirectGlucoseAge: nil,
+        let report = StatusReport(epoch: grant.epoch, lastDirectGlucoseAge: nil,
                                   lastEventSeq: 0, podFault: nil, holdsPod: false, knowsGrant: true)
         controller.handleIncoming(userInfo: try LoanMessage.statusReport(report).transportDictionary())
 
@@ -1288,7 +1283,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         let controller = makeController()
         let grant = offerGrant(controller)
 
-        let report = StatusReport(epoch: grant.epoch, mode: .closedDirect, lastDirectGlucoseAge: nil,
+        let report = StatusReport(epoch: grant.epoch, lastDirectGlucoseAge: nil,
                                   lastEventSeq: 0, podFault: nil, holdsPod: false)   // knowsGrant nil
         controller.handleIncoming(userInfo: try LoanMessage.statusReport(report).transportDictionary())
 
@@ -1301,7 +1296,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// The added field must survive a round trip, and its absence must decode as "no answer"
     /// rather than failing the whole message.
     func testKnowsGrantRoundTripsAndIsOptionalOnDecode() throws {
-        let report = StatusReport(epoch: 7, mode: .closedDirect, lastDirectGlucoseAge: 30,
+        let report = StatusReport(epoch: 7, lastDirectGlucoseAge: 30,
                                   lastEventSeq: 3, podFault: nil, holdsPod: true, knowsGrant: true)
         var transport = try LoanMessage.statusReport(report).transportDictionary()
         guard case .statusReport(let decoded)? = try? LoanMessage.decode(fromTransport: transport) else {
@@ -1337,7 +1332,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
         wait(for: [ackSent], timeout: 5)
         waitForState(controller, .owner)
-        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("reconcile[AUTHORITATIVE]") != nil }
+        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("hand-back check:") != nil }
     }
 
     /// POSITIVE beyond the bound at an ordinary hand-back: the watch's records are complete, so the
@@ -1375,7 +1370,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         wait(for: [ackSent], timeout: 5)
         waitForState(controller, .owner)
 
-        waitUntil(timeout: 8, "warn verdict") { self.diagMatching("WARN — residual") != nil }
+        waitUntil(timeout: 8, "warn verdict") { self.diagMatching("insulin warning: residual") != nil }
         // "Overstated": the pod delivered less than the records. Reported; dosing continues.
         XCTAssertTrue(urgentNotices.contains("Insulin On Board May Be Overstated"))
     }
@@ -1386,7 +1381,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         let controller = makeController()
         try runLoanToAudit(controller, deliveredDuringLoan: 0.10)
 
-        XCTAssertNil(diagMatching("WARN — residual"))
+        XCTAssertNil(diagMatching("insulin warning: residual"))
         XCTAssertTrue(notices.isEmpty, "a normal loan must produce no notice at all, got \(notices)")
     }
 
@@ -1414,9 +1409,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
         wait(for: [ackSent], timeout: 5)
         waitForState(controller, .owner)
-        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("reconcile[AUTHORITATIVE]") != nil }
+        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("hand-back check:") != nil }
 
-        XCTAssertNil(diagMatching("WARN — residual"), "exactly +0.200 is ON the band, not beyond it — float dust must not report")
+        XCTAssertNil(diagMatching("insulin warning: residual"), "exactly +0.200 is ON the band, not beyond it — float dust must not report")
     }
 
     /// The negative twin: −0.2000000000000007 stays inside the band.
@@ -1433,9 +1428,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
         wait(for: [ackSent], timeout: 5)
         waitForState(controller, .owner)
-        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("reconcile[AUTHORITATIVE]") != nil }
+        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("hand-back check:") != nil }
 
-        XCTAssertNil(diagMatching("WARN — residual"), "exactly −0.200 is ON the band — float dust must not warn")
+        XCTAssertNil(diagMatching("insulin warning: residual"), "exactly −0.200 is ON the band — float dust must not warn")
     }
 
     // MARK: - Mid-loan readings
@@ -1446,22 +1441,20 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         let snap = LoanOdometerSnapshot(deliveredAtStart: 10.0, deliveredLatest: latest, asOf: asOf)
         controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
             DoseRecordBatch(epoch: epoch, events: events, tombstones: [], odometer: snap)).transportDictionary())
-        controller.queue.sync { }
+        drainMainQueue()
     }
 
     /// Closes the loan with a final offer whose end odometer the phone then verifies first-hand.
-    private func finishLoan(_ controller: PodLoanPhoneController, epoch: Int, finalOdometer: Double,
-                            uploadsConfirmed: [String: [String]]? = nil) throws {
+    private func finishLoan(_ controller: PodLoanPhoneController, epoch: Int, finalOdometer: Double) throws {
         MockPumpManager.testOdometer = finalOdometer
         let ackSent = expectSend()
         let offer = HandbackOffer(epoch: epoch, handedBackAt: Date().addingTimeInterval(5), finalStatus: nil,
                                   odometer: LoanOdometerSnapshot(deliveredAtStart: 10.0, deliveredLatest: finalOdometer),
-                                  events: [], tombstones: [], recovered: false, released: true,
-                                  uploadsConfirmed: uploadsConfirmed)
+                                  events: [], tombstones: [], recovered: false, released: true)
         controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
         wait(for: [ackSent], timeout: 5)
         waitForState(controller, .owner)
-        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("reconcile[AUTHORITATIVE]") != nil }
+        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("hand-back check:") != nil }
     }
 
     /// A mid-loan reading is diagnostic only: drift that each stretch would have absorbed is
@@ -1474,39 +1467,6 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         try finishLoan(controller, epoch: grant.epoch, finalOdometer: 10.30)
 
         waitUntil(timeout: 5, "verdict") { self.diagMatching("exceeds +0.20") != nil }
-    }
-
-    // MARK: - Glucose uploads
-
-    /// After a clean hand-back the phone skips the loan's glucose only for the services the watch
-    /// confirmed it uploaded to, once.
-    func testACleanHandbackSkipsGlucoseOnlyWhereTheWatchConfirmedIt() throws {
-        let controller = makeController()
-        let grant = establishLoan(controller)
-        try finishLoan(controller, epoch: grant.epoch, finalOdometer: 10.0,
-                       uploadsConfirmed: ["NightscoutService": ["Glucose", "DosingDecision"], "TidepoolService": ["DosingDecision"]])
-        lock.lock(); let skips = glucoseUploadSkips; lock.unlock()
-        XCTAssertEqual(skips, [["NightscoutService"]])
-    }
-
-    /// A watch that could not confirm (no network, an older watch): the phone uploads its own copies.
-    func testAnUnconfirmedHandbackSkipsNoGlucoseUploads() throws {
-        let controller = makeController()
-        let grant = establishLoan(controller)
-        try finishLoan(controller, epoch: grant.epoch, finalOdometer: 10.0)
-        lock.lock(); let skips = glucoseUploadSkips; lock.unlock()
-        XCTAssertEqual(skips, [])
-    }
-
-    /// A watch that went silent may not have uploaded: a force reclaim skips nothing.
-    func testAForceReclaimSkipsNoGlucoseUploads() throws {
-        let controller = makeController()
-        _ = establishLoan(controller)
-        MockPumpManager.testOdometer = 10.0
-        controller.forceReclaimToOwner(reason: "test: watch silent")
-        waitForState(controller, .owner)
-        lock.lock(); let skips = glucoseUploadSkips; lock.unlock()
-        XCTAssertEqual(skips, [])
     }
 
     /// A loan that synced then died: the force audit judges the whole loan, not the tail since the sync.
@@ -1523,7 +1483,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         MockPumpManager.testOdometer = 11.30
         controller.forceReclaimToOwner(reason: "test: watch dead after a synced stretch")
         waitForState(controller, .owner)
-        waitUntil(timeout: 8, "force verdict") { self.diagMatching("force-reclaim residual +0.300 U exceeds") != nil }
+        waitUntil(timeout: 8, "force verdict") { self.diagMatching("after take-back: residual +0.300 U exceeds") != nil }
     }
 
     /// Row 10: the same offer redelivered (lost ack) re-acks the same cursor and
@@ -1584,6 +1544,80 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(lastBatch.count, 1, "the stale offer's record still drained")
     }
 
+    // MARK: - The watch's records reach the stores as they arrive
+
+    /// A batch during a loan writes its finished records and acknowledges them, so the phone's
+    /// stores follow the watch while it is in reach. The loan carries on.
+    func testARecordBatchDuringALoanIsSavedAndAcknowledged() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        let bolus = makeEvent(seq: 1, units: 1.5, at: Date().addingTimeInterval(-.minutes(3)))
+
+        let ack = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: grant.epoch, events: [bolus], tombstones: [], sentAt: Date())).transportDictionary())
+        wait(for: [ack], timeout: 5)
+
+        guard case .handbackAck(let saved)? = lastSent() else { return XCTFail("expected an acknowledgement") }
+        XCTAssertEqual(saved.committedCursor, bolus.seq)
+        XCTAssertEqual(addedDoses.flatMap { $0 }.filter { $0.type == .bolus }.count, 1, "the bolus is in the dose store")
+        XCTAssertEqual(controller.state, .loaned, "storing records does not end the loan")
+    }
+
+    /// A temp basal still running is acknowledged but kept back, as on an interim hand-back; it is
+    /// written once a later batch shows it finished.
+    func testARunningTempInABatchWaitsUntilItHasFinished() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        let now = Date()
+        let running = tempEvent(seq: 1, rate: 1.5, start: now.addingTimeInterval(-60), durationMinutes: 30)
+
+        let firstAck = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: grant.epoch, events: [running], tombstones: [], sentAt: now)).transportDictionary())
+        wait(for: [firstAck], timeout: 5)
+        XCTAssertEqual(addedDoses.flatMap { $0 }.filter { $0.type == .tempBasal }.count, 0, "the running temp waits")
+
+        // Its cancel, minted when the watch ended it: the temp is finished now.
+        let cancelAt = now.addingTimeInterval(.minutes(5))
+        let cancel = LoanEvent(id: UUID(), seq: 2, provenance: .confirmed,
+                               record: LoanDoseRecord(kind: .tempBasal, startDate: cancelAt, endDate: cancelAt, unitsPerHour: 0),
+                               loggedAt: cancelAt)
+        let secondAck = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: grant.epoch, events: [cancel], tombstones: [], sentAt: cancelAt)).transportDictionary())
+        wait(for: [secondAck], timeout: 5)
+        XCTAssertGreaterThan(addedDoses.flatMap { $0 }.filter { $0.type == .tempBasal }.count, 0, "written once finished")
+    }
+
+    /// A batch with no records is the watch checking in: nothing is written or acknowledged.
+    func testABatchWithNoRecordsWritesNothing() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        let acksBefore = sentCount { if case .handbackAck = $0 { return true }; return false }
+
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: grant.epoch, events: [], tombstones: [], sentAt: Date())).transportDictionary())
+        settle()
+
+        XCTAssertEqual(sentCount { if case .handbackAck = $0 { return true }; return false }, acksBefore, "no acknowledgement for a check-in")
+        XCTAssertTrue(addedDoses.isEmpty)
+    }
+
+    /// The banner's freshness line: when the watch's records last came, during a loan only.
+    func testTheBannerSaysWhenTheWatchsRecordsLastCame() throws {
+        let controller = makeController(now: { self.clock })
+        XCTAssertNil(controller.lastRecordsAtForUI, "no loan, no line")
+        let grant = establishLoan(controller)
+        clock = clock.addingTimeInterval(.minutes(1))
+        let sentAt = clock
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: grant.epoch, events: [], tombstones: [], sentAt: sentAt)).transportDictionary())
+        settle()
+        let shown = try XCTUnwrap(controller.lastRecordsAtForUI)
+        XCTAssertEqual(shown.timeIntervalSince(sentAt), 0, accuracy: 1, "the batch's send time, as the message carries it")
+    }
+
     /// An interim offer acks the open temp's cursor but defers its write to the final offer.
     func testInterimDrainAcksOpenTempButDefersWriteToFinal() throws {
         let controller = makeController()
@@ -1642,7 +1676,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             epoch: grant.epoch, handedBackAt: now.addingTimeInterval(90), finalStatus: nil, odometer: nil,
             events: [], tombstones: [], recovered: false, released: false)).transportDictionary())
         wait(for: [afterAck], timeout: 5)
-        controller.queue.sync { }
+        drainMainQueue()
         XCTAssertEqual(addedDoses.flatMap { $0 }.filter { $0.type == .bolus }.count, 1, "written once, finished")
         XCTAssertEqual(controller.state, .loaned)
     }
@@ -1728,7 +1762,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
             events: [], tombstones: [], recovered: false, released: false)).transportDictionary()
         controller.handleIncoming(userInfo: interim)
-        controller.queue.sync { }
+        drainMainQueue()
         if case .handbackAck? = lastSent() { XCTFail("an interim offer is not acked either while Bluetooth is off") }
         XCTAssertEqual(controller.state, .loaned)
 
@@ -1783,7 +1817,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     }
 
     /// Recursively remove `key`; returns whether anything was removed. Mirrors the helper in
-    /// LoanProtocolV2Tests so neither test pins the envelope's nesting.
+    /// LoanProtocolTests so neither test pins the envelope's nesting.
     private static func stripKey(_ key: String, from json: inout [String: Any]) -> Bool {
         var removed = false
         if json.removeValue(forKey: key) != nil { removed = true }
@@ -1807,9 +1841,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
         func report(fault: String?) throws {
             controller.handleIncoming(userInfo: try LoanMessage.statusReport(StatusReport(
-                epoch: grant.epoch, mode: .closedDirect, lastDirectGlucoseAge: 60, lastEventSeq: 0,
+                epoch: grant.epoch, lastDirectGlucoseAge: 60, lastEventSeq: 0,
                 podFault: fault, holdsPod: true, knowsGrant: true)).transportDictionary())
-            controller.queue.sync { }
+            drainMainQueue()
         }
         try report(fault: nil)
         XCTAssertTrue(urgentNotices.isEmpty, "no fault, no notice")
@@ -1828,7 +1862,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     func testAnUnreadableWatchMessageWarnsTimeSensitively() {
         let controller = makeController()
         controller.handleIncoming(userInfo: [LoanProtocol.userInfoKey: Data("not a loan message".utf8)])
-        controller.queue.sync { }
+        drainMainQueue()
         XCTAssertEqual(urgentNotices, ["Watch Message Unreadable"])
         XCTAssertFalse(notices.contains("Watch Message Unreadable"))
     }
@@ -1836,7 +1870,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// Dosing is running on an estimate, so the reminders that it still stands are time-sensitive.
     func testTheEstimateStillBookedRemindersAreTimeSensitive() throws {
         let controller = makeController()
-        controller.queue.sync { controller.armPlaceholderReminders(units: 1.5, bookedAt: Date()) }
+        controller.armPlaceholderReminders(units: 1.5, bookedAt: Date())
         lock.lock(); let added = addedNotifications; lock.unlock()
         let reminders = added.filter { $0.content.title == "Estimated Insulin Still Booked" }
         XCTAssertEqual(reminders.count, 2, "at 2 h and 4 h")
@@ -1965,37 +1999,6 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                        "ended when the wrist cleared it, not an hour later at the hand-back")
     }
 
-    /// The wiring's apply, called from the controller's queue, runs on main, in call order; until
-    /// it does, the change is visible as unapplied, which is what the controller's next read sees.
-    @MainActor
-    func testAWristOverrideIsAppliedOnMainInCallOrder() throws {
-        let presets = TemporaryPresetsManager(settingsProvider: MockSettingsProvider(settings: StoredSettings()),
-                                              presetHistory: TemporaryScheduleOverrideHistory())
-        let observer = MainThreadPresetObserver(expectation(description: "cleared"))
-        presets.addTemporaryPresetObserver(observer)
-        let setAt = Date().addingTimeInterval(-.hours(1))
-        let clearedAt = Date().addingTimeInterval(-.minutes(30))
-        let exercise = TemporaryScheduleOverride(context: .custom,
-                                                 settings: TemporaryPresetSettings(unit: .milligramsPerDeciliter, targetRange: nil,
-                                                                                   insulinNeedsScaleFactor: 0.5),
-                                                 startDate: setAt, duration: .indefinite, enactTrigger: .local, syncIdentifier: UUID())
-
-        let unapplied = Locked<[TemporaryScheduleOverride?]>([])
-        DispatchQueue.global().sync {
-            presets.setScheduleOverrideOnMain(exercise, changedAt: setAt, unapplied: unapplied)
-            XCTAssertEqual(unapplied.value.last, .some(exercise), "the set, before main has run")
-            presets.setScheduleOverrideOnMain(nil, changedAt: clearedAt, unapplied: unapplied)
-            XCTAssertEqual(unapplied.value.last, .some(nil), "then the clear")
-        }
-        XCTAssertTrue(observer.calls.isEmpty, "nothing is applied on the calling queue")
-        waitForExpectations(timeout: 5)
-
-        XCTAssertEqual(observer.calls, ["activated on main", "deactivated on main"])
-        XCTAssertTrue(unapplied.value.isEmpty, "both applied")
-        let recorded = try XCTUnwrap(presets.presetHistory.getOverrideHistory(startDate: setAt.addingTimeInterval(-60), endDate: Date()).first)
-        XCTAssertEqual(recorded.actualEndDate.timeIntervalSince(clearedAt), 0, accuracy: 0.01)
-    }
-
     // MARK: - The outbound handover is two states, not one
 
     /// "Taking over…" from grant until the watch confirms, then "Pod on Watch".
@@ -2035,7 +2038,7 @@ extension PodLoanPhoneControllerTests {
 
         controller.forceReclaimToOwner(reason: "test: watch dead")
         waitForState(controller, .owner)
-        waitUntil(timeout: 5, "force verdict") { self.diagMatching("reconcile[FORCE-RECLAIM]") != nil }
+        waitUntil(timeout: 5, "force verdict") { self.diagMatching("take-back check:") != nil }
         waitUntil(timeout: 5, "gap booked") { self.lock.lock(); defer { self.lock.unlock() }; return !self.bookedGapDoses.isEmpty }
 
         lock.lock()
@@ -2064,10 +2067,10 @@ extension PodLoanPhoneControllerTests {
 
         controller.forceReclaimToOwner(reason: "test: watch dead, pod out of reach")
         waitForState(controller, .owner)
-        controller.queue.sync { controller.closeReclaimSettleWindow(reason: "test: the window closed") }
+        controller.closeReclaimSettleWindow(reason: "test: the window closed")
 
         XCTAssertTrue(controller.holdsAutomaticDosing, "still owed, still held")
-        XCTAssertNotNil(diagMatching("force-reclaim audit still OWED"))
+        XCTAssertNotNil(diagMatching("take-back check still owed"))
         lock.lock(); let noticesSoFar = urgentNotices; lock.unlock()
         XCTAssertFalse(noticesSoFar.contains { $0 == "Insulin Not Checked After Sport Mode" }, "nothing is declared unverified")
 
@@ -2086,7 +2089,7 @@ extension PodLoanPhoneControllerTests {
 
         controller.forceReclaimToOwner(reason: "test: watch dead, but books are complete")
         waitForState(controller, .owner)
-        waitUntil(timeout: 5, "clean verdict") { self.diagMatching("force-reclaim audit CLEAN") != nil }
+        waitUntil(timeout: 5, "clean verdict") { self.diagMatching("insulin after take-back is clean") != nil }
 
         lock.lock()
         let booked = bookedGapDoses
@@ -2189,7 +2192,7 @@ extension PodLoanPhoneControllerTests {
         _ = controller
 
         // Locked: the retry must not have touched the store.
-        Thread.sleep(forTimeInterval: 0.3)
+        spinMain(0.3)
         lock.lock(); let attemptsWhileLocked = deletedGapSyncs.count; lock.unlock()
         XCTAssertEqual(attemptsWhileLocked, 0, "store work ran during the pre-first-unlock window")
         XCTAssertFalse(controller.persisted.ledger.bookings.isEmpty)
@@ -2252,7 +2255,7 @@ extension PodLoanPhoneControllerTests {
             HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
                           events: [realTail], tombstones: [], recovered: true)).transportDictionary())
 
-        waitUntil(timeout: 5, "failure logged") { self.diagMatching("gap DELETE FAILED") != nil }
+        waitUntil(timeout: 5, "failure logged") { self.diagMatching("estimate not deleted: the") != nil }
         XCTAssertFalse(controller.persisted.ledger.bookings.isEmpty,
                         "state survives a failed delete, so the next offer retries it")
     }
@@ -2326,7 +2329,7 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(addedDoses.count, dosesBefore, "none of the watch's records were imported")
         XCTAssertFalse(controller.isReclaimSettling)
         XCTAssertNil(controller.reclaimProgress)
-        XCTAssertNotNil(diagMatching("take-back REFUSED"))
+        XCTAssertNotNil(diagMatching("take-back refused"))
         lock.lock(); let last = controlCalls.last; let ends = backgroundTaskEnds; lock.unlock()
         XCTAssertEqual(last, true, "the Loop Failure warnings are stood down again")
         XCTAssertGreaterThanOrEqual(ends, 1, "the background hold is given back")
@@ -2386,7 +2389,7 @@ extension PodLoanPhoneControllerTests {
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "the pump was never released")
         XCTAssertTrue(controlCalls.isEmpty, "the phone's dosing was never handed over")
         XCTAssertFalse(controller.holdsAutomaticDosing, "the phone doses again")
-        XCTAssertNotNil(diagMatching("the pod driver kept the pod"))
+        XCTAssertNotNil(diagMatching("hasn't confirmed the last command"))
 
         MockPumpManager.testKeepsControl = false
         establishLoan(controller)
@@ -2424,7 +2427,7 @@ extension PodLoanPhoneControllerTests {
         XCTAssertTrue(controller.holdsAutomaticDosing)
         XCTAssertEqual(revokeCount(), 0, "the watch was never told to stop")
         XCTAssertNil(controller.reclaimProgress)
-        XCTAssertNotNil(diagMatching("take-back REFUSED — the pod is giving the watch's bolus"))
+        XCTAssertNotNil(diagMatching("take-back refused: the pod is giving the watch's bolus"))
 
         MockPumpManager.testPodBolusEndsAt = nil
         controller.reclaimNow()
@@ -2441,7 +2444,7 @@ extension PodLoanPhoneControllerTests {
         setPodGivingTheWatchsBolus(secondsLeft: 1)
 
         controller.reclaimNow(onSilence: true)
-        waitUntil(timeout: 5, "waiting") { self.diagMatching("waiting for it to finish") != nil }
+        waitUntil(timeout: 5, "waiting") { self.diagMatching("waiting for the watch's bolus to finish") != nil }
         XCTAssertEqual(controller.state, .reclaimPending, "held, not refused")
         XCTAssertEqual(revokeCount(), 0)
         XCTAssertFalse(notices.contains("Wait for the Bolus"), "nothing to ask of the looper")
@@ -2462,7 +2465,7 @@ extension PodLoanPhoneControllerTests {
         connectionReady = false
 
         controller.reclaimNow()
-        waitUntil(timeout: 5, "refused") { self.diagMatching("take-back REFUSED") != nil }
+        waitUntil(timeout: 5, "refused") { self.diagMatching("take-back refused") != nil }
 
         XCTAssertEqual(controller.state, .owner)
         XCTAssertTrue(controller.yieldingToInferredLoan, "still stood aside")
@@ -2555,7 +2558,7 @@ extension PodLoanPhoneControllerTests {
         wait(for: [ackSent], timeout: 5)
         waitForState(controller, .owner)
         // The phase is visible before its observer stamps the settle start; let that land first.
-        controller.queue.sync {}
+        drainMainQueue()
 
         clock = clock.addingTimeInterval(9.5)       // 0.95 of the 10 s promise
         let capped = try XCTUnwrap(controller.reclaimProgress)
@@ -2645,26 +2648,26 @@ extension PodLoanPhoneControllerTests {
             LoanRequest(watchBuild: "t", sentAt: clock.addingTimeInterval(-300))).transportDictionary())
 
         // The rejection is a silent return; stillness is the assertion.
-        usleep(400_000)
+        spinMain(0.4)
         XCTAssertEqual(controller.state, .owner, "a stale request must not move the state machine")
         lock.lock(); let sentDuringGhost = sent; lock.unlock()
         XCTAssertTrue(sentDuringGhost.isEmpty, "a stale request earns NOTHING — no grant, no denial: \(sentDuringGhost)")
 
-        try establishLoan(controller)   // fresh (nil-sentAt) request still grants — liveness + back-compat
+        establishLoan(controller)   // fresh (nil-sentAt) request still grants — liveness + back-compat
     }
 
     // MARK: - Dormant-refresh throttle (seize credential pipe)
 
     /// The refresh throttle stamps at enqueue, so a burst yields one refresh.
     func testDormantRefreshBurstYieldsOneRefresh() {
-        saveState { $0.watchSupportsSeize = true }
+        saveState { $0.watchUsesSportMode = true }
         let controller = makeController()
 
         let firstRefresh = expectSend()
         for _ in 0..<5 { controller.considerDormantRefresh() }
         wait(for: [firstRefresh], timeout: 5)
         // Let any leaked assemblies reach `sent`.
-        usleep(400_000)
+        spinMain(0.4)
 
         lock.lock()
         let refreshes = sent.filter { if case .dormantGrant = $0 { return true }; return false }
@@ -2678,7 +2681,7 @@ extension PodLoanPhoneControllerTests {
         let token = UUID()
         saveState {
             $0.seizeToken = token
-            $0.watchSupportsSeize = true
+            $0.watchUsesSportMode = true
         }
         return token
     }
@@ -2726,7 +2729,7 @@ extension PodLoanPhoneControllerTests {
                           events: [], tombstones: [], recovered: false, released: false,
                           seizeToken: token)).transportDictionary())
         waitUntil(timeout: 5, "adopted") { controller.state == .loaned }
-        controller.queue.sync {}   // the release follows the state change on the controller's queue
+        drainMainQueue()   // the release follows the state change on the controller's queue
 
         XCTAssertTrue(MockPumpManager.testConnectionReleased, "the watch has the pod, so the phone releases it")
         XCTAssertTrue(controller.holdsAutomaticDosing, "and the phone's dosing is held")
@@ -2819,7 +2822,7 @@ extension PodLoanPhoneControllerTests {
 
         // The LIVE loan's traffic lands mid-drain — dropped, but remembered as evidence.
         controller.handleIncoming(userInfo: try futureEpochBatch(epoch: 5))
-        usleep(200_000)
+        spinMain(0.2)
 
         // The ghost's FINAL offer closes its drain.
         controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
@@ -2828,7 +2831,7 @@ extension PodLoanPhoneControllerTests {
                           seizeToken: token)).transportDictionary())
         waitUntil(timeout: 5, "close yielded") { controller.yieldingToInferredLoan }
         // The yield flag is saved before the radio is released, in the same queue turn.
-        controller.queue.sync {}
+        drainMainQueue()
 
         XCTAssertEqual(controller.state, .owner, "books closed at .owner…")
         XCTAssertTrue(MockPumpManager.testConnectionReleased, "…but custody NOT resumed — the pod stays the live loan's")
@@ -2838,7 +2841,7 @@ extension PodLoanPhoneControllerTests {
     /// Every epoch advance re-issues the dormant credential.
     func testEpochAdvanceRefreshesTheDormantCredential() throws {
         let token = seizeCredentialOutstanding()
-        saveState { $0.watchSupportsSeize = true }
+        saveState { $0.watchUsesSportMode = true }
         let controller = makeController()
 
         let first = expectSend()
@@ -2892,7 +2895,7 @@ extension PodLoanPhoneControllerTests {
         _ = seizeCredentialOutstanding()
         let controller = makeController()
         controller.handleIncoming(userInfo: try LoanMessage.statusReport(StatusReport(
-            epoch: 5, mode: .closedDirect, lastDirectGlucoseAge: 60, lastEventSeq: 2,
+            epoch: 5, lastDirectGlucoseAge: 60, lastEventSeq: 2,
             podFault: nil, holdsPod: true)).transportDictionary())
         waitUntil(timeout: 5, "yielded on the report") { controller.yieldingToInferredLoan }
         XCTAssertTrue(controller.isPodLoanedOut, "pill reads Pod on Watch off the report alone")
@@ -2912,7 +2915,7 @@ extension PodLoanPhoneControllerTests {
 
         // The answer: the watch holds a NEWER loan. The ghost can never confirm.
         controller.handleIncoming(userInfo: try LoanMessage.statusReport(StatusReport(
-            epoch: ghost.epoch + 1, mode: .closedDirect, lastDirectGlucoseAge: 30, lastEventSeq: 1,
+            epoch: ghost.epoch + 1, lastDirectGlucoseAge: 30, lastEventSeq: 1,
             podFault: nil, holdsPod: true)).transportDictionary())
         waitUntil(timeout: 5, "ghost abandoned into the yield") {
             controller.state == .owner && controller.yieldingToInferredLoan
@@ -2940,9 +2943,9 @@ extension PodLoanPhoneControllerTests {
         guard case .grant(let ghost)? = lastSent() else { throw SetupFailure.noGrant }
 
         controller.handleIncoming(userInfo: try LoanMessage.statusReport(StatusReport(
-            epoch: ghost.epoch + 1, mode: .closedDirect, lastDirectGlucoseAge: 30, lastEventSeq: 1,
+            epoch: ghost.epoch + 1, lastDirectGlucoseAge: 30, lastEventSeq: 1,
             podFault: nil, holdsPod: true)).transportDictionary())
-        usleep(300_000)
+        spinMain(0.3)
         XCTAssertEqual(controller.state, .grantOffered, "no credential — the report changes nothing")
         XCTAssertFalse(controller.yieldingToInferredLoan)
     }
@@ -2951,7 +2954,7 @@ extension PodLoanPhoneControllerTests {
     /// booked as that loan's records.
     func testTakeBackFromYieldAimsTheRevokeAtTheLiveLoanAndBooksItsAnswer() throws {
         let token = seizeCredentialOutstanding()
-        let controller = makeController(watchReachable: { true }, lastWatchContact: { self.clock }, now: { self.clock })
+        let controller = makeController(watchReachable: { true }, now: { self.clock })
 
         controller.handleIncoming(userInfo: try futureEpochBatch(epoch: 5))
         waitUntil(timeout: 5, "yield engaged") { controller.yieldingToInferredLoan }
@@ -2970,7 +2973,7 @@ extension PodLoanPhoneControllerTests {
             HandbackOffer(epoch: 5, handedBackAt: clock, finalStatus: nil, odometer: nil,
                           events: [], tombstones: [], recovered: true, released: nil,
                           seizeToken: token)).transportDictionary())
-        waitUntil(timeout: 5, "answer adopted") { self.diagMatching("RETRO-ACK") != nil }
+        waitUntil(timeout: 5, "answer adopted") { self.diagMatching("adopting the loan the watch started") != nil }
         waitUntil(timeout: 8, "closed back to owner") {
             controller.state == .owner && !controller.yieldingToInferredLoan
         }
@@ -2988,7 +2991,7 @@ extension PodLoanPhoneControllerTests {
         // arrived, which reclaims to owner — and under the old code never cleared the anchor.
         let g1 = offerGrant(controller)
         controller.handleIncoming(userInfo: try LoanMessage.statusReport(
-            StatusReport(epoch: g1.epoch, mode: .closedDirect, lastDirectGlucoseAge: nil,
+            StatusReport(epoch: g1.epoch, lastDirectGlucoseAge: nil,
                          lastEventSeq: 0, podFault: nil, holdsPod: false, knowsGrant: false)
         ).transportDictionary())
         waitForState(controller, .owner)
@@ -3005,22 +3008,22 @@ extension PodLoanPhoneControllerTests {
         // Ten seconds into the SECOND takeover, the watch reports progress.
         clock = clock.addingTimeInterval(10)
         controller.handleIncoming(userInfo: try LoanMessage.statusReport(
-            StatusReport(epoch: g2.epoch, mode: .closedDirect, lastDirectGlucoseAge: nil,
+            StatusReport(epoch: g2.epoch, lastDirectGlucoseAge: nil,
                          lastEventSeq: 0, podFault: nil, holdsPod: false, knowsGrant: true)
         ).transportDictionary())
 
         waitUntil(timeout: 5, "in-progress diag") {
             self.lock.lock(); defer { self.lock.unlock() }
-            return self.diags.contains { $0.contains("takeover IN PROGRESS") }
+            return self.diags.contains { $0.contains("taking the pod over") }
         }
         lock.lock()
-        let line = diags.first { $0.contains("takeover IN PROGRESS") } ?? ""
+        let line = diags.first { $0.contains("taking the pod over") } ?? ""
         lock.unlock()
 
         // Measured from THIS grant (10 s), not from the abandoned one (130 s).
-        XCTAssertTrue(line.contains("+10s"),
+        XCTAssertTrue(line.contains("over, 10 s after"),
                       "elapsed must be measured from the second grant; got: \(line)")
-        XCTAssertFalse(line.contains("+370s"),
+        XCTAssertFalse(line.contains("370 s after"),
                        "the abandoned takeover's clock leaked into the new grant: \(line)")
     }
 
@@ -3073,7 +3076,7 @@ extension PodLoanPhoneControllerTests {
 
     private func tick(_ controller: PodLoanPhoneController) {
         controller.considerHoldLapse()
-        controller.queue.sync { }
+        drainMainQueue()
     }
 
     private func sentCount(_ kind: (LoanMessage) -> Bool) -> Int {
@@ -3093,7 +3096,7 @@ extension PodLoanPhoneControllerTests {
     /// The watch's report overdue with this phone beside the body: the phone asks, and when nothing
     /// answers it takes the pod back and says so.
     func testAnOverdueWatchIsAskedAndTakenFromWhenItDoesNotAnswer() throws {
-        try withShortAnswerWait {
+        withShortAnswerWait {
             let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
             _ = establishLoan(controller)
 
@@ -3120,7 +3123,7 @@ extension PodLoanPhoneControllerTests {
         let first = establishLoan(controller)
 
         // Real time throughout: the hand-back's pod verification compares real clocks.
-        controller.queue.sync { controller.holdRenewedAt = Date().addingTimeInterval(-.minutes(7)) }
+        controller.holdRenewedAt = Date().addingTimeInterval(-.minutes(7))
         tick(controller)
         XCTAssertEqual(statusQueries(), 1, "overdue: the watch is asked")
 
@@ -3135,8 +3138,8 @@ extension PodLoanPhoneControllerTests {
         let second = establishLoan(controller)
         XCTAssertNotEqual(second.epoch, first.epoch)
 
-        usleep(3_500_000)
-        controller.queue.sync { }
+        spinMain(3.5)
+        drainMainQueue()
         XCTAssertEqual(revokes(), 0, "the old question's silence takes nothing from the new loan")
         XCTAssertEqual(controller.state, .loaned)
     }
@@ -3145,10 +3148,10 @@ extension PodLoanPhoneControllerTests {
     func testALoanChangeClearsTheOpenQuestion() throws {
         let controller = makeController()
         let grant = establishLoan(controller)
-        controller.queue.sync { controller.holdRenewedAt = Date().addingTimeInterval(-.minutes(7)) }
+        controller.holdRenewedAt = Date().addingTimeInterval(-.minutes(7))
         tick(controller)
         XCTAssertEqual(statusQueries(), 1)
-        controller.queue.sync { XCTAssertNotNil(controller.watchAskedAt, "a question is open") }
+        XCTAssertNotNil(controller.watchAskedAt, "a question is open")
 
         let ackSent = expectSend()
         controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(HandbackOffer(
@@ -3156,7 +3159,7 @@ extension PodLoanPhoneControllerTests {
             events: [], tombstones: [], recovered: false, released: true)).transportDictionary())
         wait(for: [ackSent], timeout: 5)
         waitForState(controller, .owner)
-        controller.queue.sync { XCTAssertNil(controller.watchAskedAt, "the hand-back ended it") }
+        XCTAssertNil(controller.watchAskedAt, "the hand-back ended it")
     }
 
     /// An answer inside the wait keeps the loan where it is.
@@ -3169,11 +3172,11 @@ extension PodLoanPhoneControllerTests {
             tick(controller)
             XCTAssertEqual(statusQueries(), 1)
             controller.handleIncoming(userInfo: try LoanMessage.statusReport(StatusReport(
-                epoch: grant.epoch, mode: .closedDirect, lastDirectGlucoseAge: 60, lastEventSeq: 1,
+                epoch: grant.epoch, lastDirectGlucoseAge: 60, lastEventSeq: 1,
                 podFault: nil, holdsPod: true, knowsGrant: true)).transportDictionary())
-            controller.queue.sync { }
-            usleep(500_000)
-            controller.queue.sync { }
+            drainMainQueue()
+            spinMain(0.5)
+            drainMainQueue()
             XCTAssertEqual(controller.state, .loaned, "the watch answered: the pod stays with it")
             XCTAssertEqual(revokes(), 0)
         }
@@ -3187,10 +3190,10 @@ extension PodLoanPhoneControllerTests {
             let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
             MockPumpManager.testOdometer = 20.0
             controller.handleIncoming(userInfo: try LoanMessage.statusReport(StatusReport(
-                epoch: 5, mode: .closedDirect, lastDirectGlucoseAge: 60, lastEventSeq: 2,
+                epoch: 5, lastDirectGlucoseAge: 60, lastEventSeq: 2,
                 podFault: nil, holdsPod: true)).transportDictionary())
             waitUntil(timeout: 5, "standing aside on the watch's word") { controller.yieldingToInferredLoan }
-            controller.queue.sync { }
+            drainMainQueue()
             XCTAssertEqual(controller.ledgerLast?.units, 20.0, "anchored at this phone's own last pod read")
 
             clock = clock.addingTimeInterval(.minutes(7))
@@ -3204,7 +3207,7 @@ extension PodLoanPhoneControllerTests {
     /// The core use: the phone is left at home. It hears nothing from the watch for the same reason it
     /// cannot reach the pod, so it asks nothing; home again, it asks.
     func testAPhoneAwayFromTheBodyAsksNothing() throws {
-        try withShortAnswerWait {
+        withShortAnswerWait {
             var lastReading = Date()
             let controller = makeController(latestGlucose: { lastReading },
                                             now: { [weak self] in self?.clock ?? Date() })
@@ -3232,7 +3235,7 @@ extension PodLoanPhoneControllerTests {
     }
 
     private func report(epoch: Int, holdsPod: Bool = true, podReachable: Bool? = nil, loanStartedAt: Date? = nil) throws -> [String: Any] {
-        try LoanMessage.statusReport(StatusReport(epoch: epoch, mode: .closedDirect, lastDirectGlucoseAge: 60, lastEventSeq: 1,
+        try LoanMessage.statusReport(StatusReport(epoch: epoch, lastDirectGlucoseAge: 60, lastEventSeq: 1,
                                                   podFault: nil, holdsPod: holdsPod, knowsGrant: true,
                                                   podReachable: podReachable, loanStartedAt: loanStartedAt)).transportDictionary()
     }
@@ -3247,7 +3250,7 @@ extension PodLoanPhoneControllerTests {
             tick(controller)
             XCTAssertEqual(statusQueries(), 1)
             controller.handleIncoming(userInfo: try report(epoch: grant.epoch, podReachable: false))
-            controller.queue.sync { }
+            drainMainQueue()
             waitUntil(timeout: 5, "taken back") { self.revokes() > 0 }
             XCTAssertNotNil(controller.persisted.tookOverOnSilenceAt, "a takeover on silence, remembered")
         }
@@ -3263,7 +3266,7 @@ extension PodLoanPhoneControllerTests {
             tick(controller)
             XCTAssertEqual(statusQueries(), 1)
             controller.handleIncoming(userInfo: try report(epoch: grant.epoch, holdsPod: false))
-            controller.queue.sync { }
+            drainMainQueue()
             waitUntil(timeout: 5, "taken back") { self.revokes() > 0 }
         }
     }
@@ -3277,13 +3280,13 @@ extension PodLoanPhoneControllerTests {
         let controller = makeController()
 
         controller.handleIncoming(userInfo: try report(epoch: 40, loanStartedAt: tookOver.addingTimeInterval(-.minutes(20))))
-        controller.queue.sync { }
+        drainMainQueue()
         XCTAssertEqual(revokes(), 1, "the revived claim gets the stop")
         XCTAssertFalse(controller.yieldingToInferredLoan, "and the phone keeps the pod")
 
         controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
             DoseRecordBatch(epoch: 40, events: [], tombstones: [], sentAt: Date())).transportDictionary())
-        controller.queue.sync { }
+        drainMainQueue()
         XCTAssertFalse(controller.yieldingToInferredLoan, "its records do not make the phone stand aside either")
 
         controller.handleIncoming(userInfo: try report(epoch: 41, loanStartedAt: tookOver.addingTimeInterval(.minutes(5))))
@@ -3302,7 +3305,7 @@ extension PodLoanPhoneControllerTests {
         // The first to land can be empty: its send time bounds the loan's start.
         controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
             DoseRecordBatch(epoch: 40, events: [], tombstones: [], sentAt: tookOver.addingTimeInterval(-.minutes(9)))).transportDictionary())
-        controller.queue.sync { }
+        drainMainQueue()
         XCTAssertEqual(revokes(), 1, "the revived loan's records get the stop")
         XCTAssertFalse(controller.yieldingToInferredLoan, "and the phone keeps the pod")
     }
@@ -3317,7 +3320,7 @@ extension PodLoanPhoneControllerTests {
         let bolus = makeEvent(seq: 1, units: 0.5, at: tookOver.addingTimeInterval(-.minutes(10)))
         controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
             DoseRecordBatch(epoch: 40, events: [bolus], tombstones: [], sentAt: nil)).transportDictionary())
-        controller.queue.sync { }
+        drainMainQueue()
         XCTAssertEqual(revokes(), 1, "the revived loan's records get the stop")
         XCTAssertFalse(controller.yieldingToInferredLoan, "and the phone keeps the pod")
     }
@@ -3347,8 +3350,8 @@ extension PodLoanPhoneControllerTests {
         MockPumpManager.testOdometer = 10.0
         controller.forceReclaimToOwner(reason: "test: the loan is over")
         waitForState(controller, .owner)
-        waitUntil(timeout: 8, "verdict") { self.diagMatching("reconcile[FORCE-RECLAIM]") != nil }
-        controller.queue.sync { }
+        waitUntil(timeout: 8, "verdict") { self.diagMatching("take-back check:") != nil }
+        drainMainQueue()
 
         XCTAssertEqual(controller.ledgerLast?.units, 10.0, "the return's reading starts the next window")
         XCTAssertNil(controller.loanStartedAt)
@@ -3361,7 +3364,7 @@ extension PodLoanPhoneControllerTests {
         MockPumpManager.testOdometer = 10.0
         controller.forceReclaimToOwner(reason: "test: pod tile, watch powered off")
         waitForState(controller, .owner)
-        controller.queue.sync { }
+        drainMainQueue()
         func revokes() -> Int {
             lock.lock(); defer { lock.unlock() }
             return sent.filter { if case .revoke(let r) = $0 { return r.epoch == grant.epoch }; return false }.count
@@ -3372,12 +3375,12 @@ extension PodLoanPhoneControllerTests {
             DoseRecordBatch(epoch: grant.epoch, events: [], tombstones: [])).transportDictionary()
         controller.handleIncoming(userInfo: batch)
         controller.handleIncoming(userInfo: batch)   // the watch sends two per cycle
-        controller.queue.sync { }
+        drainMainQueue()
         XCTAssertEqual(revokes(), before + 1, "one revoke per cycle's worth of records, not one per batch")
 
         clock = clock.addingTimeInterval(.minutes(5))
         controller.handleIncoming(userInfo: batch)
-        controller.queue.sync { }
+        drainMainQueue()
         XCTAssertEqual(revokes(), before + 2, "and again at the next cycle, for as long as the watch keeps reporting")
         XCTAssertEqual(controller.state, .owner, "the phone keeps the pod throughout")
     }
@@ -3388,7 +3391,7 @@ extension PodLoanPhoneControllerTests {
         let grant = establishLoan(controller)
         controller.reclaimNow()
         waitForState(controller, .owner)
-        controller.queue.sync { }
+        drainMainQueue()
         func revokes() -> Int {
             lock.lock(); defer { lock.unlock() }
             return sent.filter { if case .revoke(let r) = $0 { return r.epoch == grant.epoch }; return false }.count
@@ -3396,25 +3399,25 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(revokes(), 1, "the take-back's own")
 
         let report = try LoanMessage.statusReport(StatusReport(
-            epoch: grant.epoch, mode: .closedDirect, lastDirectGlucoseAge: 30, lastEventSeq: 1,
+            epoch: grant.epoch, lastDirectGlucoseAge: 30, lastEventSeq: 1,
             podFault: nil, holdsPod: true)).transportDictionary()
         controller.handleIncoming(userInfo: report)
-        controller.queue.sync { }
+        drainMainQueue()
         XCTAssertEqual(revokes(), 2, "the watch never heard the first one")
         XCTAssertEqual(controller.state, .owner, "the phone keeps the pod")
 
         let idle = try LoanMessage.statusReport(StatusReport(
-            epoch: grant.epoch, mode: .closedDirect, lastDirectGlucoseAge: 30, lastEventSeq: 1,
+            epoch: grant.epoch, lastDirectGlucoseAge: 30, lastEventSeq: 1,
             podFault: nil, holdsPod: false)).transportDictionary()
         clock = clock.addingTimeInterval(.minutes(5))
         controller.handleIncoming(userInfo: idle)
-        controller.queue.sync { }
+        drainMainQueue()
         XCTAssertEqual(revokes(), 2, "a watch that no longer holds the pod is left alone")
     }
 
     /// The standing copy refreshes on a bolus or carb, collapses bursts, and loses nothing.
     func testTheStandingCopyFollowsTheBook() {
-        saveState { $0.watchSupportsSeize = true }
+        saveState { $0.watchUsesSportMode = true }
         let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
         func copies() -> Int {
             lock.lock(); defer { lock.unlock() }
@@ -3425,20 +3428,20 @@ extension PodLoanPhoneControllerTests {
 
         clock = clock.addingTimeInterval(.minutes(2))          // far inside the 30-minute floor
         controller.considerDormantRefresh()
-        controller.queue.sync { }
-        usleep(300_000)
+        drainMainQueue()
+        spinMain(0.3)
         XCTAssertEqual(copies(), 1, "nothing changed — the periodic floor still holds")
 
         for _ in 0..<5 { controller.considerDormantRefresh(bookChanged: true) }   // carbs, then the bolus, in a burst
         waitUntil(timeout: 5, "the book changed") { copies() == 2 }
-        usleep(400_000)
+        spinMain(0.4)
         XCTAssertEqual(copies(), 2, "one burst, one copy")
     }
 
     /// A glucose alert change reaches the standing copy at once, like a therapy change: neither
     /// the 30-minute periodic floor nor the book's short floor holds it.
     func testAGlucoseAlertChangeRefreshesTheStandingCopyAtOnce() {
-        saveState { $0.watchSupportsSeize = true }
+        saveState { $0.watchUsesSportMode = true }
         let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
         func copies() -> Int {
             lock.lock(); defer { lock.unlock() }
@@ -3452,8 +3455,8 @@ extension PodLoanPhoneControllerTests {
 
         controller.noteGlucoseAlertSettings(alerts)
         controller.considerDormantRefresh()
-        controller.queue.sync { }
-        usleep(300_000)
+        drainMainQueue()
+        spinMain(0.3)
         XCTAssertEqual(copies(), 1, "the same settings again: nothing to send")
 
         alerts.profiles[0].configuration.lowThresholdMgDL = 80   // seconds after the last copy
@@ -3461,39 +3464,19 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 5, "the low threshold changed") { copies() == 2 }
 
         controller.considerDormantRefresh(bookChanged: true)      // a bolus right after: the book's floor holds
-        controller.queue.sync { }
-        usleep(300_000)
+        drainMainQueue()
+        spinMain(0.3)
         XCTAssertEqual(copies(), 2, "a book change inside its floor waits for the trailing refresh")
     }
 
 }
 
-/// Records each preset callback and whether it ran on main; fulfils on the first deactivation.
-private final class MainThreadPresetObserver: PresetActivationObserver {
-    private(set) var calls: [String] = []
-    private let deactivated: XCTestExpectation
-
-    init(_ deactivated: XCTestExpectation) { self.deactivated = deactivated }
-
-    func presetActivated(context: TemporaryScheduleOverride.Context, duration: TemporaryScheduleOverride.Duration) {
-        calls.append("activated \(Thread.isMainThread ? "on main" : "OFF main")")
-    }
-
-    func presetDeactivated(context: TemporaryScheduleOverride.Context) {
-        calls.append("deactivated \(Thread.isMainThread ? "on main" : "OFF main")")
-        deactivated.fulfill()
-    }
-}
-
 extension PodLoanPhoneController {
-    /// Blocking; the tests' view of the reclaim's settle window.
+    /// The tests' view of the reclaim's settle window.
     var isReclaimSettling: Bool {
-        return queue.sync {
-            guard state == .owner, let started = reclaimStartedAt else { return false }
-            if deps.now().timeIntervalSince(started) >= Self.reclaimSettleTimeout { return false }
-
-            return reclaimVerifiedAt == nil
-        }
+        guard state == .owner, let started = reclaimStartedAt else { return false }
+        if deps.now().timeIntervalSince(started) >= Self.reclaimSettleTimeout { return false }
+        return reclaimVerifiedAt == nil
     }
 }
 
@@ -3573,9 +3556,9 @@ extension PodLoanPhoneControllerTests {
         readPod(controller, units: 10.0, at: back.addingTimeInterval(-.minutes(12)))
         readPod(controller, units: 10.2, at: back)   // the schedule explains the 0.2 U
 
-        controller.queue.sync {}
-        usleep(300_000)
-        controller.queue.sync {}
+        drainMainQueue()
+        spinMain(0.3)
+        drainMainQueue()
         lock.lock(); let titles = urgentNotices; let booked = bookedGapDoses; lock.unlock()
         XCTAssertTrue(booked.isEmpty, "clean")
         XCTAssertFalse(titles.contains("Insulin On Board May Be Overstated"))
@@ -3596,9 +3579,9 @@ extension PodLoanPhoneControllerTests {
 
         // The next own reading, a long gap later: only what the pod delivered since the return.
         readPod(controller, units: 12.6, at: Date().addingTimeInterval(.minutes(15)))
-        controller.queue.sync {}
-        usleep(300_000)
-        controller.queue.sync {}
+        drainMainQueue()
+        spinMain(0.3)
+        drainMainQueue()
         lock.lock(); let booked = bookedGapDoses; lock.unlock()
         XCTAssertEqual(booked.count, 1, "the take-back's estimate, and nothing for the same insulin again (epoch \(grant.epoch))")
     }
@@ -3608,8 +3591,8 @@ extension PodLoanPhoneControllerTests {
         let back = Date()
         readPod(controller, units: 10.0, at: back.addingTimeInterval(-.minutes(30)))
         readPod(controller, units: 12.0, at: back)
-        controller.queue.sync {}
-        usleep(300_000)
+        drainMainQueue()
+        spinMain(0.3)
         lock.lock(); let booked = bookedGapDoses; lock.unlock()
         XCTAssertTrue(booked.isEmpty)
     }
@@ -3635,9 +3618,9 @@ extension PodLoanPhoneControllerTests {
         readPod(controller, units: 10.0, at: back.addingTimeInterval(-.minutes(10)))
         readPod(controller, units: 10.1, at: back.addingTimeInterval(-.minutes(5)))
         readPod(controller, units: 10.15, at: back)
-        controller.queue.sync {}
-        usleep(300_000)
-        controller.queue.sync {}
+        drainMainQueue()
+        spinMain(0.3)
+        drainMainQueue()
         lock.lock(); let booked = bookedGapDoses; let titles = urgentNotices; lock.unlock()
         XCTAssertTrue(booked.isEmpty)
         XCTAssertTrue(titles.isEmpty)
@@ -3697,7 +3680,7 @@ extension PodLoanPhoneControllerTests {
                           events: [later], tombstones: [], recovered: true, released: true,
                           seizeToken: token)).transportDictionary())
 
-        waitUntil(timeout: 5, "the estimate stands") { self.diagMatching("gap estimate STANDS") != nil }
+        waitUntil(timeout: 5, "the estimate stands") { self.diagMatching("estimate stands: these records") != nil }
         lock.lock(); let deleted = deletedGapSyncs; lock.unlock()
         XCTAssertTrue(deleted.isEmpty)
     }
@@ -3715,7 +3698,7 @@ extension PodLoanPhoneControllerTests {
                           events: [], tombstones: [], recovered: false, released: false,
                           seizeToken: token)).transportDictionary())
         waitUntil(timeout: 5, "adopted") { controller.state == .loaned }
-        controller.queue.sync {}
+        drainMainQueue()
 
         let base = controller.ledgerLast
         XCTAssertEqual(base?.units ?? 0, 38.5, accuracy: 0.001)
@@ -3737,7 +3720,7 @@ extension PodLoanPhoneControllerTests {
                           events: [], tombstones: [], recovered: false, released: false,
                           seizeToken: token)).transportDictionary())
         waitUntil(timeout: 5, "adopted") { controller.state == .loaned }
-        controller.queue.sync {}
+        drainMainQueue()
 
         XCTAssertEqual(controller.ledgerLast?.units ?? 0, 38.5, accuracy: 0.001, "the phone's later reading keeps the window")
         XCTAssertEqual(controller.ledgerLast?.at, lastRead)
@@ -3757,7 +3740,7 @@ extension PodLoanPhoneControllerTests {
                           events: [], tombstones: [], recovered: false, released: false,
                           seizeToken: token)).transportDictionary())
         waitUntil(timeout: 5, "adopted") { controller.state == .loaned }
-        controller.queue.sync {}
+        drainMainQueue()
 
         XCTAssertEqual(controller.ledgerLast?.units ?? 0, 30.2, accuracy: 0.001)
         XCTAssertEqual(controller.ledgerLast?.at.timeIntervalSince(takeoverAt) ?? 1, 0, accuracy: 0.001)

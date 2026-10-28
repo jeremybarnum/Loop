@@ -4,8 +4,9 @@
 //
 //  Copyright © 2026 LoopKit Authors. All rights reserved.
 //
-//  The wrist's Loop during a loan: LoopDataManager and DeviceDataManager in one. `dataAccessQueue`
-//  owns the cycle's state and main never syncs onto it; main-readable values are lock-mirrored.
+//  The wrist's Loop during a loan: the host of the loop cycle both apps run (`LoopCycle`), and
+//  DeviceDataManager's part over the lent pod. Main-actor, as the phone's `LoopDataManager`; cycle
+//  work runs one operation at a time on its lane (`onLane`).
 //
 
 import Foundation
@@ -17,6 +18,7 @@ import WatchConnectivity
 import WatchKit
 import os.log
 
+@MainActor
 final class WatchLoopManager {
     /// The WATCH's own stores, opened by `StockLoopStack` — not a view onto the phone's.
     let doseStore: DoseStore
@@ -38,36 +40,28 @@ final class WatchLoopManager {
     /// Stock `AlertManager` awaits each record before the next; the wrist's alert calls are
     /// synchronous, so their records are chained in call order.
     var alertRecords: Task<Void, Never>?
-    let alertRecordsLock = NSLock()
 
     let settingsProvider: WatchSettingsProvider
 
     /// The stack's only override history; a second instance would dose unscaled.
     let overrideHistory: TemporaryScheduleOverrideHistory
 
-    private let grantedMaximumBolusLock = NSLock()
-    private var _grantedMaximumBolus: Double?
+    /// `settings.maximumBolus`, for the bolus picker.
+    var grantedMaximumBolus: Double? { settings.maximumBolus }
 
-    /// `settings.maximumBolus`, readable from main for the bolus picker.
-    var grantedMaximumBolus: Double? {
-        grantedMaximumBolusLock.lock()
-        defer { grantedMaximumBolusLock.unlock() }
-        return _grantedMaximumBolus
-    }
-
-    /// Replaced wholesale at grant; the didSet keeps the mirror and provider in step.
+    /// Replaced wholesale at grant; the didSet keeps the provider in step.
     var settings: LoopSettings {
         didSet {
-            grantedMaximumBolusLock.lock()
-            _grantedMaximumBolus = settings.maximumBolus
-            grantedMaximumBolusLock.unlock()
-
             settingsProvider.update(with: settings)
-
         }
     }
 
-    private var _scheduleOverride: TemporaryScheduleOverride?
+    private var _scheduleOverride: TemporaryScheduleOverride? {
+        didSet { onScheduleOverrideChanged?() }
+    }
+
+    /// Fired when the active override changes: during a loan the screens show this one.
+    var onScheduleOverrideChanged: (() -> Void)?
 
     /// Records into `overrideHistory`, which is what reaches the algorithm.
     var scheduleOverride: TemporaryScheduleOverride? {
@@ -80,19 +74,16 @@ final class WatchLoopManager {
 
             if let o = newValue {
                 let target = o.settings.targetRange.map {
-                    String(format: "%.0f-%.0f", $0.lowerBound.doubleValue(for: .milligramsPerDeciliter),
+                    String(format: "%.0f-%.0f mg/dL", $0.lowerBound.doubleValue(for: .milligramsPerDeciliter),
                            $0.upperBound.doubleValue(for: .milligramsPerDeciliter))
                 } ?? "unchanged"
-                SportLog.event("override", String(format: "APPLIED %@ · insulin needs %.0f%% (basal x%.2f, ISF x%.2f, CR x%.2f) · target %@ · ends %@",
+                SportLog.event("override", String(format: "override %@ in effect: insulin needs %.0f%%, target %@, ends %@",
                                                   o.context.presetNameForLog,
                                                   o.settings.effectiveInsulinNeedsScaleFactor * 100,
-                                                  o.settings.basalRateMultiplier ?? 1.0,
-                                                  o.settings.insulinSensitivityMultiplier ?? 1.0,
-                                                  o.settings.carbRatioMultiplier ?? 1.0,
                                                   target,
-                                                  o.duration.isInfinite ? "indefinite" : ISO8601DateFormatter().string(from: o.scheduledInterval.end)))
+                                                  o.duration.isInfinite ? "never" : ISO8601DateFormatter().string(from: o.scheduledInterval.end)))
             } else if oldValue != nil {
-                SportLog.event("override", "CLEARED — schedules resolve unscaled again")
+                SportLog.event("override", "override ended; schedules apply unscaled")
             }
 
             // As stock: an override change refreshes the display run.
@@ -113,9 +104,20 @@ final class WatchLoopManager {
     /// The loaned pod, or nil. This IS the loan flag for the loop's purposes: every path that
     /// asks "do we hold the pod?" asks it here, and it is set at takeover and cleared at teardown.
     var pumpManager: PumpManager? {
-        // As stock `DeviceDataManager.setupPump`.
-        didSet { doseStore.device = pumpManager?.status.device }
+        didSet {
+            // As stock `DeviceDataManager.setupPump`.
+            doseStore.device = pumpManager?.status.device
+            // The screens stop showing this watch's state with the pod.
+            if pumpManager == nil {
+                ExtensionDelegate.sharedIfAvailable()?.loopManager.wristState = nil
+            }
+        }
     }
+
+    /// The dosing loop both apps run (`LoopCycle.swift`); this manager is its host on the watch.
+    private(set) lazy var cycle = LoopCycle(doseStore: doseStore, carbStore: carbStore, glucoseStore: glucoseStore,
+                                            dosingDecisionStore: dosingDecisionStore, settingsProvider: settingsProvider,
+                                            host: self, now: { [weak self] in self?.now() ?? Date() })
 
     /// Fired by `loop()` only on a cycle that LANDED, which is what renews the phone's hold. A
     /// cycle that computed but could not reach the pod must not renew it.
@@ -124,137 +126,89 @@ final class WatchLoopManager {
     /// Fired when the wrist opens the loop (closed to open), where stock ends a pre-meal preset.
     var onLoopOpened: (() -> Void)?
 
-    /// Shared by the CGM and the pump managers, which log from several queues at once during a
-    /// radio storm — the throttle has to be thread-safe on its own account.
+    /// Bench only: the device-log lines copied into the log file, throttled.
     let deviceLogThrottle = DeviceLogThrottle()
 
-    // Manual-bolus UI state. All of it is read from MAIN while the dose is in flight — which is
-    // precisely when `dataAccessQueue` is busy — so it lives behind its own lock.
-    private let manualBolusLock = NSLock()
-    private var _manualBolusInFlight = false
+    /// The manual bolus being sent, stamped at confirm, so the glance can narrate the wait for the pod.
+    private var manualBolusInFlight: (startedAt: Date, units: Double?)?
 
-    /// Stamped at confirm, so the glance can narrate the wait for the pod.
-    var manualBolusStartedAt: Date? {
-        manualBolusLock.lock(); defer { manualBolusLock.unlock() }
-        return _manualBolusInFlight ? _manualBolusStartedAt : nil
-    }
-    private var _manualBolusStartedAt: Date?
+    var manualBolusStartedAt: Date? { manualBolusInFlight?.startedAt }
 
-    private var _manualBolusPendingUnits: Double?
-    /// Gated on the in-flight flag, so the amount vanishes with the wait rather than lingering on
-    /// screen after the dose has been accepted or refused.
-    var manualBolusPendingUnits: Double? {
-        manualBolusLock.lock(); defer { manualBolusLock.unlock() }
-        return _manualBolusInFlight ? _manualBolusPendingUnits : nil
-    }
+    /// Gone with the wait, so the amount does not linger on screen after the dose has been accepted
+    /// or refused.
+    var manualBolusPendingUnits: Double? { manualBolusInFlight?.units }
+
     func setManualBolusInFlight(_ inFlight: Bool, units: Double? = nil) {
-        manualBolusLock.lock()
-        _manualBolusInFlight = inFlight
-        _manualBolusStartedAt = inFlight ? self.now() : nil
-        _manualBolusPendingUnits = inFlight ? units : nil
-        manualBolusLock.unlock()
+        manualBolusInFlight = inFlight ? (startedAt: now(), units: units) : nil
     }
 
-    private var _bolusDelivery: (units: Double, reporter: DoseProgressReporter)?
+    private var bolusDelivery: (units: Double, reporter: DoseProgressReporter)?
 
     /// The pump manager's progress reporter for the bolus the pod is delivering; nil once it
     /// reports complete, never "delivered".
     var manualBolusDelivery: (units: Double, reporter: DoseProgressReporter)? {
-        manualBolusLock.lock(); defer { manualBolusLock.unlock() }
-        guard let d = _bolusDelivery, !d.reporter.progress.isComplete else { return nil }
+        guard let d = bolusDelivery, !d.reporter.progress.isComplete else { return nil }
         return d
     }
 
     /// As stock's status screen does: a new bolus in progress gets a fresh reporter from the pump
-    /// manager. Posts on MAIN, since the observer mutates published UI state.
+    /// manager.
     func bolusStateDidChange(to bolusState: PumpManagerStatus.BolusState, from oldState: PumpManagerStatus.BolusState, pumpManager: PumpManager) {
         guard case .inProgress(let dose) = bolusState else { return }
         if case .inProgress(let previous) = oldState, previous.syncIdentifier == dose.syncIdentifier { return }
         let reporter = pumpManager.createBolusProgressReporter(reportingOn: .main)
-
-        manualBolusLock.lock()
-        _bolusDelivery = reporter.map { (units: dose.programmedUnits, reporter: $0) }
-        manualBolusLock.unlock()
-
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .manualBolusStateDidChange, object: nil)
-        }
+        bolusDelivery = reporter.map { (units: dose.programmedUnits, reporter: $0) }
+        NotificationCenter.default.post(name: .manualBolusStateDidChange, object: nil)
     }
 
-    /// The only gate on automatic dosing here; not combined with the phone's `dosingEnabled`.
-    /// Queue-owned; `closedLoopEnabledNonBlocking` reads it from elsewhere.
-    var _closedLoopEnabled = false
+    /// The wrist's loop switch as last set: what a hand-back carries and what the pod is told.
+    private(set) var closedLoopEnabled = false
 
-    private let closedLoopMirrorLock = NSLock()
-    private var _closedLoopMirror = false
-    /// No queue hop; safe from the loan controller's queue.
-    var closedLoopEnabledNonBlocking: Bool {
-        closedLoopMirrorLock.lock()
-        defer { closedLoopMirrorLock.unlock() }
-        return _closedLoopMirror
-    }
+    /// The only gate on automatic dosing here; not combined with the phone's `dosingEnabled`. The
+    /// switch as cycle work sees it: a change applies on the lane, after any cycle already running.
+    private(set) var appliedClosedLoopEnabled = false
 
     /// Saves one change to the persisted loop state; the whole value is written at once.
     func updateLoopState(_ change: (inout WatchLoopState) -> Void) {
-        loopStateLock.lock()
-        defer { loopStateLock.unlock() }
         change(&loopState)
         loopStateStore.wrappedValue = loopState.rawValue
     }
     /// Per session, so the next grant's mode is not mistaken for a transition.
     func resetClosedLoopForSessionEnd() {
         updateLoopState { $0.closedLoopEnabled = false }
-        closedLoopMirrorLock.lock()
-        _closedLoopMirror = false
-        closedLoopMirrorLock.unlock()
-        dataAccessQueue.async {
-            self._closedLoopEnabled = false
+        closedLoopEnabled = false
+        onLane {
+            self.appliedClosedLoopEnabled = false
         }
     }
 
-    /// Mirror written synchronously so an immediate hand-back carries the new value. Opening the
-    /// loop cancels an automatic temp, as stock, only on a real closed-to-open transition.
-    func setClosedLoopEnabled(_ enabled: Bool, reason: String = "by user") {
+    /// Set at once, so an immediate hand-back carries the new value. Opening the loop cancels an
+    /// automatic temp, as stock, only on a real closed-to-open transition.
+    func setClosedLoopEnabled(_ enabled: Bool, reason: String = "by the user") {
         updateLoopState { $0.closedLoopEnabled = enabled }
 
-        closedLoopMirrorLock.lock()
-        let wasEnabled = _closedLoopMirror
-        _closedLoopMirror = enabled
-        closedLoopMirrorLock.unlock()
+        let wasEnabled = closedLoopEnabled
+        closedLoopEnabled = enabled
 
         // As stock: opening the loop ends a pre-meal preset, before the temp is cancelled.
         if wasEnabled, !enabled { onLoopOpened?() }
 
-        dataAccessQueue.async {
-            self._closedLoopEnabled = enabled
-            SportLog.event("loop", enabled ? "CLOSED \(reason) — the watch will adjust basal" : "OPENED \(reason) — advisory only, no dosing")
+        onLane {
+            self.appliedClosedLoopEnabled = enabled
+            SportLog.event("loop", enabled ? "loop closed \(reason)" : "loop opened \(reason); no automatic dosing")
 
-            self.publishHUDContext()
+            await self.publishHUDContext()
 
             // As stock: a change of loop mode refreshes the display run.
             if wasEnabled != enabled { self.updateDisplayStateForChange() }
 
             guard wasEnabled, !enabled else { return }
-            self.cancelActiveTempBasalOnQueue(reason: "automaticDosingDisabled")
+            await self.cancelActiveTempBasal(reason: .automaticDosingDisabled)
         }
     }
 
     /// Applied locally first; telling the phone is best-effort.
     func applyWristOverride(_ override: TemporaryScheduleOverride?) {
-        if let o = override {
-            let target = o.settings.targetRange.map {
-                String(format: "%.0f-%.0f", $0.lowerBound.doubleValue(for: .milligramsPerDeciliter),
-                       $0.upperBound.doubleValue(for: .milligramsPerDeciliter))
-            } ?? "unchanged"
-            SportLog.event("override", String(format: "SET-ON-WRIST %@ · insulin needs %.0f%% · target %@ · ends %@ · sync %@",
-                                              o.context.presetNameForLog,
-                                              o.settings.effectiveInsulinNeedsScaleFactor * 100,
-                                              target,
-                                              o.duration.isInfinite ? "indefinite" : ISO8601DateFormatter().string(from: o.scheduledInterval.end),
-                                              o.syncIdentifier.uuidString))
-        } else {
-            SportLog.event("override", "SET-ON-WRIST · CLEARED — the loan's schedules resolve unscaled from here")
-        }
         scheduleOverride = override
     }
 
@@ -277,7 +231,7 @@ final class WatchLoopManager {
         _scheduleOverride = overrideHistory.activeOverride(at: now())
     }
 
-    /// Eventual glucose split by effect. Diagnostic only; see `logPredictionBreakdown`.
+    /// Eventual glucose split by effect. Diagnostic only; see `updatePredictionBreakdown`.
     struct PredictionBreakdown {
         /// The latest STORED glucose, which is the row's left-hand side rather than the
         /// prediction's own starting point.
@@ -298,8 +252,8 @@ final class WatchLoopManager {
         }
     }
 
-    /// The immutable snapshot the glance reads on main. Built on `dataAccessQueue` and published
-    /// through `mirroredGlanceData`; nothing in it is recomputed by the reader.
+    /// The immutable snapshot the glance reads, published as `glanceData`; nothing in it is
+    /// recomputed by the reader.
     struct GlanceData {
         let glucose: LoopQuantity?
         let glucoseDate: Date?
@@ -335,27 +289,36 @@ final class WatchLoopManager {
         var overrideSymbol: String? = nil
     }
 
-    let glanceMirrorLock = NSLock()
-    var _glanceMirror: GlanceData?
-    var _glanceRefreshPending = false
+    /// The glance's snapshot, rebuilt on the lane after the cycle work before it (`refreshGlanceData`).
+    var glanceData: GlanceData?
+    var glanceRefreshPending = false
 
-    /// How main reads the wrist's state. The alternative — syncing onto `dataAccessQueue` from a
-    /// repeating tile refresh — blocks the UI behind whatever pod work is in progress.
-    var mirroredGlanceData: GlanceData? {
-        glanceMirrorLock.lock()
-        defer { glanceMirrorLock.unlock() }
-        return _glanceMirror
+    /// Posted after every rebuild. An observer must redraw from `glanceData` and must NOT ask for
+    /// another rebuild — see `refreshGlanceData` for why that does not coalesce.
+    static let glanceDataDidUpdate = Notification.Name("com.loopkit.Loop.glanceDataDidUpdate")
+
+    /// The lane's last operation; see `onLane`.
+    private var laneTail: Task<Void, Never>?
+
+    /// Cycle work, one operation at a time in call order: each waits for the one before, through its
+    /// awaits on the stores and the pod. The phone's operations interleave at their awaits; the watch
+    /// keeps the order it has been tested with. In call order, so a grant's settings land before the
+    /// loan's first prediction.
+    func onLane(_ work: @escaping @MainActor () async -> Void) {
+        let previous = laneTail
+        laneTail = Task {
+            await previous?.value
+            await work()
+        }
     }
 
-    /// Posted after every mirror rebuild. An observer must redraw from `mirroredGlanceData` and
-    /// must NOT ask for another rebuild — see `refreshGlanceData` for why that does not coalesce.
-    static let glanceMirrorDidUpdate = Notification.Name("com.loopkit.Loop.glanceMirrorDidUpdate")
-
-    /// The CGM delegate queue; direct and phone-relayed glucose ingest serialize here.
-    let deviceQueue = DispatchQueue(label: "com.loopkit.Loop.WatchLoopManager.deviceQueue", qos: .utility)
-
-    /// Serial and FIFO: grant settings land before the loan's first prediction.
-    let dataAccessQueue = DispatchQueue(label: "com.loopkit.Loop.WatchLoopManager.dataAccessQueue", qos: .utility)
+    /// Returns once the lane has run everything asked of it, including work asked for meanwhile.
+    func laneSettled() async {
+        while let tail = laneTail {
+            await tail.value
+            if laneTail == tail { return }
+        }
+    }
 
     let log = OSLog(category: "WatchLoopManager")
 
@@ -371,7 +334,6 @@ final class WatchLoopManager {
     /// must not come back open with a grey ring.
     var loopStateStore: PersistedProperty<[String: Any]>
     private(set) var loopState: WatchLoopState
-    let loopStateLock = NSLock()
 
     /// Restores the last cycle, loop mode and correction model, and subscribes to phone context
     /// (except in the simulator, which has its own ingest).
@@ -399,8 +361,8 @@ final class WatchLoopManager {
         self.overrideHistory = overrideHistory
         self.settings = settings
         self.lastLoopCompleted = loopState.lastLoopCompleted
-        self._closedLoopEnabled = loopState.closedLoopEnabled
-        self._closedLoopMirror = loopState.closedLoopEnabled
+        self.closedLoopEnabled = loopState.closedLoopEnabled
+        self.appliedClosedLoopEnabled = loopState.closedLoopEnabled
         self.integralRetrospectiveCorrectionEnabled = loopState.integralRetrospectiveCorrectionEnabled
         self.glucoseBasedApplicationFactorEnabled = loopState.glucoseBasedApplicationFactorEnabled
         self.guardAndRunwayEnabled = loopState.guardAndRunwayEnabled
@@ -422,58 +384,43 @@ final class WatchLoopManager {
         ]
         for (name, store) in storeChanges {
             NotificationCenter.default.addObserver(forName: name, object: store, queue: nil) { [weak self] _ in
-                self?.updateDisplayStateForChange()
+                Task { @MainActor in self?.updateDisplayStateForChange() }
             }
         }
     }
 
-    private let bgSourceLock = NSLock()
-    private var _lastDirectG7At: Date?
-    private var _lastPhoneRelayAt: Date?
+    private var lastDirectG7At: Date?
+    private var lastPhoneRelayAt: Date?
 
     // MARK: - Glucose sources
 
-    /// The watch's CGM, which stock's `WatchCGMHost` builds and owns; held here for the dosing
-    /// records, which are written off the main queue.
-    var cgmManager: CGMManager? {
-        cgmLock.lock(); defer { cgmLock.unlock() }
-        return _cgmManager
-    }
-    private let cgmLock = NSLock()
-    private var _cgmManager: CGMManager?
+    /// The watch's CGM, which stock's `WatchCGMHost` builds and owns; held here for the dosing records.
+    private(set) var cgmManager: CGMManager?
 
     /// `WatchCGMHost`'s manager, on each of its readings and when the stack starts. A new manager
     /// seeds the stranded-sensor clock from its last link, so a relaunch does not reset it.
     func noteCGMManager(_ manager: CGMManager?) {
-        cgmLock.lock()
-        let changed = manager !== _cgmManager
-        _cgmManager = manager
-        cgmLock.unlock()
+        let changed = manager !== cgmManager
+        cgmManager = manager
         if changed { seedLastDirectG7At(manager?.cgmManagerStatus.lastCommunicationDate) }
     }
 
     /// Launch seed, so a relaunch does not reset the stranded-sensor clock; never moves it back.
     func seedLastDirectG7At(_ date: Date?) {
-        bgSourceLock.lock()
-        if let date, date > (_lastDirectG7At ?? .distantPast) { _lastDirectG7At = date }
-        bgSourceLock.unlock()
+        if let date, date > (lastDirectG7At ?? .distantPast) { lastDirectG7At = date }
     }
 
     /// Record WHERE a reading came from, so the wrist can answer "am I standing on my own right
     /// now?". Stamped on arrival by the ingest paths — see `processCGMReadingResult`.
     func noteGlucoseSource(directG7: Bool) {
-        bgSourceLock.lock()
-        if directG7 { _lastDirectG7At = self.now() } else { _lastPhoneRelayAt = self.now() }
-        bgSourceLock.unlock()
+        if directG7 { lastDirectG7At = self.now() } else { lastPhoneRelayAt = self.now() }
 
         refreshGlanceData()
     }
 
     /// A phone relay says nothing about the watch's radio, so the two are kept apart.
     var lastGlucoseSourceStamps: (direct: Date?, phone: Date?) {
-        bgSourceLock.lock()
-        defer { bgSourceLock.unlock() }
-        return (_lastDirectG7At, _lastPhoneRelayAt)
+        (lastDirectG7At, lastPhoneRelayAt)
     }
 
     /// The basal schedule with the override applied; net rates must use this, not the raw schedule.
@@ -481,7 +428,7 @@ final class WatchLoopManager {
         settings.basalRateSchedule.map { overrideHistory.resolvingRecentBasalSchedule($0) }
     }
 
-    /// The phone's Algorithm Experiments. Applied on `dataAccessQueue`, ahead of the first prediction.
+    /// The phone's Algorithm Experiments. Applied on the lane, ahead of the first prediction.
     func setAlgorithmExperiments(integralRetrospectiveCorrection: Bool, glucoseBasedApplicationFactor: Bool,
                                  guardAndRunway: Bool, volatilityBaseline: Double?) {
         updateLoopState {
@@ -490,28 +437,27 @@ final class WatchLoopManager {
             $0.guardAndRunwayEnabled = guardAndRunway
             $0.volatilityBaseline = volatilityBaseline
         }
-        dataAccessQueue.async {
+        onLane {
             self.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrection
             self.glucoseBasedApplicationFactorEnabled = glucoseBasedApplicationFactor
             self.guardAndRunwayEnabled = guardAndRunway
             self.volatilityBaseline = volatilityBaseline
-            SportLog.event("loan", "retrospective correction: \(integralRetrospectiveCorrection ? "INTEGRAL" : "standard") · bolus application factor: \(glucoseBasedApplicationFactor ? "GLUCOSE-BASED" : "constant") · guard + runway: \(guardAndRunway ? "ON, baseline \(volatilityBaseline.map { String(format: "%.2f", $0) } ?? "none")" : "off") (from grant)")
         }
     }
 
-    /// Queue-owned.
+    /// As applied on the lane.
     var integralRetrospectiveCorrectionEnabled = false
     var glucoseBasedApplicationFactorEnabled = false
     var guardAndRunwayEnabled = false
     var volatilityBaseline: Double?
 
     /// Stock glucose alerts, built from the phone's settings for a loan; nil between loans.
-    @MainActor var glucoseAlerts: GlucoseAlertManager?
+    var glucoseAlerts: GlucoseAlertManager?
 
     // MARK: - Algorithm runs
     // Stock runs the algorithm three ways, each fed differently, and only the display run is
     // kept for screens. Each run's result is stored under its own name so no run can overwrite
-    // another's values; the manual-bolus run stores nothing. `dataAccessQueue`-owned.
+    // another's values; the manual-bolus run stores nothing. Written by cycle work on the lane.
 
     /// Stock's `displayState`: the display run (`updateDisplayState`). The glance's IOB, eventual
     /// and COB, the stock pages' context and the complication read it; nothing doses from it.
@@ -537,30 +483,22 @@ final class WatchLoopManager {
     func seedLastLoopCompleted(_ date: Date, source: String) {
         guard (lastLoopCompleted ?? .distantPast) < date else { return }
         lastLoopCompleted = date
-        SportLog.event("loop", String(format: "loop recency SEEDED from %@ — last cycle %.0fs ago", source, self.now().timeIntervalSince(date)))
+        SportLog.event("loop", String(format: "last loop completion taken from %@, %.0f s ago", source, self.now().timeIntervalSince(date)))
     }
     /// Last cycle's outcome, for display and the debug row. Cleared at the start of each cycle,
     /// so nil means "the cycle in progress has not failed yet", not "all is well".
     var lastLoopError: Error?
 
     /// Shared by BOTH glucose sources, so the 4.2-minute gate applies across them: a direct
-    /// reading and the phone's relay of the same reading must not each fire a cycle. Each source
-    /// claims it from its own background task, so it is read and written under one lock.
-    private let cgmLoopTriggerLock = NSLock()
+    /// reading and the phone's relay of the same reading must not each fire a cycle.
     private var lastCGMLoopTrigger: Date = .distantPast
 
     /// Stock's 4.2-minute gate, checked and claimed in one step: true means this caller runs the cycle.
     func claimCGMLoopTrigger(at now: Date) -> Bool {
-        cgmLoopTriggerLock.lock()
-        defer { cgmLoopTriggerLock.unlock() }
         guard now.timeIntervalSince(lastCGMLoopTrigger) > .minutes(4.2) else { return false }
         lastCGMLoopTrigger = now
         return true
     }
-
-    /// The last phone-relayed sample taken, latched so the several copies that can arrive within
-    /// milliseconds of each other are not each re-examined against an uncommitted store.
-    var lastPhoneFallbackSyncId: String?
 
     /// Stock's `DoseEnactor`, unchanged. A `var` so tests can observe it.
     var doseEnactor = DoseEnactor()
@@ -568,13 +506,9 @@ final class WatchLoopManager {
     /// Say "idle, no pod" once per idle stretch instead of once per reading.
     var loggedIdleNoPump = false
 
-    /// Stock's `LoopDataManager.lastManualBolusRecommendation`: the display run's last manual
-    /// recommendation, so `updateRemoteRecommendation` stores only a change unless forced.
-    var lastManualBolusRecommendation: ManualBolusRecommendation?
-
     /// Stock's `WatchDataManager.contextDosingDecisions`: the watchBolus decision built with each
     /// recommendation the wrist was shown, by the carb entry it assumed; kept five minutes.
-    var contextDosingDecisions: [(date: Date, potentialCarbEntry: NewCarbEntry?, decision: StoredDosingDecision)] = []
+    var contextDosingDecisions: [(date: Date, potentialCarbEntry: NewCarbEntry?, decision: BolusDosingDecision)] = []
 
     /// The pod command for a manual bolus, as stock `DeviceDataManager.enactBolus` sends it; a
     /// `var` so the suite can see the decision id it carries.

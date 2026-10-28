@@ -31,18 +31,13 @@ extension PodLoanWatchController {
             odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest,
                                             asOf: asOf, deliveredAtStartAt: persisted.deliveredAtTakeoverAt)
         }
-        if !empty {
-            SportLog.event("handback", String(format: "stream: %d event(s), %d tombstone(s)%@", events.count, tombstones.count,
-                                              odometer.map { String(format: " · odo %.2f U @ %@ [checkpoint]", $0.deliveredLatest, DateFormatter.localizedString(from: $0.asOf ?? .distantPast, dateStyle: .none, timeStyle: .medium)) } ?? ""))
-        }
-
         sendMessage(.doseRecordBatch(DoseRecordBatch(epoch: epoch, events: events, tombstones: tombstones,
                                                      odometer: odometer, sentAt: self.now())))
     }
 
     /// Once per completed cycle, including cycles that recorded nothing.
     func renewHold() {
-        queue.async { self.streamRecords(renewal: true) }
+        DispatchQueue.main.async { self.streamRecords(renewal: true) }
     }
 
     /// Once per pod-native raw; the running temp is re-reported and must not be re-minted.
@@ -51,18 +46,17 @@ extension PodLoanWatchController {
         let reported = events.compactMap { event in event.dose.flatMap { Self.loanRecord(for: $0, raw: event.raw) } }
         var minted = 0
         for record in Self.recordsToJournal(reported, journaled: journal.record(syncIdentifier:)) {
-            guard let journaled = try? journal.mintEvent(record: record, provenance: .confirmed) else {
-                SportLog.event("loan", "** JOURNAL MINT FAILED for \(record.kind) — the dose is in the book but will NOT follow the pod home **")
+            guard (try? journal.mintEvent(record: record, provenance: .confirmed)) != nil else {
+                SportLog.event("loan", "could not record a \(record.kind) dose for the phone")
                 continue
             }
             minted += 1
             if record.kind == .tempBasal, record.endDate == record.startDate {
-                SportLog.event("loan", "cancel JOURNALED from the pump manager's report — back to the schedule, seq \(journaled.seq)")
+                SportLog.event("loan", "temp basal cancel recorded for the phone")
                 continue
             }
-            let amount = record.kind == .bolus ? String(format: "%.2f U", record.amount ?? 0)
-                                               : String(format: "%.2f U/hr", record.unitsPerHour ?? 0)
-            SportLog.event("loan", "\(record.kind) JOURNALED from the pump manager's report — \(amount), seq \(journaled.seq)")
+            SportLog.event("loan", record.kind == .bolus ? String(format: "bolus %.2f U recorded for the phone", record.amount ?? 0)
+                                                         : String(format: "temp basal %.2f U/hr recorded for the phone", record.unitsPerHour ?? 0))
         }
         if minted > 0 { streamRecords() }
     }
@@ -101,7 +95,7 @@ extension PodLoanWatchController {
                                   insulinType: dose.insulinType, deliveredUnits: dose.deliveredUnits,
                                   decisionId: dose.decisionId)
         default:
-            SportLog.event("loan", "pump report carried a \(dose.type) dose — not a wrist command; not journaled")
+            SportLog.event("loan", "pump reported a \(dose.type) dose, which is not recorded for the phone")
             return nil
         }
     }
@@ -115,13 +109,13 @@ extension PodLoanWatchController {
         let entry = entry.syncIdentifier == eventID.uuidString ? entry : entry.withSyncIdentifier(eventID.uuidString)
         loopManager.addLoanCarbEntry(entry) { result in
             // As stock `LoopDataManager.addCarbEntry`: saved carbs end a pre-meal preset.
-            if case .success = result { self.endPreMealOverride(reason: "carbs saved on the wrist") }
+            if case .success = result { self.endPreMealOverride(reason: "carbs saved on the watch") }
             completion?(result)
         }
         // async, never sync: ordering with the pump's reports, and main must not wait.
-        queue.async {
+        DispatchQueue.main.async {
             guard self.phase == .active else {
-                SportLog.event("loan", String(format: "carb entry ignored (%.0f g) — no active loan to journal it against", grams))
+                SportLog.event("loan", String(format: "carb entry of %.0f g not recorded for the phone: no loan is active", grams))
                 return
             }
             let record = LoanDoseRecord(kind: .carb,
@@ -130,13 +124,12 @@ extension PodLoanWatchController {
                                         absorptionTime: entry.absorptionTime,
                                         note: entry.foodType,
                                         userCreatedDate: entry.date)
-            guard let event = try? self.journal.mintEvent(record: record, provenance: .confirmed, id: eventID) else {
-                SportLog.event("loan", String(format: "** CARB JOURNAL MINT FAILED (%.0f g) — the carb is LIVE on the watch but will NOT follow the pod home **", grams))
+            guard (try? self.journal.mintEvent(record: record, provenance: .confirmed, id: eventID)) != nil else {
+                SportLog.event("loan", String(format: "could not record the %.0f g carb entry for the phone", grams))
                 return
             }
-            SportLog.event("loan", String(format: "carb JOURNALED %.0f g (absorption %.1f h) — seq %d, event %@",
-                                          grams, (entry.absorptionTime ?? 0) / 3600, event.seq,
-                                          String(event.id.uuidString.prefix(8))))
+            SportLog.event("loan", String(format: "carb entry of %.0f g, absorption %.1f h, recorded for the phone",
+                                          grams, (entry.absorptionTime ?? 0) / 3600))
             self.streamRecords()
         }
     }
@@ -144,40 +137,31 @@ extension PodLoanWatchController {
     /// Journaled, or the next grant would resurrect the carb. A wrist carb's identity is its
     /// event ID; an add and delete in one drain cancel on the phone.
     func loanDidDeleteCarb(syncIdentifier: String?, startDate: Date, grams: Double) {
-        queue.async {
+        DispatchQueue.main.async {
             guard self.phase == .active else {
-                SportLog.event("loan", String(format: "carb delete ignored (%.0f g) — no active loan to journal it against", grams))
+                SportLog.event("loan", String(format: "carb deletion of %.0f g not recorded for the phone: no loan is active", grams))
                 return
             }
             let record = LoanDoseRecord(kind: .carbDeleted,
                                         startDate: startDate,
                                         amount: grams,
                                         syncIdentifier: syncIdentifier)
-            guard let event = try? self.journal.mintEvent(record: record, provenance: .confirmed) else {
-                SportLog.event("loan", String(format: "** CARB DELETE JOURNAL MINT FAILED (%.0f g) — gone on the watch but the phone still has it; the next grant will RESURRECT it **", grams))
+            guard (try? self.journal.mintEvent(record: record, provenance: .confirmed)) != nil else {
+                SportLog.event("loan", String(format: "could not record the deletion of %.0f g for the phone; the next grant would bring it back", grams))
                 return
             }
-            SportLog.event("loan", String(format: "carb DELETE journaled %.0f g @ %@ — sync %@, seq %d, event %@",
-                                          grams, ISO8601DateFormatter().string(from: startDate),
-                                          syncIdentifier ?? "none", event.seq,
-                                          String(event.id.uuidString.prefix(8))))
+            SportLog.event("loan", String(format: "carb deletion of %.0f g recorded for the phone", grams))
             self.streamRecords()
         }
     }
 
     /// Stock `TemporaryPresetsManager.endPreMealOverride`, where stock calls it: after a carb entry
     /// is saved and when the loop is opened. Through the wrist's override path, so the journal
-    /// carries it to the phone; the presets screen is cleared to match.
+    /// carries it to the phone; the screens show the loop's override, so they follow.
     func endPreMealOverride(reason: String) {
         guard let active = loopManager.scheduleOverride, active.isActive(at: now()), active.context == .preMeal else { return }
-        SportLog.event("override", "pre-meal ENDED — \(reason), as stock")
+        SportLog.event("override", "ending the pre-meal override: \(reason)")
         applyWristOverride(nil)
-        DispatchQueue.main.async {
-            let ui = LoopDataManager.shared
-            if ui.watchInfo.scheduleOverride?.context == .preMeal {
-                ui.watchInfo.scheduleOverride = nil
-            }
-        }
     }
 
     /// A wrist override: the loan's dosing first, then the journal, which carries it to the phone.
@@ -190,21 +174,17 @@ extension PodLoanWatchController {
     /// the log says so.
     func loanDidRecordOverride(_ override: TemporaryScheduleOverride?) {
         let name = override.map { $0.context.presetNameForLog } ?? "cleared"
-        queue.async {
+        DispatchQueue.main.async {
             guard self.phase == .active else {
-                SportLog.event("override", "NOT JOURNALED (\(name)) — no active loan (phase \(self.phase.rawValue)); the stock phone path owns it")
-                return
-            }
-            guard self.phoneSupportsOverrideRecords else {
-                SportLog.event("override", "NOT JOURNALED (\(name)) — this phone build predates override records; the override is LIVE on the watch but will NOT follow the pod home. Update the phone app to sync overrides.")
+                SportLog.event("override", "override change not recorded for the phone, as no loan is active: \(name)")
                 return
             }
             let record = LoanDoseRecord.overrideChange(override, at: self.now(), note: name)
-            guard let event = try? self.journal.mintEvent(record: record, provenance: .confirmed) else {
-                SportLog.event("override", "** JOURNAL MINT FAILED for \(name) — the override is LIVE on the watch but will NOT follow the pod home **")
+            guard (try? self.journal.mintEvent(record: record, provenance: .confirmed)) != nil else {
+                SportLog.event("override", "could not record the override change for the phone: \(name)")
                 return
             }
-            SportLog.event("override", "JOURNALED \(name) — seq \(event.seq), event \(event.id.uuidString.prefix(8)), sync \(record.syncIdentifier ?? "—") (rides the drain to the phone)")
+            SportLog.event("override", "override change recorded for the phone: \(name)")
             self.streamRecords()
         }
     }

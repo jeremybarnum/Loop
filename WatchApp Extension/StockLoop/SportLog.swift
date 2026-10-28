@@ -91,11 +91,11 @@ enum LogFile {
 }
 
 enum SportLog {
-    private static let oslog = OSLog(subsystem: "com.loopkit.Loop", category: "SportMode")
+    private static let oslog = OSLog(category: "SportMode")
 
-    /// `category` is the grep handle; keep existing spellings.
+    /// `category` names the part of Sport Mode the line is about.
     static func event(_ category: String, _ message: String) {
-        os_log("%{public}@ %{public}@", log: oslog, type: .default, category, message)
+        oslog.default("[%{public}@] %{public}@", category, message)
         log("[\(category)] \(message)")
     }
 

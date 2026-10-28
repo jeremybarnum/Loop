@@ -11,12 +11,11 @@ import HealthKit
 import LoopKit
 import LoopCore
 import UserNotifications
-import os.log
 
 extension PodLoanPhoneController {
     var stagedFileURL: URL {
         let base = deps.stateDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return base.appendingPathComponent("PodLoanStagedRecordsV2.json")
+        return base.appendingPathComponent("PodLoanStagedRecords.json")
     }
 
     /// The on-disk shape. `epoch` is what makes a resumed file admissible.

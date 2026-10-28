@@ -271,7 +271,8 @@ final class DeviceDataManager {
         self.pluginManager = pluginManager
         self.deviceLog = deviceLog
         self.alertManager = alertManager
-        self.glucoseAlertManager = GlucoseAlertManager(alertIssuer: alertManager)
+        self.glucoseAlertManager = GlucoseAlertManager(alertIssuer: alertManager,
+                                                       displayGlucosePreference: displayGlucosePreference)
         alertManager.addAlertSoundVendor(managerIdentifier: GlucoseAlertManager.managerIdentifier,
                                          soundVendor: self.glucoseAlertManager)
         alertManager.playsThroughSilent = { [weak glucoseAlertManager = self.glucoseAlertManager] alert in
@@ -822,14 +823,6 @@ extension DeviceDataManager {
                 }
             }
         }
-    }
-    
-    var pumpManagerStatus: PumpManagerStatus? {
-        return pumpManager?.status
-    }
-
-    var cgmManagerStatus: CGMManagerStatus? {
-        return cgmManager?.cgmManagerStatus
     }
 
     func glucoseDisplay(for glucose: GlucoseSampleValue?) -> GlucoseDisplayable? {
@@ -1384,7 +1377,6 @@ struct CancelTempBasalFailedMaximumBasalRateChangedError: LocalizedError {
 
 extension DeviceDataManager : RemoteDataServicesManagerDelegate {
     var shouldSyncGlucoseToRemoteService: Bool {
-        guard !podLoanHoldsGlucoseUploads else { return false }
         guard let cgmManager = cgmManager else {
             return true
         }
@@ -1453,45 +1445,16 @@ extension DeviceDataManager: DeviceSupportDelegate {
             self.pumpManager != nil ? String(reflecting: self.pumpManager!) : "pumpManager: nil",
             "",
             await deviceLog.generateDiagnosticReport()
-            ]
+            ] + podLoanDiagnosticReport
         return report.joined(separator: "\n")
     }
 }
 
-extension DeviceDataManager: DeliveryDelegate {
-    var isPumpConfigured: Bool {
-        return pumpManager != nil
-    }
-
-    func roundBasalRate(unitsPerHour: Double) -> Double {
-        guard let pumpManager = pumpManager else {
-            return unitsPerHour
-        }
-
-        return pumpManager.roundToSupportedBasalRate(unitsPerHour: unitsPerHour)
-    }
-
-    func roundBolusVolume(units: Double) -> Double {
-        guard let pumpManager = pumpManager else {
-            return units
-        }
-
-        return pumpManager.roundToSupportedBolusVolume(units: units)
-    }
-
-    var pumpInsulinType: InsulinType? {
-        return pumpManager?.status.insulinType
-    }
-    
-    var isSuspended: Bool {
-        return pumpManager?.status.basalDeliveryState?.isSuspended ?? false
-    }
-
-    var isManualTempBasalRunning: Bool {
-        guard case .tempBasal(let dose) = pumpManager?.status.basalDeliveryState else {
-            return false
-        }
-        return dose.automatic == false && dose.endDate > Date()
+extension DeviceDataManager: PumpManagerDeliveryDelegate {
+    func send(bolus: Double?, tempBasal: TempBasalRecommendation?, decisionId: UUID?, to pumpManager: PumpManager) async throws {
+        log.default("Enacting dose: %{public}@", String(describing: (bolus, tempBasal)))
+        
+        try await doseEnactor.enact(decisionId: decisionId, bolus: bolus, tempBasal: tempBasal, with: pumpManager)
     }
 
     var isPumpInoperable: Bool {
@@ -1499,24 +1462,6 @@ extension DeviceDataManager: DeliveryDelegate {
             return true
         }
         return basalDeliveryState == .pumpInoperable 
-    }
-
-    func enact(bolus: Double?, tempBasal: TempBasalRecommendation?, decisionId: UUID?) async throws {
-        guard let pumpManager = pumpManager else {
-            throw LoopError.configurationError(.pumpManager)
-        }
-
-        guard !pumpManager.status.deliveryIsUncertain else {
-            throw LoopError.connectionError
-        }
-
-        log.default("Enacting dose: %{public}@", String(describing: (bolus, tempBasal)))
-        
-        try await doseEnactor.enact(decisionId: decisionId, bolus: bolus, tempBasal: tempBasal, with: pumpManager)
-    }
-
-    var basalDeliveryState: PumpManagerStatus.BasalDeliveryState? {
-        return pumpManager?.status.basalDeliveryState
     }
 }
 

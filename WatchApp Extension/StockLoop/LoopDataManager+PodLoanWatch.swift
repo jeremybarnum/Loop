@@ -2,8 +2,8 @@
 //  LoopDataManager+PodLoanWatch.swift
 //  WatchApp Extension
 //
-//  Sport Mode on the watch's LoopDataManager: the phone relay context, the watch's own CGM
-//  readings, phone contexts that arrive during a loan, and overrides on the wrist's dosing.
+//  Sport Mode on the watch's LoopDataManager: the watch's own CGM readings and the phone's relayed
+//  ones reaching the loop, the watch's sensor kept during a loan, and overrides on the wrist's dosing.
 //
 
 import Foundation
@@ -13,21 +13,11 @@ import WatchConnectivity
 
 extension LoopDataManager {
 
-    /// Called from `activeContext`'s `didSet`.
-    func podLoanNoteContextChange(_ oldValue: WatchContext?) {
-        guard FeatureFlags.sportModeEnabled else { return }
-        // The phone's onboarding input to the gate, logged on change.
-        let flag = activeContext?.isOnboardingCompleted
-        if flag != oldValue?.isOnboardingCompleted || (oldValue == nil) != (activeContext == nil) {
-            SportLog.event("gate", "phone context: onboardingCompleted=\(flag.map { String($0) } ?? "nil") (context \(activeContext == nil ? "NIL" : "present"), watchAuthored=\(activeContext?.isWatchAuthored == true)) [onboarding-gate]")
-        }
-    }
-
-    /// Called from `addDirectGlucose(_:)`: the watch's own reading also feeds Sport Mode's loop.
-    func podLoanNoteDirectGlucose(_ samples: [NewGlucoseSample]) {
+    /// Called from `addDirectGlucose(_:)` once the store has the watch's own reading: Sport Mode's loop reacts.
+    func podLoanNoteDirectGlucose(_ samples: [NewGlucoseSample], storedNew: Bool) {
         guard let loopManager = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.loopManager else { return }
         loopManager.noteCGMManager(WatchCGMHost.shared.cgmManager)
-        loopManager.ingestDirectGlucose(samples)
+        loopManager.didStoreDirectGlucose(samples, storedNew: storedNew)
     }
 
     /// Called from `directGlucoseDidEnd()`: the watch let go of the sensor.
@@ -35,52 +25,55 @@ extension LoopDataManager {
         ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.loopManager.noteCGMManager(nil)
     }
 
-    /// While the wrist owns the alarms (taking over, live, handing back, draining, resuming) the
-    /// phone's reading is stored here and evaluated. Only while the loan is live does the phone's
-    /// context never replace the watch's: `shouldReplace` compares only glucoseDate with `>=`, so
-    /// an equal-timestamp relay would discard the watch's prediction.
-    func podLoanAbsorbsPhoneContext(_ context: WatchContext) -> Bool {
-        guard let loan = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController,
-              loan.wristOwnsAlarmsNonBlocking, !context.isWatchAuthored else { return false }
-        podLoanAbsorbPhoneContextDuringLoan(context)
-        return loan.isLoanActiveNonBlocking
+    /// Called from `directGlucoseUnreliable()`: the watch holding the pod cancels a high temp, as the phone does.
+    func podLoanNoteDirectGlucoseUnreliable() {
+        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.loopManager.receivedUnreliableGlucose()
     }
 
-    /// A phone context during a loan: the relayed reading is stored here, and offered to the wrist's
-    /// loop and alarms.
-    func podLoanAbsorbPhoneContextDuringLoan(_ context: WatchContext) {
-        // `WatchCGMHost.update(from:)` is not reached during a loan, so its sensor keeps reading
-        // whatever the phone shares; a context is still a wake for its acquisition.
-        WatchCGMHost.shared.recheckAcquisition()
-        guard let newGlucoseSample = context.newGlucoseSample else { return }
-        Task {
-            try? await self.glucoseStore?.addGlucoseSamples([newGlucoseSample])
+    /// While the wrist owns the alarms (taking over, live, handing back, draining, resuming), a reading
+    /// the phone relayed and the store took is offered to the wrist's loop and alarms. The phone's copy
+    /// of a reading often lands before the watch's own, which then stores nothing new, so this is
+    /// what runs the cycle for it.
+    func podLoanNoteRelayedGlucose(_ sample: NewGlucoseSample, storedNew: Bool) {
+        guard storedNew, let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession,
+              session.loanController.wristOwnsAlarms else { return }
+        session.stack.loopManager.didStorePhoneGlucose(sample)
+    }
+
+    /// Stock's CGM follows the phone's sharing in each context, except while the wrist owns the alarms:
+    /// it keeps reading the sensor it doses from, and the context is only a wake for its acquisition.
+    func podLoanUpdateWatchCGM(from context: WatchContext) {
+        if ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.wristOwnsAlarms == true {
+            WatchCGMHost.shared.recheckAcquisition()
+        } else {
+            WatchCGMHost.shared.update(from: context)
         }
-        #if !targetEnvironment(simulator)
-        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.loopManager.ingestPhoneGlucose(newGlucoseSample)
-        #endif
+    }
+
+    /// From a loan's takeover until its records are home the carb store holds carbs the phone does not
+    /// have yet, which the phone's carb sync (a wholesale replace) would erase.
+    var pausesPhoneCarbSync: Bool {
+        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.wristOwnsAlarms ?? false
     }
 
     /// Non-nil only while the wrist is dosing.
     var loanControllerIfActive: PodLoanWatchController? {
         guard let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession,
-              session.loanController.isLoanActiveNonBlocking else { return nil }
+              session.loanController.isLoanActive else { return nil }
         return session.loanController
     }
 
-    /// Applies an override to the wrist's dosing and the loan's records during a loan, then the
-    /// UI, then (best-effort) the phone, which is often off during a loan.
+    /// Applies an override to the wrist's dosing and the loan's records during a loan (the screens
+    /// show the loop's), then (best-effort) the phone, which is often off during a loan.
     func applyOverrideDuringLoan(_ loan: PodLoanWatchController,
                                  _ override: TemporaryScheduleOverride?,
-                                 _ watchInfoUpdate: LoopSettingsUserInfo,
                                  presetId: String?,
                                  alertIdentifier: String?) async {
         loan.applyWristOverride(override)
-        watchInfo = watchInfoUpdate
         do {
             try await WCSession.default.sendSetPreset(presetIdentifier: presetId, alertIdentifier: alertIdentifier)
         } catch {
-            SportLog.event("override", "phone not told (\(error)) — the wrist holds the pod, so its own dosing is authoritative")
+            SportLog.event("override", "phone not told of the override: \(error)")
         }
     }
 }

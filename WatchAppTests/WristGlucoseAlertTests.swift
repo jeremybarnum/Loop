@@ -119,7 +119,7 @@ final class WristGlucoseAlertTests: XCTestCase {
         await manager.evaluateGlucoseAlerts([reading(45)]).value
 
         XCTAssertTrue(scheduler.pending.isEmpty, "no settings means no invented thresholds")
-        XCTAssertTrue(note.contains("UNAVAILABLE"), "the log says the wrist has no low alarms: \(note)")
+        XCTAssertTrue(note.contains("unavailable"), "the log says the wrist has no low alarms: \(note)")
     }
 
     func testOnceTheLoanEndsTheWristStopsEvaluating() async {
@@ -149,6 +149,12 @@ final class WristGlucoseAlertTests: XCTestCase {
         XCTAssertNotNil(request(GlucoseAlertManager.lowAlertIdentifier), "the next loan's low sounds")
     }
 
+    /// As `LoopDataManager` does with a relayed reading during a loan: stored, then handed to the loop.
+    private func relay(_ sample: NewGlucoseSample, to manager: WatchLoopManager) async throws {
+        _ = try await manager.glucoseStore.addGlucoseSamples([sample])
+        manager.didStorePhoneGlucose(sample)
+    }
+
     /// During a loan the wrist owns the alarms, so a reading relayed by the phone alarms there too:
     /// a loan without the watch's own sensor must not run without low alarms.
     func testARelayedLowDuringALoanRaisesTheLowOnTheWrist() async throws {
@@ -162,7 +168,7 @@ final class WristGlucoseAlertTests: XCTestCase {
                                   "podState": podState.rawValue]
         manager.pumpManager = try XCTUnwrap(OmniPumpManager(rawState: raw))
 
-        manager.ingestPhoneGlucose(reading(65))
+        try await relay(reading(65), to: manager)
 
         let deadline = Date().addingTimeInterval(5)
         while request(GlucoseAlertManager.lowAlertIdentifier) == nil, Date() < deadline {
@@ -178,7 +184,7 @@ final class WristGlucoseAlertTests: XCTestCase {
         manager.configureGlucoseAlerts(from: phoneSettings)
         XCTAssertNil(manager.pumpManager)
 
-        manager.ingestPhoneGlucose(reading(65))
+        try await relay(reading(65), to: manager)
 
         let deadline = Date().addingTimeInterval(5)
         while request(GlucoseAlertManager.lowAlertIdentifier) == nil, Date() < deadline {

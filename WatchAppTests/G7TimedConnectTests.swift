@@ -101,6 +101,7 @@ final class G7WatchAcquisitionTests: XCTestCase {
 }
 
 /// The phone's relay and the watch's own G7 name a reading alike, so the store keeps one row.
+@MainActor
 final class G7RelayDedupTests: XCTestCase {
     private func message(_ hex: String) -> G7GlucoseMessage { G7GlucoseMessage(data: Data(hexadecimalString: hex)!)! }
 
@@ -135,13 +136,15 @@ final class G7RelayDedupTests: XCTestCase {
         let held = reading(now.addingTimeInterval(-5 * 60), id: "held-\(UUID().uuidString)")
         _ = try await glucoseStore.addGlucoseSamples([held])
 
-        wrist.ingestDirectGlucose([held])
-        wrist.deviceQueue.sync { }
+        // As `LoopDataManager.addDirectGlucose`: the write says whether the store took anything.
+        let again = try await glucoseStore.addGlucoseSamples([held])
+        wrist.didStoreDirectGlucose([held], storedNew: !again.isEmpty)
         try await Task.sleep(nanoseconds: 1_000_000_000)
         XCTAssertFalse(readingAskedForACycle(wrist), "the store already held it: no cycle")
 
-        wrist.ingestDirectGlucose([reading(now, id: "new-\(UUID().uuidString)")])
-        wrist.deviceQueue.sync { }
+        let new = reading(now, id: "new-\(UUID().uuidString)")
+        let stored = try await glucoseStore.addGlucoseSamples([new])
+        wrist.didStoreDirectGlucose([new], storedNew: !stored.isEmpty)
         var tries = 0
         while !readingAskedForACycle(wrist), tries < 50 {
             tries += 1
@@ -231,7 +234,6 @@ final class WatchLoanContextTests: XCTestCase {
         published.overlayWatchState(from: watch)
         XCTAssertNotNil(published.cgmConfiguration, "the phone's sensor sharing carries through")
         XCTAssertEqual(published.displayGlucoseUnit, .milligramsPerDeciliter, "so does its display unit")
-        XCTAssertTrue(published.isWatchAuthored)
         XCTAssertEqual(published.glucose?.doubleValue(for: .milligramsPerDeciliter), 95)
         XCTAssertEqual(published.iob, 1.1)
         XCTAssertNil(published.recommendedBolusDose, "the phone's dosing state does not survive")
@@ -239,13 +241,19 @@ final class WatchLoanContextTests: XCTestCase {
     }
 }
 
-/// Stands in for `WatchCGMHost`: hands each reading to Sport Mode's loop.
+/// Stands in for `WatchCGMHost` and `LoopDataManager.addDirectGlucose`: stores each reading, then
+/// hands it to Sport Mode's loop.
 private nonisolated final class ForwardingCGMDelegate: CGMManagerDelegate {
     let wrist: WatchLoopManager
     init(_ wrist: WatchLoopManager) { self.wrist = wrist }
 
     func cgmManager(_ manager: CGMManager, hasNew readingResult: CGMReadingResult) {
-        if case .newData(let samples) = readingResult { wrist.ingestDirectGlucose(samples) }
+        guard case .newData(let samples) = readingResult else { return }
+        let wrist = self.wrist
+        Task { @MainActor in
+            let stored = (try? await wrist.glucoseStore.addGlucoseSamples(samples)) ?? []
+            wrist.didStoreDirectGlucose(samples, storedNew: !stored.isEmpty)
+        }
     }
     func startDateToFilterNewData(for manager: CGMManager) -> Date? { nil }
     func cgmManager(_ manager: CGMManager, hasNew events: [PersistedCgmEvent]) {}

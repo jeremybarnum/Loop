@@ -18,7 +18,7 @@ extension CarbAndBolusFlowViewModel {
     /// During a loan the grant's maximum; the phone's relayed value can be stale.
     static func activeMaxBolus(_ loopManager: LoopDataManager) -> Double {
         if let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession,
-           session.loanController.isLoanActiveNonBlocking,
+           session.loanController.isLoanActive,
            let granted = session.stack.loopManager.grantedMaximumBolus {
             return granted
         }
@@ -103,14 +103,14 @@ extension CarbAndBolusFlowViewModel {
 
         switch result {
         case .success(let recommendation):
-            SportLog.event("bolus-ui", String(format: "REC carb %.0fg (watch-local): %.2f U",
+            SportLog.event("bolus-ui", String(format: "bolus recommended for %.0f g carbs: %.2f U",
                                               entry?.quantity.doubleValue(for: .gram) ?? 0,
                                               recommendation?.amount ?? 0))
             if recommendedBolusAmount != recommendation?.amount {
                 recommendedBolusAmount = recommendation?.amount
             }
         case .failure(let error):
-            SportLog.event("bolus-ui", "REC carb (watch-local) FAILED — \(error) · dial stays 0, button reads Save")
+            SportLog.event("bolus-ui", "bolus recommendation failed: \(error)")
             recommendedBolusAmount = nil
         }
     }
@@ -128,13 +128,13 @@ extension CarbAndBolusFlowViewModel {
 
     /// As stock's `WatchDataManager.addCarbEntryAndBolusFromWatchMessage`: the carbs are saved
     /// first, and the bolus is sent from the save's completion only once they are, with the stored
-    /// entry in its decision. Off main: the save completes on the carb store's queue.
-    nonisolated private static func podLoanDeliver(carbEntry: NewCarbEntry?, bolus: Double,
+    /// entry in its decision.
+    private static func podLoanDeliver(carbEntry: NewCarbEntry?, bolus: Double,
                                                    activationType: BolusActivationType, session: StockLoopSession) {
         // An End is waiting: the pod is going back to the phone, so no bolus starts (nor its carbs, which
         // the looper enters with it on the phone).
         if bolus > 0, let refusal = session.loanController.bolusRefusalWhileEnding() {
-            SportLog.event("bolus-ui", String(format: "BOLUS REFUSED — %.2f U: an End is waiting · haptic=failure", bolus))
+            SportLog.event("bolus-ui", String(format: "bolus of %.2f U refused: an End is waiting", bolus))
             notifyBolusFailure(units: bolus, carbGrams: nil, error: BolusRefusedWhileEnding(reason: refusal))
             DispatchQueue.main.async { WKInterfaceDevice.current().play(.failure) }
             return
@@ -157,36 +157,26 @@ extension CarbAndBolusFlowViewModel {
                 }
             case .failure(let error):
                 // As stock: carbs that could not be saved are not bolused for.
-                SportLog.event("bolus-ui", String(format: "BOLUS NOT SENT — %.0f g could not be saved: %@ · haptic=failure",
+                SportLog.event("bolus-ui", String(format: "bolus not sent because the %.0f g carb entry could not be saved: %@",
                                                   carbEntry.quantity.doubleValue(for: .gram), String(describing: error)))
                 DispatchQueue.main.async { WKInterfaceDevice.current().play(.failure) }
             }
         }
     }
 
-    nonisolated private static func deliverLoanBolus(units: Double, activationType: BolusActivationType, carbEntry: NewCarbEntry?,
-                                                     storedCarbEntry: StoredCarbEntry?, session: StockLoopSession) {
+    private static func deliverLoanBolus(units: Double, activationType: BolusActivationType, carbEntry: NewCarbEntry?,
+                                         storedCarbEntry: StoredCarbEntry?, session: StockLoopSession) {
         session.stack.loopManager.enactManualBolus(units: units, activationType: activationType,
                                                    carbEntry: carbEntry, storedCarbEntry: storedCarbEntry) { error in
             let carbGrams = carbEntry?.quantity.doubleValue(for: .gram)
-            // `enactManualBolus` completes on main.
-            MainActor.assumeIsolated {
-                if let error = error {
-                    // No re-send: the carbs are already journaled.
-                    WKInterfaceDevice.current().play(.failure)
-                    let title = bolusFailureContent(units: units, carbGrams: carbGrams, error: error).title
-                    SportLog.event("bolus-ui", String(
-                        format: "USER ALERTED '%@' — %.2f U did not confirm%@ · reason: %@ · haptic=failure",
-                        title,
-                        units,
-                        carbGrams.map { String(format: " (%.0f g ALREADY logged)", $0) } ?? "",
-                        String(describing: error)))
-                    notifyBolusFailure(units: units,
-                                       carbGrams: carbGrams,
-                                       error: error)
-                } else {
-                    WKInterfaceDevice.current().play(.success)
-                }
+            if let error = error {
+                // No re-send: the carbs are already journaled.
+                WKInterfaceDevice.current().play(.failure)
+                notifyBolusFailure(units: units,
+                                   carbGrams: carbGrams,
+                                   error: error)
+            } else {
+                WKInterfaceDevice.current().play(.success)
             }
         }
     }

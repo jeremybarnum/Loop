@@ -2,7 +2,7 @@
 //  PodLoanPhoneController+Records.swift
 //  Loop
 //
-//  Taking in what the watch dosed: streamed batches are staged, hand-back offers commit.
+//  Taking in what the watch dosed: streamed batches and hand-back offers are staged and committed.
 //  The store is written before the ack; one commit at a time (others coalesce); dedup is
 //  by event ID; nothing is dropped without saying so.
 //
@@ -12,14 +12,13 @@ import HealthKit
 import LoopKit
 import LoopCore
 import UserNotifications
-import os.log
 
 extension PodLoanPhoneController {
-    /// Staged, not committed: the watch may still supersede an open temp.
+    /// The watch's records during a loan: staged, then committed but for a rate record still running.
     func handleBatch(_ batch: DoseRecordBatch) {
         // Records sent during a revoke count too.
         guard batch.epoch == epoch, state == .loaned || state == .reclaimPending else {
-            handbackDiag(batch.epoch, "batch DROPPED — \(batch.events.count) event(s) ev=\(batch.epoch) vs phone ev=\(epoch), state=\(state.rawValue) (recovered via the offer path if the watch still resends)")
+            handbackDiag(batch.epoch, "ignored \(batch.events.count) records from the watch: this phone is on e\(epoch), state \(state.rawValue)")
 
             // Records are the watch's word that it holds the pod: `LoanControl` decides (rows 6, 17, 19).
             // They bound when the loan started, so records that reach the phone before the watch's own
@@ -37,26 +36,21 @@ extension PodLoanPhoneController {
         stage(events: batch.events, tombstones: batch.tombstones)
 
         if let snap = batch.odometer {
-            logRunningAudit(snap, context: "batch")
+            logRunningAudit(snap, context: "records")
         }
+
+        // Committed as they arrive, so the phone's stores and screens follow the watch while it is in
+        // reach. Records that arrive during a write wait, staged, for the next one.
+        guard !batch.events.isEmpty || !batch.tombstones.isEmpty, !commitInFlight else { return }
+        let records = HandbackOffer(epoch: batch.epoch, handedBackAt: batch.sentAt ?? deps.now(), finalStatus: nil,
+                                    odometer: batch.odometer, events: batch.events, tombstones: batch.tombstones,
+                                    recovered: false, released: false)
+        commitStaged(records, isFinal: false, isStale: false, auditThisOffer: false)
     }
 
-    /// The phone's half of the periodic pod-link census, logged regardless of traffic.
-    func installPodLinkCensus() {
-        WatchDataManager.podLinkCensus = { [weak self] in
-            guard let self, let control = self.deps.pumpManager() as? ExclusiveDeviceControl else {
-                return "no pump manager"
-            }
-            return "released=\(control.isControlReleased) ready=\(control.isControlReady)"
-        }
-    }
-
-    /// Loan log, in the phone's own file as well as to the watch (whose copy can be stuck in a queue).
+    /// The loan's log line, tagged with its loan number.
     func handbackDiag(_ epoch: Int, _ text: String) {
-        os_log("HANDBACK-DIAG e%d: %{public}@", log: log, type: .default, epoch, text)
-
-        PhoneLog.event("loan", "e\(epoch) \(text)")
-        sendMessage(.diag(LoanDiag(epoch: epoch, text: text)))
+        deps.logLoanLine("e\(epoch) \(text)")
     }
 
     /// Interim drain, final hand-back, or stale offer, told apart by `released` and epoch.
@@ -68,11 +62,11 @@ extension PodLoanPhoneController {
            token == persisted.seizeToken {
             if state == .reclaimPending {
                 cancelTakeBackAttempt()
-                handbackDiag(offer.epoch, "[seize] retro-ack arrived MID-RECLAIM — take-back attempt stood down; the watch is handing back")
+                handbackDiag(offer.epoch, "take-back stopped: the watch is handing back")
             }
-            handbackDiag(offer.epoch, "[seize] RETRO-ACK — offer for a SEIZED loan (token …\(String(token.uuidString.suffix(8)))); adopting epoch \(epoch)→\(offer.epoch) as .loaned, reconciling on the normal path")
+            handbackDiag(offer.epoch, "adopting the loan the watch started without this phone, after e\(epoch)")
 
-            clearInferredLoanYield(reason: "retro-ack — the inferred loan is now the adopted loan e\(offer.epoch)")
+            clearInferredLoanYield(reason: "its loan e\(offer.epoch) is adopted")
             // Anchor the adopted loan at its earliest record, at most six hours back.
             let anchor = max(offer.events.map(\.record.startDate).min() ?? offer.handedBackAt,
                              deps.now().addingTimeInterval(-.hours(6)))
@@ -88,7 +82,7 @@ extension PodLoanPhoneController {
             if let odometer = offer.odometer, let startAt = odometer.deliveredAtStartAt {
                 noteTakeoverReading(units: odometer.deliveredAtStart, at: startAt)
             } else if let last = ledgerLast {
-                handbackDiag(offer.epoch, String(format: "audit base kept — the phone's last reading while it held the pod, %.2f U at %@",
+                handbackDiag(offer.epoch, String(format: "the watch's window starts at this phone's last reading, %.2f U at %@",
                                                  last.units, ISO8601DateFormatter().string(from: last.at)))
             }
             stateDidChange(from: previous)
@@ -99,18 +93,16 @@ extension PodLoanPhoneController {
                let control = deps.pumpManager() as? ExclusiveDeviceControl, !control.isControlReleased {
                 control.releaseControl()
                 deps.pumpControlChanged(true)
+                readThePodIfKept()
             }
         }
 
         // An offer ahead of this phone's epoch cannot be committed.
         let isStale = offer.epoch < epoch
         guard offer.epoch == epoch || isStale else {
-            os_log("Hand-back offer DROPPED: offer.epoch %d > phone.epoch %d — watch ahead of phone; loan may be stranded (needs reclaim or new request)",
-                   log: log, type: .error, offer.epoch, epoch)
-            handbackDiag(offer.epoch, "offer DROPPED epoch \(offer.epoch) > phone \(epoch) — phone behind, loan stranded")
+            handbackDiag(offer.epoch, "hand-back ignored: this phone is behind, on e\(epoch); the loan may be stranded")
             return
         }
-        handbackDiag(offer.epoch, "offer RX ev=\(offer.events.count) released=\(offer.released.map { $0 ? "final" : "interim" } ?? "nil") stale=\(isStale) state=\(state.rawValue)")
 
         // One commit at a time; coalesce by epoch, and never let an interim replace a waiting final.
         if commitInFlight {
@@ -118,7 +110,7 @@ extension PodLoanPhoneController {
             if !(storedIsFinal && offer.released != true) {
                 coalescedOffers[offer.epoch] = offer
             }
-            handbackDiag(offer.epoch, "offer COALESCED behind the in-flight write — \(coalescedOffers.count) waiting")
+            handbackDiag(offer.epoch, "hand-back waits for the write in progress, \(coalescedOffers.count) waiting")
             return
         }
 
@@ -130,7 +122,7 @@ extension PodLoanPhoneController {
         let canTransition = state == .loaned || state == .reclaimPending || state == .grantOffered
         // Refuse a hand-back while this phone's Bluetooth is off; it could not reach the pod.
         if !isStale, canTransition, deps.isBluetoothPoweredOff() {
-            handbackDiag(offer.epoch, "hand-back REFUSED — this phone's Bluetooth is off, so it could not reclaim the pod; the watch keeps the loan")
+            handbackDiag(offer.epoch, "hand-back refused: this phone's Bluetooth is off, so the watch keeps the loan")
             sendMessage(.denied(LoanDenied(reason: NSLocalizedString("The watch is still looping. To end, turn on iPhone Bluetooth and tap End again.", comment: "Hand-back refused: shown on the watch glance"))))
             return
         }
@@ -138,23 +130,15 @@ extension PodLoanPhoneController {
         if !isStale, isFinal, canTransition {
             state = .reconciling
 
-            handbackDiag(offer.epoch, "commit done — ACKing now; the watch cannot release the pod until this lands")
-            // Where the watch confirmed it uploaded this loan's glucose, the phone's uploads resume after
-            // the loan: Nightscout tells readings apart only by their time, which each device stamps
-            // from its own receipt, so the phone's copies would be a second row each. Elsewhere, and
-            // after a force reclaim, the phone uploads its own copies.
-            let glucoseUploaded = offer.servicesConfirming("Glucose")
-            if !glucoseUploaded.isEmpty { deps.skipLoanGlucoseUploads(glucoseUploaded) }
-            handbackDiag(offer.epoch, "uploads: the watch confirmed \(offer.uploadsConfirmed.map { $0.isEmpty ? "none" : $0.map { "\($0.key) \($0.value.joined(separator: "+"))" }.joined(separator: "; ") } ?? "nothing (older watch)") — the phone uploads the rest")
+            handbackDiag(offer.epoch, "final hand-back received with \(offer.events.count) records; acknowledged once they are saved")
             // Loop mode and recency come home with the pod.
             if let watchClosed = offer.watchClosedLoopEnabled {
                 deps.noteWatchClosedLoop(watchClosed)
-                handbackDiag(offer.epoch, "loop mode INHERITED from the wrist — phone will resume \(watchClosed ? "CLOSED" : "OPEN")")
+                handbackDiag(offer.epoch, "the watch's loop mode comes home: \(watchClosed ? "closed" : "open") loop")
             }
 
             if let watchLoop = offer.lastLoopCompleted {
                 deps.noteWatchLoopCompleted(watchLoop)
-                handbackDiag(offer.epoch, String(format: "loop recency INHERITED from the wrist — last cycle %.0fs ago", deps.now().timeIntervalSince(watchLoop)))
             }
         }
 
@@ -164,9 +148,16 @@ extension PodLoanPhoneController {
         stage(events: offer.events, tombstones: offer.tombstones)
 
         if !isStale, offer.epoch == epoch, offer.released == false, let snap = offer.odometer {
-            logRunningAudit(snap, context: "interim-offer")
+            logRunningAudit(snap, context: "interim hand-back")
         }
 
+        commitStaged(offer, isFinal: isFinal, isStale: isStale, auditThisOffer: auditThisOffer)
+    }
+
+    /// Writes the staged records not yet committed to the stores, then acknowledges them. A rate
+    /// record still running, or a bolus still being given, is acknowledged but kept back: each lands
+    /// finished later. One write at a time (`commitInFlight`).
+    private func commitStaged(_ offer: HandbackOffer, isFinal: Bool, isStale: Bool, auditThisOffer: Bool) {
         // A stale offer speaks only for its own events.
         let ownEventIDs = isStale ? Set(offer.events.map(\.id)) : nil
         // Staged minus retracted minus already committed.
@@ -197,15 +188,11 @@ extension PodLoanPhoneController {
 
             // The watch's own reading: logged, not ruled on.
             let delivered = offer.odometer.map { $0.deliveredLatest - $0.deliveredAtStart }
-            // Continuous and pulse-floored totals, logged to tell a discrepancy from rounding.
-            let drainCont = outcome.doses.reduce(0.0) { $0 + $1.programmedUnits }
-            let drainFloor = outcome.doses.reduce(0.0) { $0 + ($1.programmedUnits / pulseUnits).rounded(.down) * pulseUnits }
             let loanMin = offer.handedBackAt.timeIntervalSince(loanStart) / 60
             handbackDiag(offer.epoch, String(format:
-                "reconcile[provisional]: delivered=%@ expected=%.3f residual=%@ (band ±0.20) · thisDrain cont=%.3f floor=%.3f · loanMin=%.0f cycles=%d",
-                delivered.map { String(format: "%.3f", $0) } ?? "n/a", expected,
-                delivered.map { String(format: "%+.3f", $0 - expected) } ?? "n/a",
-                drainCont, drainFloor,
+                "the watch's count at hand-back: delivered %@, expected %.3f U, residual %@ over %.0f min, %d records",
+                delivered.map { String(format: "%.3f U", $0) } ?? "unknown", expected,
+                delivered.map { String(format: "%+.3f U", $0 - expected) } ?? "unknown",
                 loanMin, allStagedEvents.count))
 
             // The verdict waits for the phone's own pod read, over the window from the ledger's last reading.
@@ -218,7 +205,7 @@ extension PodLoanPhoneController {
                 pendingHandbackAudit = PendingHandbackAudit(
                     epoch: offer.epoch, deliveredAtStart: base?.units ?? start, windowStart: base?.at ?? loanStart,
                     expected: windowExpected,
-                    loanMinutes: loanMin, cycles: allStagedEvents.count,
+                    loanMinutes: loanMin,
                     watchLatest: offer.odometer?.deliveredLatest)
             }
         }
@@ -233,21 +220,19 @@ extension PodLoanPhoneController {
         let sane = doses.filter { $0.endDate >= $0.startDate }
         if sane.count != doses.count {
             let bad = doses.filter { $0.endDate < $0.startDate }
-            handbackDiag(offer.epoch, "** DROPPED \(bad.count) impossible dose(s) (end before start) — writing \(sane.count) of \(doses.count). First: \(bad[0].type) \(bad[0].startDate) -> \(bad[0].endDate) **")
+            handbackDiag(offer.epoch, "dropped \(bad.count) of \(doses.count) doses that end before they start; first: \(bad[0].type) \(bad[0].startDate) to \(bad[0].endDate)")
         }
 
         let writeStart = deps.now()
-        handbackDiag(offer.epoch, "write START \(sane.count) dose(s) (final=\(isFinal))")
 
         // No ack on failure: the watch's resend is the retry.
         commitInFlight = true
         deps.addPumpEvents(newPumpEvents(from: sane), offer.handedBackAt) { [weak self] error in
             guard let self = self else { return }
-            self.queue.async {
+            DispatchQueue.main.async {
                 if let error = error {
                     self.commitInFlight = false
-                    self.handbackDiag(offer.epoch, "write FAILED: \(String(describing: error))")
-                    os_log("Reconcile write failed: %{public}@", log: self.log, type: .fault, String(describing: error))
+                    self.handbackDiag(offer.epoch, "saving the watch's records failed; the watch will resend: \(String(describing: error))")
 
                     if let reason = self.pendingForceReclaimReason {
                         self.pendingForceReclaimReason = nil
@@ -260,12 +245,11 @@ extension PodLoanPhoneController {
 
                 let finishCommit: (Error?) -> Void = { [weak self] backfillError in
                     guard let self = self else { return }
-                    self.queue.async {
+                    DispatchQueue.main.async {
                         // Release the latch first on every exit.
                         self.commitInFlight = false
                         if let backfillError = backfillError {
-                            self.handbackDiag(offer.epoch, "backfill FAILED: \(String(describing: backfillError))")
-                            os_log("Loan dose backfill failed: %{public}@", log: self.log, type: .fault, String(describing: backfillError))
+                            self.handbackDiag(offer.epoch, "saving the loan's doses in the dose store failed: \(String(describing: backfillError))")
 
                             if let reason = self.pendingForceReclaimReason {
                                 self.pendingForceReclaimReason = nil
@@ -280,23 +264,22 @@ extension PodLoanPhoneController {
                             }
 
                             for gone in outcome.deletedCarbs {
-                                self.handbackDiag(offer.epoch, String(format: "carb DELETE from wrist — %.0f g @ %@ sync=%@", gone.grams, String(describing: gone.startDate), gone.syncIdentifier.map { String($0.prefix(8)) } ?? "nil"))
                                 self.deps.deleteCarb(gone) { error in
-
                                     self.handbackDiag(offer.epoch, error == nil
-                                        ? String(format: "carb DELETE applied on phone — %.0f g", gone.grams)
-                                        : String(format: "carb DELETE MISSED on phone — %.0f g: %@", gone.grams, String(describing: error!)))
+                                        ? String(format: "carb delete from the watch applied: %.0f g", gone.grams)
+                                        : String(format: "carb delete from the watch failed: %.0f g at %@: %@",
+                                                 gone.grams, String(describing: gone.startDate), String(describing: error!)))
                                 }
                             }
                         } else if !outcome.carbs.isEmpty {
                             // A newer loan has started: an older loan's records add no carbs.
-                            self.handbackDiag(offer.epoch, "stale offer — \(outcome.carbs.count) carb(s) NOT committed (a dead loan cannot add carbs)")
+                            self.handbackDiag(offer.epoch, "\(outcome.carbs.count) carbs from an older loan not added")
                         }
 
                         // Overrides follow the pod home on interim drains too, each in turn.
                         if !isStale {
                             for change in outcome.overrideChanges {
-                                self.applyWatchOverride(change, epoch: offer.epoch, isFinal: isFinal)
+                                self.applyWatchOverride(change, epoch: offer.epoch)
                             }
                         }
 
@@ -309,11 +292,9 @@ extension PodLoanPhoneController {
                             }
                             // The ack, and only now that the store has it.
                             self.sendMessage(.handbackAck(HandbackAck(epoch: self.epoch, committedCursor: self.committedCursor)))
-                            self.handbackDiag(self.epoch, String(format: "write DONE %.0fms → ACK cursor %d", self.deps.now().timeIntervalSince(writeStart) * 1000, self.committedCursor))
+                            self.handbackDiag(self.epoch, String(format: "records saved in %.0f ms; acknowledged up to %d", self.deps.now().timeIntervalSince(writeStart) * 1000, self.committedCursor))
                             if isFinal, self.state == .reconciling {
                                 self.finishLoanAfterCommit()
-                            } else if !isFinal {
-                                os_log("Interim drain committed to cursor %d — watch still dosing", log: self.log, type: .default, self.committedCursor)
                             }
                         } else {
                             // Acked so the watch can let go; no dedup state moves.
@@ -341,11 +322,11 @@ extension PodLoanPhoneController {
                     backfillOutcome.doses.filter { $0.endDate >= $0.startDate }))
                 if isStale || backfill.isEmpty {
                     if isStale {
-                        self.handbackDiag(offer.epoch, "backfill SKIPPED — a stale offer speaks only for its own records")
+                        self.handbackDiag(offer.epoch, "hand-back from an older loan: only its own records are saved")
                     }
                     finishCommit(nil)
                 } else {
-                    self.handbackDiag(offer.epoch, "backfill \(backfill.count) loan-window dose(s) by store identity (past the store's basal boundary)")
+                    self.handbackDiag(offer.epoch, "saving \(backfill.count) of the loan's doses in the dose store")
                     backfillEarliestStart = backfill.map(\.startDate).min()
                     self.deps.backfillDoses(backfill, finishCommit)
                 }
@@ -360,27 +341,27 @@ extension PodLoanPhoneController {
     func handleWatchLoanHistory(_ transfer: LoanHistory) {
         deps.whenProtectedDataAvailable { [weak self] in
             guard let self = self else { return }
-            self.queue.async {
+            DispatchQueue.main.async {
                 let alerts = transfer.alerts ?? [], deviceLog = transfer.deviceLog ?? []
                 guard transfer.epoch <= self.epoch else {
-                    self.handbackDiag(transfer.epoch, "loan history IGNORED — \(transfer.decisions.count) dosing decision(s), \(alerts.count) alert(s), \(deviceLog.count) device log line(s) for e\(transfer.epoch), a loan this phone (e\(self.epoch)) never granted")
+                    self.handbackDiag(transfer.epoch, "history from the watch ignored: this phone never granted this loan, its last is e\(self.epoch)")
                     return
                 }
-                self.deps.addDosingDecisions(transfer.decisions, transfer.servicesConfirming("DosingDecision")) { [weak self] result in
+                self.deps.addDosingDecisions(transfer.decisions) { [weak self] result in
                     switch result {
                     case .success(let added):
-                        self?.handbackDiag(transfer.epoch, "dosing decisions from the watch: \(added) of \(transfer.decisions.count) added (the rest already here)")
+                        self?.handbackDiag(transfer.epoch, "dosing decisions from the watch: \(added) of \(transfer.decisions.count) added")
                     case .failure(let error):
-                        self?.handbackDiag(transfer.epoch, "dosing decisions from the watch NOT added — \(error)")
+                        self?.handbackDiag(transfer.epoch, "dosing decisions from the watch not added: \(error)")
                     }
                 }
                 if !alerts.isEmpty {
                     self.deps.addAlerts(alerts) { [weak self] result in
                         switch result {
                         case .success(let changed):
-                            self?.handbackDiag(transfer.epoch, "alerts from the watch: \(changed) of \(alerts.count) added or updated (the rest already here)")
+                            self?.handbackDiag(transfer.epoch, "alerts from the watch: \(changed) of \(alerts.count) added or updated")
                         case .failure(let error):
-                            self?.handbackDiag(transfer.epoch, "alerts from the watch NOT added — \(error)")
+                            self?.handbackDiag(transfer.epoch, "alerts from the watch not added: \(error)")
                         }
                     }
                 }
@@ -388,9 +369,9 @@ extension PodLoanPhoneController {
                     self.deps.addDeviceLogEntries(deviceLog) { [weak self] result in
                         switch result {
                         case .success(let added):
-                            self?.handbackDiag(transfer.epoch, "device log from the watch: \(added) of \(deviceLog.count) line(s) added (the rest already here)")
+                            self?.handbackDiag(transfer.epoch, "device log from the watch: \(added) of \(deviceLog.count) lines added")
                         case .failure(let error):
-                            self?.handbackDiag(transfer.epoch, "device log from the watch NOT added — \(error)")
+                            self?.handbackDiag(transfer.epoch, "device log from the watch not added: \(error)")
                         }
                     }
                 }
@@ -399,67 +380,44 @@ extension PodLoanPhoneController {
     }
 
     /// Adds the decisions this store does not already hold, by id, one batch at a time, so a
-    /// file delivered twice adds nothing the second time. With `skipUploads`, the uploaders hear of
-    /// the batch only after it has moved the bookmarks the watch's uploads cover.
-    static func addNewDosingDecisions(_ decisions: [StoredDosingDecision], to store: DosingDecisionStore,
-                                      skipUploads: ((Set<UUID>) async -> Void)? = nil,
-                                      completion: @escaping (Result<Int, Error>) -> Void) {
-        loanHistoryIntakeQueue.async {
-            let semaphore = DispatchSemaphore(value: 0)
-            var result: Result<Int, Error> = .success(0)
-            Task {
-                let delegate = store.delegate
-                if skipUploads != nil { store.delegate = nil }
-                defer { store.delegate = delegate }
-                do {
-                    let present: [StoredDosingDecision] = try await store.findDosingDecisionsByIds(decisions.map(\.id))
-                    var seen = Set(present.map(\.id))
-                    let new = decisions.filter { seen.insert($0.id).inserted }
-                    try await store.addStoredDosingDecisions(dosingDecisions: new)
-                    if let skipUploads {
-                        await skipUploads(Set(new.map(\.id)))
-                        store.delegate = delegate
-                        delegate?.dosingDecisionStoreHasUpdatedDosingDecisionData(store)
-                    }
-                    result = .success(new.count)
-                } catch {
-                    result = .failure(error)
-                }
-                semaphore.signal()
-            }
-            semaphore.wait()
-            completion(result)
+    /// file delivered twice adds nothing the second time. Returns how many were added.
+    static func addNewDosingDecisions(_ decisions: [StoredDosingDecision], to store: DosingDecisionStore) async throws -> Int {
+        try await oneHistoryBatchAtATime {
+            let present: [StoredDosingDecision] = try await store.findDosingDecisionsByIds(decisions.map(\.id))
+            var seen = Set(present.map(\.id))
+            let new = decisions.filter { seen.insert($0.id).inserted }
+            try await store.addStoredDosingDecisions(dosingDecisions: new)
+            return new.count
         }
     }
 
     /// Adds the device log lines this log does not already hold, comparing whole lines over the
     /// span they cover, one batch at a time, so a file delivered twice adds nothing the second time.
-    static func addNewDeviceLogEntries(_ entries: [LoanDeviceLogEntry], to deviceLog: PersistentDeviceLog,
-                                       completion: @escaping (Result<Int, Error>) -> Void) {
-        loanHistoryIntakeQueue.async {
-            guard let first = entries.map(\.timestamp).min(), let last = entries.map(\.timestamp).max() else {
-                return completion(.success(0))
-            }
-            let semaphore = DispatchSemaphore(value: 0)
-            var result: Result<Int, Error> = .success(0)
-            Task {
-                do {
-                    let present = try await deviceLog.fetch(startDate: first, endDate: last.addingTimeInterval(1))
-                    var seen = Set(present.map(LoanDeviceLogEntry.init))
-                    let new = entries.filter { seen.insert($0).inserted }.compactMap(\.storedEntry)
-                    try await deviceLog.addStoredDeviceLogEntries(entries: new)
-                    result = .success(new.count)
-                } catch {
-                    result = .failure(error)
-                }
-                semaphore.signal()
-            }
-            semaphore.wait()
-            completion(result)
+    /// Returns how many were added.
+    static func addNewDeviceLogEntries(_ entries: [LoanDeviceLogEntry], to deviceLog: PersistentDeviceLog) async throws -> Int {
+        guard let first = entries.map(\.timestamp).min(), let last = entries.map(\.timestamp).max() else { return 0 }
+        return try await oneHistoryBatchAtATime {
+            let present = try await deviceLog.fetch(startDate: first, endDate: last.addingTimeInterval(1))
+            var seen = Set(present.map(LoanDeviceLogEntry.init))
+            let new = entries.filter { seen.insert($0).inserted }.compactMap(\.storedEntry)
+            try await deviceLog.addStoredDeviceLogEntries(entries: new)
+            return new.count
         }
     }
 
-    private static let loanHistoryIntakeQueue = DispatchQueue(label: "com.loopkit.Loop.PodLoanPhoneController.loanHistoryIntake")
+    /// The last batch of loan history taken in; the next one waits for it, so two deliveries of the
+    /// same file never both find a line missing.
+    private static var historyBatchTail: Task<Void, Never>?
+
+    private static func oneHistoryBatchAtATime(_ batch: @escaping @MainActor () async throws -> Int) async throws -> Int {
+        let previous = historyBatchTail
+        let task = Task { @MainActor () async throws -> Int in
+            await previous?.value
+            return try await batch()
+        }
+        historyBatchTail = Task { _ = try? await task.value }
+        return try await task.value
+    }
 
     /// After a write: run any deferred force, then one coalesced offer.
     func drainAfterCommit() {
@@ -474,42 +432,31 @@ extension PodLoanPhoneController {
 
     /// Idempotent by the override's identifier; a clear is skipped when the phone holds none, or
     /// one newer than the clear.
-    private func applyWatchOverride(_ change: LoanReconciler.OverrideChange, epoch: Int, isFinal: Bool) {
+    private func applyWatchOverride(_ change: LoanReconciler.OverrideChange, epoch: Int) {
         let current = deps.scheduleOverride()
-        let phase = isFinal ? "final" : "interim"
         switch change {
         case .set(let override, let changedAt):
             guard current?.syncIdentifier != override.syncIdentifier else {
-                os_log("[override] from watch: SKIPPED — %{public}@ already applied (sync %{public}@)",
-                       log: log, type: .default, Self.overrideNameForLog(override), override.syncIdentifier.uuidString)
-                handbackDiag(epoch, "[override] SKIPPED (already applied) \(Self.overrideNameForLog(override))")
+                handbackDiag(epoch, "preset from the watch already applied: \(Self.overrideNameForLog(override))")
                 return
             }
             deps.applyScheduleOverride(override, changedAt)
             let ends = override.duration.isInfinite ? "indefinite" : ISO8601DateFormatter().string(from: override.scheduledEndDate)
-            os_log("[override] from watch: APPLIED %{public}@ · insulin needs %.0f%% · target %{public}@ · ends %{public}@ · sync %{public}@ (%{public}@ drain)",
-                   log: log, type: .default, Self.overrideNameForLog(override),
-                   override.settings.effectiveInsulinNeedsScaleFactor * 100,
-                   Self.targetForLog(override), ends, override.syncIdentifier.uuidString, phase)
-            handbackDiag(epoch, String(format: "[override] APPLIED %@ · needs %.0f%% · target %@ · ends %@ (%@ drain)",
+            handbackDiag(epoch, String(format: "preset from the watch applied: %@, insulin needs %.0f%%, target %@, ends %@",
                                        Self.overrideNameForLog(override),
                                        override.settings.effectiveInsulinNeedsScaleFactor * 100,
-                                       Self.targetForLog(override), ends, phase))
+                                       Self.targetForLog(override), ends))
         case .cleared(let changedAt):
             guard let current else {
-                os_log("[override] from watch: SKIPPED clear — the phone holds no override", log: log, type: .default)
-                handbackDiag(epoch, "[override] SKIPPED clear (phone already has none)")
+                handbackDiag(epoch, "preset end from the watch skipped: this phone has none active")
                 return
             }
             guard current.startDate <= changedAt else {
-                os_log("[override] from watch: SKIPPED clear — the phone's override is newer", log: log, type: .default)
-                handbackDiag(epoch, "[override] SKIPPED clear (phone's override started after it)")
+                handbackDiag(epoch, "preset end from the watch skipped: this phone's preset started later")
                 return
             }
             deps.applyScheduleOverride(nil, changedAt)
-            os_log("[override] from watch: CLEARED %{public}@ — phone schedules resolve unscaled again (%{public}@ drain)",
-                   log: log, type: .default, Self.overrideNameForLog(current), phase)
-            handbackDiag(epoch, "[override] CLEARED \(Self.overrideNameForLog(current)) (\(phase) drain)")
+            handbackDiag(epoch, "preset from the watch ended: \(Self.overrideNameForLog(current))")
         }
     }
 
@@ -545,8 +492,7 @@ extension PodLoanPhoneController {
             stagedTombstones = []
             persistStaged()
             pendingHandbackAudit = nil
-            PhoneLog.event("mirror", "drain e\(epoch) closed UNDER live e\(liveEpoch) — books committed, audit moot, custody NOT resumed [mirror]")
-            engageInferredLoanYield(evidence: "superseding loan e\(liveEpoch) streamed during the e\(epoch) drain")
+            engageInferredLoanYield(evidence: "e\(epoch) was handed back while the watch runs e\(liveEpoch); its records are saved")
             return
         }
         // The state observer opens the settle window.

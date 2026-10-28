@@ -17,142 +17,66 @@ import WatchKit
 
 extension WatchLoopManager {
 
-    /// Only while the pod is held: between loans the phone is the controller and stores its own.
-    func storeDosingDecision(_ dosingDecision: StoredDosingDecision) {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-        guard let dosingDecisionStore, pumpManager != nil else { return }
-        try? runBlocking { await dosingDecisionStore.storeDosingDecision(dosingDecision) }
-    }
-
-    /// A labelled copy of stock `LoopDataManager.updateRemoteRecommendation`, from the display
-    /// run. Watch: the controller status is this watch's, and there is no pump status highlight
-    /// (the wrist has no pump UI layer).
-    func updateRemoteRecommendation(force: Bool = false) {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-
-        if lastManualBolusRecommendation == nil {
-            lastManualBolusRecommendation = displayState.output?.recommendation?.manual
-        }
-
-        let recommendationChanged = lastManualBolusRecommendation != displayState.output?.recommendation?.manual
-
-        guard force || recommendationChanged else {
-            return
-        }
-
-        lastManualBolusRecommendation = displayState.output?.recommendation?.manual
-
-        if let output = displayState.output {
-            var dosingDecision = StoredDosingDecision(date: now(), reason: "updateRemoteRecommendation")
-            dosingDecision.algorithmExperiments = algorithmExperimentRecords(for: currentDosingStrategy, guardAndRunway: output.guardAndRunway)
-            dosingDecision.predictedGlucose = output.predictedGlucose
-            dosingDecision.insulinOnBoard = displayState.activeInsulin
-            dosingDecision.carbsOnBoard = displayState.activeCarbs
-            switch output.recommendationResult {
-            case .success(let recommendation):
-                dosingDecision.automaticDoseRecommendation = recommendation.automatic
-                if let recommendationDate = displayState.input?.predictionStart, let manualRec = recommendation.manual {
-                    dosingDecision.manualBolusRecommendation = ManualBolusRecommendationWithDate(recommendation: manualRec, date: recommendationDate)
-                }
-            case .failure(let error):
-                if let loopError = error as? LoopError {
-                    dosingDecision.errors.append(loopError.issue)
-                } else {
-                    dosingDecision.errors.append(.init(id: "error", details: ["description": error.localizedDescription]))
-                }
-            }
-
-            dosingDecision.controllerStatus = WKInterfaceDevice.current().controllerStatus
-
-            dosingDecision.pumpManagerStatus = pumpManager?.status
-            dosingDecision.cgmManagerStatus = cgmManager?.cgmManagerStatus
-            dosingDecision.lastReservoirValue = StoredDosingDecision.LastReservoirValue(doseStore.lastReservoirValue)
-
-            storeDosingDecision(dosingDecision)
-        }
+    /// The cycle's remote recommendation decision (stock `LoopDataManager.updateRemoteRecommendation`),
+    /// from the display run. Lane work.
+    func updateRemoteRecommendation(force: Bool = false) async {
+        await cycle.storeRemoteRecommendation(displayState: displayState, force: force)
     }
 
     // MARK: - A wrist bolus
 
-    /// The watchBolus decision stock's `WatchDataManager.createWatchContext` builds with each
-    /// recommendation it sends the watch, from the display run, kept five minutes so the bolus
-    /// that follows can be stored with it.
+    /// The watchBolus decision the phone's `WatchDataManager.createWatchContext` builds with each
+    /// recommendation it sends the watch (`BolusDosingDecision.watchBolus`, from the display run),
+    /// kept five minutes so the bolus that follows can be stored with it. Lane work.
     func noteContextDosingDecision(potentialCarbEntry: NewCarbEntry?, recommendation: ManualBolusRecommendation?) {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-
-        var dosingDecision = StoredDosingDecision(reason: "watchBolus")
-
-        dosingDecision.carbsOnBoard = displayState.activeCarbs
-
-        if let recommendation {
-            dosingDecision.manualBolusRecommendation = ManualBolusRecommendationWithDate(recommendation: recommendation, date: now())
-        }
-
-        if let glucose = glucoseStore.latestGlucose, let input = displayState.input {
-            let historicalGlucoseStartDate = now().addingTimeInterval(-LoopCoreConstants.dosingDecisionHistoricalGlucoseInterval)
-            let start = min(historicalGlucoseStartDate, glucose.startDate)
-            let samples = input.glucoseHistory.filterDateRange(start, nil)
-            dosingDecision.historicalGlucose = samples.filter { $0.startDate >= historicalGlucoseStartDate }.map { HistoricalGlucoseValue(startDate: $0.startDate, quantity: $0.quantity) }
-        }
-
-        dosingDecision.insulinOnBoard = displayState.activeInsulin
-        dosingDecision.predictedGlucose = displayState.output?.predictedGlucose
-
+        let now = self.now()
         let scheduleOverride = self.scheduleOverride.flatMap { $0.hasFinished() ? nil : $0 }
-        dosingDecision.scheduleOverride = scheduleOverride
-
-        if let scheduleOverride {
-            // Stock `TemporaryPresetsManager.effectiveCorrectionRangeSchedule(presumingMealEntry:)`.
-            let presumingMealEntry = potentialCarbEntry != nil
-            dosingDecision.glucoseTargetRangeSchedule = presumingMealEntry && scheduleOverride.context == .preMeal
-                ? settings.glucoseTargetRangeSchedule
-                : settings.glucoseTargetRangeSchedule?.applyingOverride(scheduleOverride)
+        // Stock `TemporaryPresetsManager.effectiveCorrectionRangeSchedule(presumingMealEntry:)`.
+        let glucoseTargetRangeSchedule: GlucoseRangeSchedule?
+        if let scheduleOverride, !(potentialCarbEntry != nil && scheduleOverride.context == .preMeal) {
+            glucoseTargetRangeSchedule = settings.glucoseTargetRangeSchedule?.applyingOverride(scheduleOverride)
         } else {
-            dosingDecision.glucoseTargetRangeSchedule = settings.glucoseTargetRangeSchedule
+            glucoseTargetRangeSchedule = settings.glucoseTargetRangeSchedule
         }
+        let dosingDecision = BolusDosingDecision.watchBolus(displayState: displayState, recommendation: recommendation,
+                                                            scheduleOverride: scheduleOverride,
+                                                            glucoseTargetRangeSchedule: glucoseTargetRangeSchedule, now: now)
 
         // Remove any expired context dosing decisions and add new
-        let now = self.now()
         contextDosingDecisions = contextDosingDecisions.filter { now.timeIntervalSince($0.date) < .minutes(5) }
         contextDosingDecisions.append((date: now, potentialCarbEntry: potentialCarbEntry, decision: dosingDecision))
     }
 
-    /// Stock `WatchDataManager.addCarbEntryAndBolusFromWatchMessage` then
-    /// `LoopDataManager.storeManualBolusDosingDecision`: the decision built with the
+    /// Stock `WatchDataManager.addCarbEntryAndBolusFromWatchMessage`: the decision built with the
     /// recommendation shown for this carb entry (a bare one if the user saved without waiting for
-    /// one), with the carb entry as stored and the amount requested. Returns its id for the pod
-    /// command. Watch: a context decision is used once, found by the entry as entered.
+    /// one), with the carb entry as stored and the amount requested, stamped by the cycle as the
+    /// phone stamps a manual bolus's, and stored before the command. Only while the pod is held:
+    /// between loans the phone stores its own. Returns its id for the pod command. Watch: a context decision is used once, found by the
+    /// entry as entered. Lane work.
     @discardableResult
-    func storeWatchBolusDosingDecision(carbEntry: NewCarbEntry?, storedCarbEntry: StoredCarbEntry?, requested units: Double) -> UUID {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-
-        var dosingDecision: StoredDosingDecision
+    func storeWatchBolusDosingDecision(carbEntry: NewCarbEntry?, storedCarbEntry: StoredCarbEntry?, requested units: Double) async -> UUID {
+        var dosingDecision: BolusDosingDecision
         let now = self.now()
         if let index = contextDosingDecisions.lastIndex(where: { $0.potentialCarbEntry == carbEntry && now.timeIntervalSince($0.date) < .minutes(5) }) {
             dosingDecision = contextDosingDecisions.remove(at: index).decision
         } else {
-            dosingDecision = StoredDosingDecision(reason: "watchBolus")  // The user saved without waiting for recommendation (no bolus)
+            dosingDecision = BolusDosingDecision(for: .watchBolus)  // The user saved without waiting for recommendation (no bolus)
         }
 
         dosingDecision.carbEntry = storedCarbEntry
         dosingDecision.manualBolusRequested = units
-        dosingDecision.algorithmExperiments = algorithmExperimentRecords(for: currentDosingStrategy)
 
-        dosingDecision.date = now
-        dosingDecision.settings = StoredDosingDecision.Settings(settingsProvider.settings)
-        dosingDecision.controllerStatus = WKInterfaceDevice.current().controllerStatus
-        dosingDecision.pumpManagerStatus = pumpManager?.status
-        dosingDecision.cgmManagerStatus = cgmManager?.cgmManagerStatus
-        dosingDecision.lastReservoirValue = StoredDosingDecision.LastReservoirValue(doseStore.lastReservoirValue)
-
-        storeDosingDecision(dosingDecision)
+        if pumpManager != nil, let dosingDecisionStore,
+           let stored = cycle.manualBolusDosingDecision(dosingDecision, withDate: now) {
+            await dosingDecisionStore.storeDosingDecision(stored)
+        }
         return dosingDecision.id
     }
 
     /// Carbs saved with no bolus: stock stores this as a watchBolus decision too.
     func storeWatchCarbsOnlyDosingDecision(carbEntry: NewCarbEntry, storedCarbEntry: StoredCarbEntry) {
-        dataAccessQueue.async {
-            self.storeWatchBolusDosingDecision(carbEntry: carbEntry, storedCarbEntry: storedCarbEntry, requested: 0)
+        onLane {
+            await self.storeWatchBolusDosingDecision(carbEntry: carbEntry, storedCarbEntry: storedCarbEntry, requested: 0)
         }
     }
 }

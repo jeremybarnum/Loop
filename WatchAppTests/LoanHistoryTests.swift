@@ -176,9 +176,9 @@ final class LoanHistoryTests: XCTestCase {
             return true
         }
         func closeAndSettle() async {
-            controller.queue.sync { controller.sendLoanHistoryHome(epoch: 7) }
+            await controller.onMain { controller.sendLoanHistoryHome(epoch: 7) }
             try? await Task.sleep(nanoseconds: 500_000_000)
-            controller.queue.sync {}
+            await controller.onMain {}
         }
 
         await closeAndSettle()
@@ -270,9 +270,9 @@ final class LoanHistoryTests: XCTestCase {
             return true
         }
         func closeAndSettle() async {
-            controller.queue.sync { controller.sendLoanHistoryHome(epoch: 7) }
+            await controller.onMain { controller.sendLoanHistoryHome(epoch: 7) }
             try? await Task.sleep(nanoseconds: 500_000_000)
-            controller.queue.sync {}
+            await controller.onMain {}
         }
 
         await closeAndSettle()

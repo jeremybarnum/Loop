@@ -2,8 +2,7 @@
 //  PodLoanWatchController+Debug.swift
 //  StockLoop
 //
-//  Read-only views of the controller for the glance and debug page. Main never syncs onto the
-//  loan queue (also the pump's delegate queue); it reads the mirrors published from it.
+//  Read-only views of the controller for the glance and debug page.
 //
 
 import Foundation
@@ -15,11 +14,10 @@ import WatchKit
 import os.log
 
 extension PodLoanWatchController {
-    /// One consistent reading, taken on the queue.
+    /// One consistent reading of the controller.
     struct DebugSnapshot {
         let phase: Phase
         let epoch: Int?
-        let mode: LoanDosingMode
         let hasPumpManager: Bool
         let deliveredUnits: Double?
         let podFault: String?
@@ -51,64 +49,19 @@ extension PodLoanWatchController {
         let pumpFirstContactExpected: Bool
     }
 
-    /// Blocking. Not for main — `isLoanActiveNonBlocking` is main's answer.
     var isLoanActive: Bool {
-        RuntimeStateLog.markBlockingIfMain("blocking.isLoanActive")
-        defer { RuntimeStateLog.markBlockingIfMain("blocking.isLoanActive.done") }
-        return queue.sync { phase == .active }
+        phase == .active
     }
 
-    /// Safe on main; mirrored in `phase.didSet`.
-    var isLoanActiveNonBlocking: Bool {
-        loanActiveMirrorLock.lock()
-        defer { loanActiveMirrorLock.unlock() }
-        return _loanActiveMirror
+    /// Taking over, live, handing back, draining or resuming: the phone has left the alarms here.
+    var wristOwnsAlarms: Bool {
+        [.takingOver, .active, .handingBack, .recoveredDrain].contains(phase)
     }
 
-    /// A saved loan is still being rebuilt.
-    var wristOwnsAlarmsNonBlocking: Bool {
-        loanActiveMirrorLock.lock()
-        defer { loanActiveMirrorLock.unlock() }
-        return _wristAlarmsMirror
-    }
-
-    var isResumingNonBlocking: Bool {
-        loanActiveMirrorLock.lock()
-        defer { loanActiveMirrorLock.unlock() }
-        return _resumingMirror
-    }
-
-    /// The last published snapshot; may be one refresh stale.
-    var mirroredDebugSnapshot: DebugSnapshot? {
-        snapshotMirrorLock.lock()
-        defer { snapshotMirrorLock.unlock() }
-        return _snapshotMirror
-    }
-
-    /// Builds and publishes a snapshot; the caller reads the mirror next pass.
-    func refreshDebugSnapshot() {
-        queue.async { [weak self] in
-            guard let self = self else { return }
-            let snap = self.buildDebugSnapshot()
-            self.snapshotMirrorLock.lock()
-            self._snapshotMirror = snap
-            self.snapshotMirrorLock.unlock()
-        }
-    }
-
-    /// Blocking snapshot, for callers already off main (tests, queue-side logging).
     func debugSnapshot() -> DebugSnapshot {
-        RuntimeStateLog.markBlockingIfMain("blocking.debugSnapshot")
-        defer { RuntimeStateLog.markBlockingIfMain("blocking.debugSnapshot.done") }
-        return queue.sync { buildDebugSnapshot() }
-    }
-
-    /// Must run ON the queue — it reads the phase, the journal and the pump manager unguarded.
-    private func buildDebugSnapshot() -> DebugSnapshot {
         return DebugSnapshot(
                 phase: phase,
                 epoch: epoch ?? journal.activeEpoch,
-                mode: currentMode(),
                 hasPumpManager: pumpManager != nil,
                 deliveredUnits: pumpOdometer?.deliveredUnits?.units,
                 podFault: pumpFaultDescription,
@@ -134,7 +87,7 @@ extension PodLoanWatchController {
 
     /// nil: no pump manager, as opposed to a failed read.
     func debugReadStatus(completion: @escaping (Bool?) -> Void) {
-        queue.async {
+        DispatchQueue.main.async {
             guard let odometer = self.pumpOdometer else { completion(nil); return }
             Task { completion(await odometer.refreshDeliveredUnits()) }
         }

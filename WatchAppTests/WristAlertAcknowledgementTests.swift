@@ -15,6 +15,7 @@ import UserNotifications
 @testable import OmnipodKit
 @testable import WatchApp
 
+@MainActor
 final class WristAlertAcknowledgementTests: XCTestCase {
 
     private final class SpyResponder: AlertResponder {
@@ -30,8 +31,8 @@ final class WristAlertAcknowledgementTests: XCTestCase {
     private var defaults: UserDefaults!
     private var dir: URL!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         scheduler = RecordingWristAlertScheduler()
         WristAlerts.scheduler = scheduler
         defaults = UserDefaults(suiteName: "WristAlertAcknowledgementTests-\(UUID().uuidString)")!
@@ -39,9 +40,9 @@ final class WristAlertAcknowledgementTests: XCTestCase {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         WristAlerts.scheduler = UNUserNotificationCenter.current()
-        super.tearDown()
+        try await super.tearDown()
     }
 
     /// This test's own requests: an earlier test's controller can still post an alert of its
@@ -101,12 +102,12 @@ final class WristAlertAcknowledgementTests: XCTestCase {
     func testTheLoanedPumpAnswersForItsOwnAlertsWhileTheLoanIsLive() async throws {
         let controller = await makeController()
         let pump = try makePump()
-        controller.queue.sync { controller.pumpManager = pump }
+        await controller.onMain { controller.pumpManager = pump }
 
         let idle = await controller.pumpAlertResponder(for: "Omni")
         XCTAssertNil(idle, "no live loan: the phone owns the pod")
 
-        controller.queue.sync { controller.phase = .active }
+        await controller.onMain { controller.phase = .active }
         let live = await controller.pumpAlertResponder(for: "Omni")
         XCTAssertTrue(live === pump)
         let other = await controller.pumpAlertResponder(for: "GlucoseAlertManager")
@@ -117,8 +118,9 @@ final class WristAlertAcknowledgementTests: XCTestCase {
     func testTheFaultSentToThePhoneIsThePumpsOwnText() async throws {
         let controller = await makeController()
         let working = try makePump()
-        controller.queue.sync { controller.pumpManager = working }
-        XCTAssertNil(controller.queue.sync { controller.pumpFaultDescription }, "no fault, nothing to report")
+        await controller.onMain { controller.pumpManager = working }
+        let before = await controller.onMain { controller.pumpFaultDescription }
+        XCTAssertNil(before, "no fault, nothing to report")
 
         // A detailed status carrying fault code 0x8F.
         let status = try DetailedStatus(encodedData: Data([0x02, 0x0d, 0, 0, 0, 0x06, 0, 0, 0x8f, 0, 0, 0x03, 0xff,
@@ -126,8 +128,9 @@ final class WristAlertAcknowledgementTests: XCTestCase {
         let faulted = try makePump(fault: status)
         XCTAssertEqual((faulted as DeviceManager).localizedInoperableDescription, "Critical Pod Fault 143",
                        "the kit's implementation, not LoopKit's nil default")
-        controller.queue.sync { controller.pumpManager = faulted }
-        XCTAssertEqual(controller.queue.sync { controller.pumpFaultDescription }, "Critical Pod Fault 143")
+        await controller.onMain { controller.pumpManager = faulted }
+        let after = await controller.onMain { controller.pumpFaultDescription }
+        XCTAssertEqual(after, "Critical Pod Fault 143")
     }
 
     private func makeController() async -> PodLoanWatchController {

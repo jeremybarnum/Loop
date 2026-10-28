@@ -13,10 +13,9 @@ import LoopKit
 /// Wire constants shared by both apps.
 public enum LoanProtocol {
     /// Bumped only for a change the other side could not survive; additive changes use optional fields.
-    /// 3: the grant carries the pump's SharedDeviceConfiguration instead of its raw state.
-    public static let version = 3
+    public static let version = 1
 
-    public static let userInfoKey = "podLoanV2"
+    public static let userInfoKey = "podLoan"
 
     /// Dates as whole milliseconds since 1970.
     public static var encoder: JSONEncoder {
@@ -57,7 +56,6 @@ public enum LoanMessage: Equatable {
     case statusReport(StatusReport)
     case nack(ProtocolNack)
     case denied(LoanDenied)
-    case diag(LoanDiag)
 
     /// The watch's standing copy, outside any session.
     case dormantGrant(DormantGrant)
@@ -78,7 +76,7 @@ public struct LoanEnvelope: Codable {
     private enum Kind: String, Codable {
         case request, grant, takeoverComplete, takeoverFailed, doseRecordBatch
         case handbackOffer, handbackAck, revoke, statusQuery, statusReport, nack, denied
-        case diag, dormantGrant
+        case dormantGrant
     }
 
     public init(from decoder: Decoder) throws {
@@ -105,7 +103,6 @@ public struct LoanEnvelope: Codable {
         case .statusReport: self.message = .statusReport(try c.decode(StatusReport.self, forKey: .body))
         case .nack: self.message = .nack(try c.decode(ProtocolNack.self, forKey: .body))
         case .denied: self.message = .denied(try c.decode(LoanDenied.self, forKey: .body))
-        case .diag: self.message = .diag(try c.decode(LoanDiag.self, forKey: .body))
         case .dormantGrant: self.message = .dormantGrant(try c.decode(DormantGrant.self, forKey: .body))
         }
     }
@@ -126,7 +123,6 @@ public struct LoanEnvelope: Codable {
         case .statusReport(let m): try c.encode(Kind.statusReport, forKey: .kind); try c.encode(m, forKey: .body)
         case .nack(let m): try c.encode(Kind.nack, forKey: .kind); try c.encode(m, forKey: .body)
         case .denied(let m): try c.encode(Kind.denied, forKey: .kind); try c.encode(m, forKey: .body)
-        case .diag(let m): try c.encode(Kind.diag, forKey: .kind); try c.encode(m, forKey: .body)
         case .dormantGrant(let m): try c.encode(Kind.dormantGrant, forKey: .kind); try c.encode(m, forKey: .body)
         }
     }
@@ -138,26 +134,6 @@ extension LoanMessage {
         return [LoanProtocol.userInfoKey: data]
     }
 
-    /// The kind's name, for logs on both sides.
-    public var kindLabel: String {
-        switch self {
-        case .request:          return "request"
-        case .grant:            return "grant"
-        case .takeoverComplete: return "takeoverComplete"
-        case .takeoverFailed:   return "takeoverFailed"
-        case .doseRecordBatch:  return "doseRecordBatch"
-        case .handbackOffer:    return "handbackOffer"
-        case .handbackAck:      return "handbackAck"
-        case .revoke:           return "revoke"
-        case .statusQuery:      return "statusQuery"
-        case .statusReport:     return "statusReport"
-        case .nack:             return "nack"
-        case .denied:           return "denied"
-        case .diag:             return "diag"
-        case .dormantGrant:     return "dormantGrant"
-        }
-    }
-
     /// Urgent (`sendMessage`) for anything a person or a query is waiting through; bookkeeping stays
     /// queued (`transferUserInfo`), which survives a relaunch. A query and its answer are urgent: sent
     /// only queued, a watch back from off could wait out its query while the phone was reachable.
@@ -166,7 +142,7 @@ extension LoanMessage {
         case .request, .grant, .denied, .nack, .revoke, .handbackOffer, .handbackAck,
              .takeoverComplete, .statusQuery, .statusReport:
             return true
-        case .takeoverFailed, .doseRecordBatch, .diag, .dormantGrant:
+        case .takeoverFailed, .doseRecordBatch, .dormantGrant:
             return false
         }
     }
@@ -225,7 +201,7 @@ extension LoanMessage {
 /// unknown envelope kind would be nacked; a phone that does not know a field ignores the field.
 public struct LoanHistory: Codable {
     /// The file's `metadata["kind"]`, named when the file held only decisions.
-    public static let fileKind = "loan.dosingDecisions"
+    public static let fileKind = "loan.history"
 
     /// The loan the records belong to.
     public let epoch: Int
@@ -234,21 +210,13 @@ public struct LoanHistory: Codable {
     public let alerts: [SyncAlertObject]?
     /// `PersistentDeviceLog`'s lines, oldest first. Absent from an older watch's file.
     public let deviceLog: [LoanDeviceLogEntry]?
-    /// As the released offer's: per remote service, the types the watch confirmed it uploaded.
-    public let uploadsConfirmed: [String: [String]]?
 
     public init(epoch: Int, decisions: [StoredDosingDecision], alerts: [SyncAlertObject] = [],
-                deviceLog: [LoanDeviceLogEntry] = [], uploadsConfirmed: [String: [String]]? = nil) {
+                deviceLog: [LoanDeviceLogEntry] = []) {
         self.epoch = epoch
         self.decisions = decisions
         self.alerts = alerts
         self.deviceLog = deviceLog
-        self.uploadsConfirmed = uploadsConfirmed
-    }
-
-    /// The services whose `type` the watch confirmed it uploaded in full.
-    public func servicesConfirming(_ type: String) -> Set<String> {
-        Set((uploadsConfirmed ?? [:]).filter { $0.value.contains(type) }.keys)
     }
 
     public var fileMetadata: [String: Any] { ["kind": Self.fileKind, "epoch": epoch] }

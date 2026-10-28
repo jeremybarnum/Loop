@@ -13,13 +13,14 @@ import LoopCore
 import LoopAlgorithm
 @testable import WatchApp
 
+@MainActor
 final class WristOverrideRecordTests: XCTestCase {
 
     private var defaults: UserDefaults!
     private var dir: URL!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         defaults = UserDefaults(suiteName: "WristOverrideRecordTests-\(UUID().uuidString)")!
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -32,14 +33,13 @@ final class WristOverrideRecordTests: XCTestCase {
                                   startDate: Date(), duration: .indefinite, enactTrigger: .local, syncIdentifier: UUID())
     }
 
-    private func liveLoan(supportsOverrideRecords: Bool = true) async throws -> PodLoanWatchController {
+    private func liveLoan() async throws -> PodLoanWatchController {
         let controller = await makeController()
         controller.send = { _ in }
         try controller.journal.begin(epoch: 5)
-        controller.queue.sync {
+        await controller.onMain {
             controller.epoch = 5
             controller.phase = .active
-            controller.phoneSupportsOverrideRecords = supportsOverrideRecords
         }
         return controller
     }
@@ -49,7 +49,7 @@ final class WristOverrideRecordTests: XCTestCase {
         let set = override()
 
         controller.applyWristOverride(set)
-        controller.queue.sync { }
+        await controller.onMain { }
 
         XCTAssertEqual(controller.loopManager.scheduleOverride?.syncIdentifier, set.syncIdentifier, "the wrist doses under it")
         let records = controller.journal.unackedEvents().map(\.record)
@@ -57,25 +57,38 @@ final class WristOverrideRecordTests: XCTestCase {
         XCTAssertFalse(records.first?.overrideChangeIsClear ?? true)
     }
 
+    /// While the loan is live the screens are handed the override the loop doses with, none included;
+    /// once it ends, nothing, so they show the phone's again.
+    func testTheScreensFollowTheLoopsOverrideWhileTheLoanIsLive() async throws {
+        let controller = await makeController()
+        var published: [TemporaryScheduleOverride??] = []
+        controller.publishOverride = { published.append($0) }
+        controller.send = { _ in }
+        try controller.journal.begin(epoch: 5)
+        await controller.onMain {
+            controller.epoch = 5
+            controller.phase = .active
+        }
+        guard case .some(.none)? = published.last else { return XCTFail("a live loan with no override hands the screens none, not the phone's") }
+
+        let set = override()
+        controller.applyWristOverride(set)
+        guard case .some(let shown)? = published.last else { return XCTFail("nothing handed to the screens") }
+        XCTAssertEqual(shown?.syncIdentifier, set.syncIdentifier, "the screens show the one the loop doses with")
+
+        await controller.onMain { controller.phase = .idle }
+        guard case .none? = published.last else { return XCTFail("after the loan the screens show the phone's") }
+    }
+
     func testClearingOnTheWristIsJournaledToo() async throws {
         let controller = try await liveLoan()
 
         controller.applyWristOverride(nil)
-        controller.queue.sync { }
+        await controller.onMain { }
 
         let records = controller.journal.unackedEvents().map(\.record)
         XCTAssertEqual(records.map(\.kind), [.overrideChange])
         XCTAssertTrue(records.first?.overrideChangeIsClear ?? false)
-    }
-
-    func testAPhoneWithoutOverrideRecordsGetsNoRecord() async throws {
-        let controller = try await liveLoan(supportsOverrideRecords: false)
-
-        controller.applyWristOverride(override())
-        controller.queue.sync { }
-
-        XCTAssertTrue(controller.journal.unackedEvents().isEmpty)
-        XCTAssertNotNil(controller.loopManager.scheduleOverride, "still dosed on the wrist")
     }
 
     // MARK: - Pre-meal, ended where stock ends it
@@ -97,7 +110,7 @@ final class WristOverrideRecordTests: XCTestCase {
         let saved = expectation(description: "saved")
         controller.loanDidRecordCarbs(meal()) { _ in saved.fulfill() }
         await fulfillment(of: [saved], timeout: 10)
-        controller.queue.sync { }
+        await controller.onMain { }
     }
 
     /// Stock `LoopDataManager.addCarbEntry`: saving carbs ends a pre-meal preset, and the wrist's
@@ -105,7 +118,7 @@ final class WristOverrideRecordTests: XCTestCase {
     func testSavingCarbsOnTheWristEndsPreMeal() async throws {
         let controller = try await liveLoan()
         controller.applyWristOverride(preMeal())
-        controller.queue.sync { }
+        await controller.onMain { }
 
         await saveCarbs(controller)
 
@@ -120,7 +133,7 @@ final class WristOverrideRecordTests: XCTestCase {
         let controller = try await liveLoan()
         let set = override()
         controller.applyWristOverride(set)
-        controller.queue.sync { }
+        await controller.onMain { }
 
         await saveCarbs(controller)
 
@@ -134,14 +147,14 @@ final class WristOverrideRecordTests: XCTestCase {
         loop.onLoopOpened = { [weak controller] in controller?.endPreMealOverride(reason: "test") }
         loop.setClosedLoopEnabled(true, reason: "test")
         controller.applyWristOverride(preMeal())
-        controller.queue.sync { }
+        await controller.onMain { }
 
         loop.setClosedLoopEnabled(true, reason: "test")
         XCTAssertNotNil(loop.scheduleOverride, "closing it again changes nothing")
 
         loop.setClosedLoopEnabled(false, reason: "test")
-        loop.dataAccessQueue.sync { }
-        controller.queue.sync { }
+        await loop.laneSettled()
+        await controller.onMain { }
 
         XCTAssertNil(loop.scheduleOverride, "pre-meal ended")
         let overrides = controller.journal.unackedEvents().map(\.record).filter { $0.kind == .overrideChange }
@@ -166,6 +179,7 @@ final class WristOverrideRecordTests: XCTestCase {
 
 /// A cancelled temp reaches the phone as a zero-length rate record; unjournaled, cancelled temps would
 /// stand in the phone's books.
+@MainActor
 final class LoanCancelRecordTests: XCTestCase {
     private let start = Date()
     private func temp(_ rate: Double, from start: Date, minutes: Double, id: String) -> LoanDoseRecord {

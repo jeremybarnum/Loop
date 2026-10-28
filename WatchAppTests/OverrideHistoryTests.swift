@@ -13,19 +13,20 @@ import LoopAlgorithm
 import LoopCore
 @testable import WatchApp
 
+@MainActor
 final class OverrideHistoryTests: XCTestCase {
 
     private var cacheDir: URL!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent("override-history-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         cacheDir = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     /// Fresh stores on every call; the override history is whatever the caller passes.
@@ -87,7 +88,7 @@ final class OverrideHistoryTests: XCTestCase {
         ]
         func plist(_ value: Any) -> Data { try! PropertyListSerialization.data(fromPropertyList: value, format: .binary, options: 0) }
         return LoanGrant(epoch: 1, expiresAt: Date().addingTimeInterval(300), pumpConfiguration: Data([1, 2, 3]),
-                         podAddress: 0, therapySettingsRaw: plist(settings.rawValue), settingsTimeZoneID: "GMT",
+                         therapySettingsRaw: plist(settings.rawValue), settingsTimeZoneID: "GMT",
                          doseHistory: [], glucoseBasedApplicationFactorEnabled: glucoseBasedApplicationFactor,
                          guardAndRunwayEnabled: guardAndRunway, volatilityBaseline: volatilityBaseline,
                          activeOverrideRaw: activeOverride.map { plist($0.rawValue) },
@@ -188,7 +189,7 @@ final class OverrideHistoryTests: XCTestCase {
         c.loopManager.applyWristOverride(halfNeeds(start: now.addingTimeInterval(-.hours(2)), duration: .hours(3)))
         c.loopManager.applyWristOverride(nil)
 
-        c.queue.sync { c.handleGrant(grant(activeOverride: granted)) }
+        await c.onMain { c.handleGrant(grant(activeOverride: granted)) }
 
         _ = c.loopManager.basalRateScheduleApplyingOverrideHistory   // traps on an overlap
         let kept = c.loopManager.overrideHistory.getOverrideHistory(startDate: now.addingTimeInterval(-.hours(4)), endDate: Date())
@@ -206,7 +207,7 @@ final class OverrideHistoryTests: XCTestCase {
         var ended = halfNeeds(start: now.addingTimeInterval(-.hours(4)), duration: .hours(3))
         ended.actualEnd = .early(now.addingTimeInterval(-.hours(2)))   // cut short on the phone
 
-        c.queue.sync { c.handleGrant(grant(activeOverride: nil, overrideHistory: [ended])) }
+        await c.onMain { c.handleGrant(grant(activeOverride: nil, overrideHistory: [ended])) }
 
         let kept = try XCTUnwrap(history.getOverrideHistory(startDate: now.addingTimeInterval(-.hours(24)), endDate: now).first)
         XCTAssertEqual(kept.syncIdentifier, ended.syncIdentifier)
@@ -266,7 +267,7 @@ final class OverrideHistoryTests: XCTestCase {
     func testASettingsChangeBeforeStartReadsTheOldValuesBeforeIt() async throws {
         let c = await makeController(overrideHistory: StockLoopStack.makeOverrideHistory())
         let now = Date()
-        c.queue.sync { c.handleGrant(grant(activeOverride: nil, settingsHistory: settingsHistory(changedAt: now.addingTimeInterval(-.hours(2)), now: now))) }
+        await c.onMain { c.handleGrant(grant(activeOverride: nil, settingsHistory: settingsHistory(changedAt: now.addingTimeInterval(-.hours(2)), now: now))) }
 
         let provider = c.loopManager.settingsProvider
         let start = now.addingTimeInterval(-.hours(6)), end = now.addingTimeInterval(.hours(1))
@@ -296,7 +297,7 @@ final class OverrideHistoryTests: XCTestCase {
     func testTheFirstCycleReadsTheOldValuesBeforeAChangeBeforeStart() async throws {
         let c = await makeController(overrideHistory: StockLoopStack.makeOverrideHistory())
         let now = Date()
-        c.queue.sync { c.handleGrant(grant(activeOverride: nil, settingsHistory: settingsHistory(changedAt: now.addingTimeInterval(-.hours(2)), now: now))) }
+        await c.onMain { c.handleGrant(grant(activeOverride: nil, settingsHistory: settingsHistory(changedAt: now.addingTimeInterval(-.hours(2)), now: now))) }
         let before = now.addingTimeInterval(-.hours(3))
 
         await seedGlucose(c.loopManager, hours: 3)
@@ -332,8 +333,9 @@ final class OverrideHistoryTests: XCTestCase {
     /// The watch's dosing decisions record the experiments as the phone's do, guard + runway with its baseline.
     func testTheWatchsDosingDecisionsRecordThePhonesExperiments() async throws {
         let c = await makeController(overrideHistory: StockLoopStack.makeOverrideHistory())
-        c.queue.sync { c.handleGrant(grant(activeOverride: nil, glucoseBasedApplicationFactor: true, guardAndRunway: true, volatilityBaseline: 4.2)) }
-        let records = c.loopManager.dataAccessQueue.sync { c.loopManager.algorithmExperimentRecords(for: .tempBasalOnly) }
+        await c.onMain { c.handleGrant(grant(activeOverride: nil, glucoseBasedApplicationFactor: true, guardAndRunway: true, volatilityBaseline: 4.2)) }
+        await c.loopManager.laneSettled()
+        let records = c.loopManager.algorithmExperiments(for: .tempBasalOnly)
         XCTAssertEqual(records.map(\.identifier), [ExperimentOption.guardAndRunway.rawValue],
                        "the application factor is in effect only with automatic bolus, as on the phone")
         XCTAssertEqual(records.first?.parameters, .object(["volatilityBaseline": .number(4.2)]))
@@ -355,8 +357,9 @@ final class OverrideHistoryTests: XCTestCase {
     /// The first algorithm input after a grant, with glucose steady for an hour.
     private func input(afterGrant grant: LoanGrant) async throws -> StoredDataAlgorithmInput {
         let c = await makeController(overrideHistory: StockLoopStack.makeOverrideHistory())
-        c.queue.sync { c.handleGrant(grant) }
-        XCTAssertEqual(c.loopManager.isGlucoseBasedApplicationFactorEnabled, grant.glucoseBasedApplicationFactorEnabled ?? false)
+        await c.onMain { c.handleGrant(grant) }
+        await c.loopManager.laneSettled()
+        XCTAssertEqual(c.loopManager.glucoseBasedApplicationFactorEnabled, grant.glucoseBasedApplicationFactorEnabled ?? false)
         await seedGlucose(c.loopManager, hours: 1)
         try await c.loopManager.recordPumpEvents([], lastReconciliation: Date(), replacePendingEvents: true)
         return try await c.loopManager.fetchData(for: Date())
@@ -366,7 +369,7 @@ final class OverrideHistoryTests: XCTestCase {
     func testAGrantWithoutSettingsHistoryProjectsTheSnapshotBack() async throws {
         let c = await makeController(overrideHistory: StockLoopStack.makeOverrideHistory())
         let now = Date()
-        c.queue.sync { c.handleGrant(grant(activeOverride: nil)) }
+        await c.onMain { c.handleGrant(grant(activeOverride: nil)) }
 
         let provider = c.loopManager.settingsProvider
         XCTAssertNil(provider.history)

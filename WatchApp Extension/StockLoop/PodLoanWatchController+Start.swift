@@ -16,44 +16,29 @@ import os.log
 
 extension PodLoanWatchController {
 
-    /// Seeds finished doses from the grant, blocking; a failed seed refuses the takeover.
-    /// A dose still delivering arrives via the pod state as a mutable dose.
-    func ingestGrantHistory(_ grant: LoanGrant) -> Bool {
+    /// Seeds finished doses from the grant; a failed seed refuses the takeover. A dose still
+    /// delivering arrives via the pod state as a mutable dose. The takeover waits for it with the pod
+    /// not yet taken, so nothing doses meanwhile, and re-checks the loan after.
+    func ingestGrantHistory(_ grant: LoanGrant) async -> Bool {
         let seedReconciliation = self.now()
         let (entries, liveDoses) = grant.seedDoseEntries(finishedBy: seedReconciliation)
         let epoch = grant.epoch
-        let grossImpliedSum = entries.reduce(0.0) { $0 + $1.programmedUnits }
-        let liveNote = liveDoses.isEmpty ? "" :
-            String(format: "; %d live — delivery tracked from pod state, latest ends +%.0fm",
-                   liveDoses.count, (liveDoses.map { $0.endDate }.max()!.timeIntervalSince(seedReconciliation)) / 60)
 
-        let gate = DispatchSemaphore(value: 0)
-        var seedError: Error?
-        let loopManager = self.loopManager
-        Task {
-            // Reset first, so one physical dose stays one row.
-            await loopManager.resetInsulinBook(reason: "new grant (epoch \(epoch))")
-            do { try await loopManager.seedInsulinHistory(entries) } catch { seedError = error }
-            gate.signal()
-        }
-        gate.wait()
-        if let seedError {
-            SportLog.event("loan", "** INSULIN BOOK SEED FAILED — \(String(describing: seedError)) — refusing the takeover: a wrist without the phone's history must not dose **")
+        // Reset first, so one physical dose stays one row.
+        await loopManager.resetInsulinBook(reason: "the grant for loan \(epoch)")
+        do {
+            try await loopManager.seedInsulinHistory(entries)
+        } catch {
+            SportLog.event("loan", "could not seed the insulin history from the grant: \(String(describing: error))")
             return false
         }
-        SportLog.event("loan", String(format: "insulin book seeded from grant — %d finished record(s) under the phone's identities%@ · grossImpliedΣ=%.2fU",
-                                       entries.count, liveNote, grossImpliedSum))
+        SportLog.event("loan", "insulin history seeded from the grant: \(entries.count) finished dose(s), \(liveDoses.count) still delivering")
 
         // The display run, so the glance shows the inherited insulin from takeover; its IOB is
         // also logged to compare with the phone's.
         loopManager.updateDisplayState { state in
-            guard let iob = state.activeInsulin?.value else {
-                SportLog.event("loan", "SEED-IN IOB unavailable (display run incomplete: no settings or no recent glucose yet)")
-                return
-            }
-            SportLog.event("loan", String(format: "SEED-IN IOB=%.2fU @ takeover (%d seeded doses: %d finished%@)",
-                                          iob, entries.count + liveDoses.count, entries.count, liveNote))
-            self.loopManager.dumpIOBDecomp("SEED-IN", at: seedReconciliation)
+            guard let iob = state.activeInsulin?.value else { return }
+            SportLog.event("loan", String(format: "insulin on board at takeover %.2f U", iob))
         }
         ingestGrantCarbs(grant)
         ingestGrantGlucose(grant)
@@ -84,18 +69,10 @@ extension PodLoanWatchController {
                 supercededDate: nil)
         }
         let seededGrams = carbs.reduce(0.0) { $0 + $1.grams }
-        let source = (grant.carbHistory == nil) ? "absent(old phone)"
-                   : (carbs.isEmpty ? "empty(deleted on phone)→wipe" : "\(objects.count) entr\(objects.count == 1 ? "y" : "ies")")
-        let tf = DateFormatter()
-        tf.dateFormat = "HH:mm"
-        let manifest = carbs.isEmpty ? "—" : carbs.map { c in
-            String(format: "%.1fg@%@ sync=%@ prov=%@", c.grams, tf.string(from: c.startDate),
-                   c.syncIdentifier ?? "nil", String(c.provenanceIdentifier.prefix(12)))
-        }.joined(separator: " | ")
 
         loopManager.carbStore.setSyncCarbObjects(objects) { [weak self] error in
             if let error = error {
-                os_log("Grant carb replace failed: %{public}@", log: OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController"), type: .error, String(describing: error))
+                self?.log.error("Grant carb replace failed: %{public}@", String(describing: error))
                 return
             }
 
@@ -104,27 +81,19 @@ extension PodLoanWatchController {
             let expectedIDs = Set(carbs.compactMap { $0.syncIdentifier })
             let readFrom = (carbs.map(\.startDate).min() ?? self.now()).addingTimeInterval(-3600)
             self.loopManager.carbStore.getCarbEntries(start: readFrom) { result in
-                var verdict: String
                 switch result {
-                case .failure(let e):
-
-                    verdict = " ⚠ wipe UNVERIFIED (read-back failed: \(e))"
+                case .failure(let error):
+                    SportLog.event("cob-diff", "carbs replaced from the grant, but could not be read back: \(error)")
                 case .success(let stored):
                     let storedIDs = Set(stored.compactMap { $0.syncIdentifier })
                     let residual = storedIDs.subtracting(expectedIDs)
                     let missing = expectedIDs.subtracting(storedIDs)
                     let dupes = stored.count - storedIDs.count
                     if residual.isEmpty && missing.isEmpty && dupes == 0 {
-                        verdict = " · wipe verified \(stored.count)/\(expectedIDs.count)"
+                        SportLog.event("cob-diff", String(format: "carbs replaced from the grant: %d entries, %.0f g", expectedIDs.count, seededGrams))
                     } else {
-                        verdict = String(format: " ⚠ WIPE FAILED — %d residual, %d missing, %d duplicate",
-                                         residual.count, missing.count, dupes)
+                        SportLog.event("cob-diff", "carbs replaced from the grant, but \(residual.count) left over, \(missing.count) missing and \(dupes) duplicated")
                     }
-                }
-                self.loopManager.glanceCarbsOnBoard { cob in
-                    let postV = cob ?? 0
-                    SportLog.event("cob-diff", String(format: "REPLACE %@ · watch COB(post)=%.2f g · replaced %.0f g%@ · [%@]",
-                                                       source, postV, seededGrams, verdict, manifest))
                 }
             }
         }
@@ -153,13 +122,12 @@ extension PodLoanWatchController {
             do {
                 let stored = try await loopManager.glucoseStore.addGlucoseSamples(samples)
 
-                SportLog.event("glucose", "INGEST src=grant-seed stored=\(stored.count)/\(samples.count) · loan takeover warm-up")
-                SportLog.event("loan", "seeded \(stored.count) glucose sample\(stored.count == 1 ? "" : "s") from the phone (momentum/RC warm-up)")
+                SportLog.event("loan", "seeded \(stored.count) glucose sample(s) from the grant")
                 // Rerun the display now the phone's glucose is in: the takeover's first display
                 // run may have found none.
                 self.loopManager.updateDisplayState()
             } catch {
-                os_log("Grant glucose ingest failed: %{public}@", log: OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController"), type: .error, String(describing: error))
+                self.log.error("Grant glucose ingest failed: %{public}@", String(describing: error))
             }
         }
     }
@@ -177,19 +145,14 @@ extension PodLoanWatchController {
     /// The offline start is a backup, offered when the phone does not answer within 10 s. The request
     /// is the question; whether the phone looks reachable decides nothing (control row 2).
     func requestLoan(watchBuild: String) {
-        #if targetEnvironment(simulator)
-
-        SportLog.event("loan", "Start (sim): simFakeLoanFlow=\(simFakeLoanFlow) — \(simFakeLoanFlow ? "FAKE flow driver" : "REAL loan protocol")")
-        if simFakeLoanFlow { simDriveStart(); return }
-        #endif
-        queue.async {
+        DispatchQueue.main.async {
             guard self.phase == .idle || self.phase == .recoveredDrain else {
-                SportLog.event("loan", "Start ignored — not idle (phase \(self.phase.rawValue))")
+                SportLog.event("loan", "ignored a Start in phase \(self.phase.rawValue)")
                 return
             }
             // Allowed over a parked drain: its records keep resending under their own epoch.
             if self.phase == .recoveredDrain {
-                SportLog.event("loan", "Start over a parked drain — \(self.journal.unackedEvents().count) undrained event(s) keep resending; a seize would fold them in [seize]")
+                SportLog.event("loan", "starting with \(self.journal.unackedEvents().count) record(s) of an earlier loan still going to the phone")
             }
             self.startCancelled = false
             self.phase = .requested
@@ -197,9 +160,9 @@ extension PodLoanWatchController {
             self.lastIdleNote = nil
             self.withdrawSeizeOffer(reason: "a new Start request went out")
 
-            SportLog.event("loan", "REQUEST sent (build \(watchBuild)) — awaiting grant")
+            SportLog.event("loan", "loan requested from the phone, build \(watchBuild)")
             let known = max(self.epoch ?? 0, self.journal.activeEpoch ?? 0, self.persisted.highWaterEpoch, self.lastRevokedEpoch ?? 0)
-            self.sendMessage(.request(LoanRequest(watchBuild: watchBuild, supportsSeize: true, sentAt: self.now(), knownEpoch: known)))
+            self.sendMessage(.request(LoanRequest(watchBuild: watchBuild, sentAt: self.now(), knownEpoch: known)))
 
             // Rows 1 and 2: the request is the query; `LoanControl` decides the wait and what silence means.
             let situation = LoanControl.Situation(device: .watch, trigger: .startTapped)
@@ -233,18 +196,18 @@ extension PodLoanWatchController {
             if case .prompt(.startWithoutPhone) = LoanControl.afterQuery(.silence, onSilence: onSilence), let dormant {
                 self.seizeOffer = (issuedAt: dormant.issuedAt, token: dormant.seizeToken)
                 self.lastIdleNote = nil
-                SportLog.event("seize", String(format: "REQUEST TIMED OUT — no answer from the phone; offering offline start (credential issued %@) [seize]",
+                SportLog.event("seize", String(format: "no answer from the phone; offering an offline start from the grant stored %@",
                                                DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .short, timeStyle: .short)))
                 return
             }
 
             if case .tell(.noResponseFromPhoneAndNoCGM) = LoanControl.afterQuery(.silence, onSilence: onSilence) {
                 self.lastIdleNote = NSLocalizedString("No answer from iPhone. The watch isn't reading the CGM, so Sport Mode can't start without the iPhone.", comment: "Glance: loan request timed out and the watch has no CGM of its own")
-                SportLog.event("loan", "REQUEST TIMED OUT — no grant in \(Int(timeout))s, and no CGM on the watch: no offline start offered")
+                SportLog.event("loan", "no answer from the phone in \(Int(timeout)) s and the watch reads no CGM; no offline start offered")
                 return
             }
             self.lastIdleNote = NSLocalizedString("No answer from iPhone. Open Loop on the iPhone and try again.", comment: "Glance: loan request timed out")
-            SportLog.event("loan", "REQUEST TIMED OUT — no grant in \(Int(timeout))s (phone refused / busy / unreachable)")
+            SportLog.event("loan", "no answer from the phone in \(Int(timeout)) s")
         }
         requestTimeoutWork = work
         schedule(after: timeout, label: "request-timeout", execute: work)
@@ -254,7 +217,7 @@ extension PodLoanWatchController {
     private func withdrawSeizeOffer(reason: String) {
         guard seizeOffer != nil else { return }
         seizeOffer = nil
-        SportLog.event("seize", "offline offer WITHDRAWN — \(reason) [seize]")
+        SportLog.event("seize", "offline start offer withdrawn: \(reason)")
     }
 
     /// Resting, with a standing copy of a pump this watch would have to search for: Start needs the screen on.
@@ -306,7 +269,6 @@ extension PodLoanWatchController {
                 s.defaultRapidActingModel = ExponentialInsulinModelPreset(rawValue: raw)
             }
             decodedSettings = s
-            SportLog.event("loan", "grant settings supplement applied — basal \(s.basalRateSchedule == nil ? "MISSING" : "ok"), ISF \(s.insulinSensitivitySchedule == nil ? "MISSING" : "ok"), CR \(s.carbRatioSchedule == nil ? "MISSING" : "ok"), model \(s.defaultRapidActingModel.map { String(describing: $0) } ?? "default")")
         }
         return decodedSettings
     }
@@ -314,17 +276,17 @@ extension PodLoanWatchController {
     /// Builds the whole loan from a grant or refuses it, leaving Start working. Nothing touches
     /// the journal, epoch or pod until every check has passed.
     func handleGrant(_ grant: LoanGrant) {
-        SportLog.event("loan", "GRANT received — epoch \(grant.epoch), \(grant.pumpConfiguration.count)B pump configuration")
+        SportLog.event("loan", "grant received for loan \(grant.epoch)")
 
         // Any other grant retires a pending seize token.
         if !seizeActivationInFlight { pendingSeizeToken = nil }
 
         guard phase == .idle || phase == .requested || phase == .recoveredDrain else {
-            SportLog.event("loan", "grant ignored — wrong phase (\(phase.rawValue))")
+            SportLog.event("loan", "grant ignored in phase \(phase.rawValue)")
 
             // Answer a duplicate with what we hold; silence reads as "no watch".
             if phase == .active, (epoch ?? Int.min) >= grant.epoch {
-                sendHoldsPodStatusReport(reason: "stale grant e\(grant.epoch) refused")
+                sendHoldsPodStatusReport(reason: "a stale grant for loan \(grant.epoch)")
             }
             return
         }
@@ -333,7 +295,7 @@ extension PodLoanWatchController {
 
         // `notifyPhone` is false when merely declining a stale or duplicate grant.
         func rejectGrant(_ reason: String, notifyPhone: Bool) {
-            SportLog.event("loan", "grant REJECTED — \(reason); returning to resting so Start works again")
+            SportLog.event("loan", "grant rejected: \(reason)")
             if notifyPhone {
                 sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: reason)))
             }
@@ -385,24 +347,20 @@ extension PodLoanWatchController {
         if let missing = missing {
             returnToRestingPhase()
             lastIdleNote = String(format: NSLocalizedString("Can't start: %@ didn't arrive from the phone. Check therapy settings and try again.", comment: "Glance: grant refused for incomplete settings (1: missing field)"), missing)
-            SportLog.event("loan", "grant REFUSED — therapy settings incomplete (\(missing))")
+            SportLog.event("loan", "grant refused: therapy settings incomplete, \(missing) missing")
             sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "therapy settings incomplete: \(missing)")))
             return
         }
 
-        // The phone's upload services, staged until uploads start at ACTIVE.
-        LoanRemoteUploads.shared.stage(services: grant.sharedServiceConfigurations, phoneCGMUploadsGlucose: grant.phoneCGMUploadsGlucose)
-
         // A seize over a parked drain folds the old events into this epoch, keeping their identities.
         if seizeActivationInFlight, journal.hasUndrainedEvents {
             let carried = journal.adoptEpoch(grant.epoch)
-            SportLog.event("seize", "journal FOLDED — \(carried) undrained event(s) carried into epoch \(grant.epoch); the drain rides this loan's stream [seize]")
+            SportLog.event("seize", "carried \(carried) record(s) of the earlier loan into loan \(grant.epoch)")
 
             // A fold persists the token now: real records already exist.
             if let token = pendingSeizeToken {
                 updateState { $0.seizeToken = token }
                 pendingSeizeToken = nil
-                SportLog.event("seize", "reunion token …\(String(token.uuidString.suffix(8))) persisted at FOLD — the folded drain needs the retro-ack door [seize]")
             }
         } else {
             // Not a fold: refuse rather than clobber records the phone has not seen.
@@ -419,32 +377,25 @@ extension PodLoanWatchController {
             $0.epoch = grant.epoch
             $0.highWaterEpoch = max($0.highWaterEpoch, grant.epoch)
         }
-        phoneSupportsInterimHandback = grant.supportsInterimHandback ?? false
-        phoneSupportsOverrideRecords = grant.supportsOverrideRecords ?? false
         handbackRequested = false
         finalOfferSent = false
-        uploadsConfirmed = nil
 
         // Timed from the grant, so the ladder measures the pod, not the phone.
         attemptStartedAt = self.now()
         withdrawSeizeOffer(reason: "a grant was accepted")
         // Force-unwrapped only because the completeness check above has already returned on nil.
-        // Everything a resume needs, including the capability flags, saved with the phase.
+        // Everything a resume needs, saved with the phase.
         updateState {
             $0.phase = .takingOver
             $0.grantedSettings = .init(therapySettingsRaw: grant.therapySettingsRaw,
                                        supplementRaw: grant.therapySettingsSupplementRaw,
-                                       supportsInterimHandback: grant.supportsInterimHandback ?? false,
-                                       supportsOverrideRecords: grant.supportsOverrideRecords ?? false,
                                        glucoseAlertSettings: grant.glucoseAlertSettings,
-                                       settingsHistory: grant.settingsHistory,
-                                       serviceConfigurations: grant.serviceConfigurations,
-                                       phoneCGMUploadsGlucose: grant.phoneCGMUploadsGlucose)
+                                       settingsHistory: grant.settingsHistory)
         }
         loopManager.settings = decodedSettings!
         loopManager.settingsProvider.history = grant.settingsHistory
-        Task { @MainActor [loopManager] in loopManager.configureGlucoseAlerts(from: grant.glucoseAlertSettings, startingLoan: true) }
-        WatchAlertPresenter.logAuthorization("loan start, epoch \(grant.epoch)")
+        loopManager.configureGlucoseAlerts(from: grant.glucoseAlertSettings, startingLoan: true)
+        WatchAlertPresenter.logAuthorization("the start of loan \(grant.epoch)")
 
         // The phone's history, else none: a kept event the phone never saw could overlap one it
         // re-sends, which LoopKit traps on.
@@ -455,7 +406,7 @@ extension PodLoanWatchController {
                 loopManager.scheduleOverride = override
             } else {
                 // Undecodable override: say so, since this loan doses unscaled.
-                SportLog.event("override", "grant carried an override the watch could NOT decode — this loan doses UNSCALED; re-tap the preset on the wrist")
+                SportLog.event("override", "could not read the override in the grant; this loan doses without it")
             }
         }
 
@@ -468,65 +419,30 @@ extension PodLoanWatchController {
         // The loan inherits the phone's loop mode; an old phone defaults to open loop.
         loopManager.setClosedLoopEnabled(grant.phoneClosedLoopEnabled ?? false,
                                          reason: grant.phoneClosedLoopEnabled == nil
-                                            ? "(older phone sent no loop mode — defaulting open)"
-                                            : "inherited from the phone at grant")
+                                            ? "by default, as the phone sent no loop mode"
+                                            : "as the phone had it at the grant")
 
         // Loop recency belongs to the system, so it carries across.
         if let phoneLoop = grant.lastLoopCompleted {
-            loopManager.seedLastLoopCompleted(phoneLoop, source: "phone at grant")
-        }
-
-        if let s = decodedSettings {
-            let now = self.loopManager.now()
-            let isf = s.insulinSensitivitySchedule?.quantity(at: now).doubleValue(for: .milligramsPerDeciliter)
-            let cr = s.carbRatioSchedule?.value(at: now)
-            let basal = s.basalRateSchedule?.value(at: now)
-            let target = s.glucoseTargetRangeSchedule?.quantityRange(at: now)
-            let lo = target?.lowerBound.doubleValue(for: .milligramsPerDeciliter)
-            let hi = target?.upperBound.doubleValue(for: .milligramsPerDeciliter)
-            let csf = (isf != nil && cr != nil && cr! > 0) ? isf! / cr! : nil
-            SportLog.event("settings", String(
-                format: "granted @now — ISF %@ mg/dL/U · CR %@ g/U · CSF %@ mg/dL/g · basal %@ U/hr · target %@-%@ · maxBasal %@ U/hr · maxBolus %@ U",
-                isf.map { String(format: "%.0f", $0) } ?? "nil",
-                cr.map { String(format: "%.1f", $0) } ?? "nil",
-                csf.map { String(format: "%.2f", $0) } ?? "nil",
-                basal.map { String(format: "%.2f", $0) } ?? "nil",
-                lo.map { String(format: "%.0f", $0) } ?? "nil",
-                hi.map { String(format: "%.0f", $0) } ?? "nil",
-                s.maximumBasalRatePerHour.map { String(format: "%.2f", $0) } ?? "nil",
-                s.maximumBolus.map { String(format: "%.2f", $0) } ?? "nil"))
-
-            // Effective values: an override rescales basal, ISF and carb ratio too.
-            if let o = self.loopManager.scheduleOverride, o.isActive(at: now) {
-                let f = o.settings.effectiveInsulinNeedsScaleFactor
-                SportLog.event("settings", String(
-                    format: "override ACTIVE '%@' × %.2f insulin needs — effective ISF %@ mg/dL/U · CR %@ g/U · basal %@ U/hr (dosing uses THESE, not the schedule above)",
-                    o.context.presetNameForLog,
-                    f,
-                    isf.map { String(format: "%.0f", $0 / f) } ?? "nil",
-                    cr.map { String(format: "%.1f", $0 / f) } ?? "nil",
-                    basal.map { String(format: "%.2f", $0 * f) } ?? "nil"))
-            }
+            loopManager.seedLastLoopCompleted(phoneLoop, source: "the phone at the grant")
         }
 
         // Built through the registry from the phone's export and this watch's saved local state,
         // from which the kit attaches its own handle for the pump if it has one. A pump that can be
         // loaned has control and an odometer.
-        SportLog.event("loan", "pump manager: building from the phone's configuration")
         guard let configuration = grant.sharedPumpConfiguration,
               let manager = watchPumpManager(adopting: configuration, localState: pumpLocalState(for: configuration)),
               let control = manager as? ExclusiveDeviceControl, manager is PumpDeliveryOdometer else {
             teardownPump()
             returnToRestingPhase()
             lastIdleNote = NSLocalizedString("Couldn't build the pod driver from the iPhone's details. Try again.", comment: "Glance: pump snapshot rejected")
-            SportLog.event("loan", "grant FAILED — could not build the pump from the phone's configuration")
+            SportLog.event("loan", "takeover failed: could not build the pump manager from the phone's configuration")
             sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pump configuration rejected")))
             return
         }
-        SportLog.event("loan", "pump manager: built (\(configuration.managerIdentifier))")
 
         manager.pumpManagerDelegate = self
-        manager.delegateQueue = queue
+        manager.delegateQueue = .main
         pumpManager = manager
         pumpStateStore.wrappedValue = manager.watchRawValue
         savePumpLocalState(of: manager)
@@ -534,15 +450,30 @@ extension PodLoanWatchController {
         // The export's header opens the ledger's window at the copy's reading (on a phoneless start it
         // can be half an hour old); the takeover read, like every pump report, closes it.
         updateState { $0.ledgerLast = configuration.deliveredUnits.map { (units: $0, at: configuration.asOf) } }
-        guard ingestGrantHistory(grant) else {
-            teardownPump()
-            returnToRestingPhase()
-            lastIdleNote = NSLocalizedString("Couldn't load the insulin history from the iPhone. Try again.", comment: "Glance: insulin book seed failed")
-            SportLog.event("loan", "grant FAILED — the insulin book could not be seeded from the phone's history")
-            sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "insulin book seed failed")))
-            return
+        Task { [weak self] in
+            guard let self else { return }
+            let seeded = await self.ingestGrantHistory(grant)
+            // The loan may have moved on while the history was seeded: a revoke, a teardown, a newer grant.
+            guard self.phase == .takingOver, self.epoch == grant.epoch,
+                  (self.pumpManager as AnyObject?) === (manager as AnyObject) else {
+                SportLog.event("loan", "takeover of loan \(grant.epoch) abandoned: the loan moved on while the insulin history was seeded")
+                return
+            }
+            guard seeded else {
+                teardownPump()
+                returnToRestingPhase()
+                lastIdleNote = NSLocalizedString("Couldn't load the insulin history from the iPhone. Try again.", comment: "Glance: insulin book seed failed")
+                SportLog.event("loan", "takeover failed: the insulin history could not be seeded")
+                sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "insulin book seed failed")))
+                return
+            }
+            self.takeControlForTakeover(grant: grant, manager: manager, control: control, configuration: configuration)
         }
+    }
 
+    /// The takeover once the insulin book is seeded: find or dial the pod, take control, read it.
+    private func takeControlForTakeover(grant: LoanGrant, manager: PumpManager, control: ExclusiveDeviceControl,
+                                        configuration: SharedDeviceConfiguration) {
         // A pump this watch has never met must be found first, which needs the screen on.
         let discover = watchTakeControlNeedsSearch(adopting: configuration, localState: pumpLocalState(for: configuration))
         takeoverFirstContact = discover
@@ -550,7 +481,7 @@ extension PodLoanWatchController {
         takeoverNudges = 0
         // Only a first contact needs the screen, so only it asks for the wrist and taps it.
         if discover {
-            SportLog.event("loan", "takeover: FIRST CONTACT with this pod — finding it needs the watch screen on; the glance asks for the wrist up")
+            SportLog.event("loan", "first contact with this pod: the takeover needs the watch screen on")
             for delay in [8.0, 30.0] {
                 schedule(after: delay, label: "takeover-nudge") { [weak self] in
                     guard let self = self, self.phase == .takingOver, self.epoch == grant.epoch,
@@ -558,18 +489,13 @@ extension PodLoanWatchController {
                                                    nudgesSoFar: self.takeoverNudges) else { return }
                     self.takeoverNudges += 1
                     self.playTakeoverNudge()
-                    SportLog.event("loan", String(format: "takeover: pod not reached after %.0fs with the screen off — tapped the wrist", delay))
+                    SportLog.event("loan", String(format: "pod not reached after %.0f s with the screen off; asked for the screen with a tap", delay))
                     self.notifyUI()
                 }
             }
         }
         control.takeControl()
-        SportLog.event("loan", "pump adopted — \(discover ? "search armed" : "own handle — the first read dials")")
-
-        SportLog.event("loan", String(format: "takeover ladder start — lease %+.0fs, epoch %d%@",
-                                      grant.expiresAt.timeIntervalSince(now()), grant.epoch,
-                                      seizeMarkerActive ? " [seize]" : ""))
-        queue.async { [weak self] in self?.attemptTakeoverRead(manager: manager, grant: grant, attempt: 0) }
+        DispatchQueue.main.async { [weak self] in self?.attemptTakeoverRead(manager: manager, grant: grant, attempt: 0) }
     }
 
     /// Leaving the takeover cancels the readiness-driven retry and the backstop.
@@ -590,7 +516,6 @@ extension PodLoanWatchController {
             if takeoverFirstContact { notifyUI() }
         }
         guard let action = takeoverRetryAction else { return }
-        SportLog.event("loan", "takeover: pump control READY (kit event) — reading now instead of waiting for the backstop")
         takeoverRetryAction = nil
         takeoverBackstop?.cancel()
         takeoverBackstop = nil
@@ -609,9 +534,6 @@ extension PodLoanWatchController {
             $0.phase = .active
             if let token { $0.seizeToken = token }
         }
-        if let token {
-            SportLog.event("seize", "seized loan ACTIVE — reunion token …\(String(token.uuidString.suffix(8))) persisted for the offer echo [seize]")
-        }
     }
 
     /// The glance note when the takeover window closes with no pod answer. After a grant the phone takes the
@@ -625,8 +547,7 @@ extension PodLoanWatchController {
     /// Reads pod status until it answers: again when the pump reports ready, or after 8 s if no
     /// report comes (a read can fail on a link already up). The lease is the only deadline; it is
     /// re-checked every iteration and expiry outranks a good status.
-    func attemptTakeoverRead(manager: PumpManager, grant: LoanGrant, attempt: Int, driver: String = "initial") {
-        let control = manager as? ExclusiveDeviceControl
+    func attemptTakeoverRead(manager: PumpManager, grant: LoanGrant, attempt: Int) {
         let odometer = manager as? PumpDeliveryOdometer
         let refresh: (@escaping (Bool) -> Void) -> Void = { completion in
             guard let odometer else { return completion(false) }
@@ -634,10 +555,10 @@ extension PodLoanWatchController {
         }
         refresh { [weak self] success in
             guard let self = self else { return }
-            self.queue.async {
+            DispatchQueue.main.async {
                 // Superseded while the read was out; nothing doses on a stale epoch.
                 guard self.phase == .takingOver, self.epoch == grant.epoch else {
-                    SportLog.event("loan", "TAKEOVER SUPERSEDED — epoch \(grant.epoch) abandoned mid-ladder (now phase \(self.phase.rawValue), epoch \(self.epoch.map(String.init) ?? "nil"))")
+                    SportLog.event("loan", "takeover of loan \(grant.epoch) abandoned: the loan moved on during a pod read")
                     return
                 }
 
@@ -647,20 +568,21 @@ extension PodLoanWatchController {
                     self.returnToRestingPhase()
 
                     self.lastIdleNote = Self.takeoverExpiredNote(offlineStart: offlineStart)
-                    SportLog.event("loan", "TAKEOVER ABORTED — grant lease expired mid-takeover after \(attempt + 1) read(s), epoch \(grant.epoch)\(self.seizeMarkerActive ? " [seize]" : "")")
+                    SportLog.event("loan", "takeover failed: the pod did not answer before the grant expired, after \(attempt + 1) read(s)")
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "grant expired mid-takeover")))
                     return
                 }
                 if success, let odometer, let reading = odometer.deliveredUnits {
                     let delivered = reading.units
+                    let offlineStart = self.pendingSeizeToken != nil
                     // The base for every later audit of this loan.
                     self.revokeCapturedDelivered = nil
                     self.revokeCapturedDeliveredAt = nil
                     self.recordTakeoverActive(delivered: delivered, at: reading.at)
                     self.onLoanActiveChanged?(true)
                     let takeoverSecs = self.attemptStartedAt.map { self.now().timeIntervalSince($0) } ?? -1
-                    SportLog.event("loan", String(format: "ACTIVE — epoch %d, pod taken after %d read(s) in %.1fs [takeover-timing], odometer %.2f U, final read driver=%@ · %@",
-                                                  grant.epoch, attempt + 1, takeoverSecs, delivered, driver, RuntimeStateLog.snapshot()))
+                    SportLog.event("loan", String(format: "%@loan %d active: pod taken after %d read(s) in %.1f s, pump total %.2f U",
+                                                  offlineStart ? "offline " : "", grant.epoch, attempt + 1, takeoverSecs, delivered))
                     self.sendMessage(.takeoverComplete(TakeoverComplete(epoch: grant.epoch, firstPodStatus: self.currentPodStatus())))
 
                     // The read's own report closed the ledger's window from the copy's reading and booked
@@ -669,27 +591,19 @@ extension PodLoanWatchController {
                     self.loopManager.pumpManager = manager
                     self.loopManager.loop()
                 } else {
-                    if attempt == 0 {
-                        SportLog.event("loan", "connecting to pod… (BLE session establishing; reading again when the pump reports ready, or after 8 s, until the grant lease runs out)")
-                    }
-                    let readElapsed = self.attemptStartedAt.map { self.now().timeIntervalSince($0) } ?? -1
-                    SportLog.event("loan", String(format: "takeover read %d driver=%@ (+%.1fs) — pump link %@",
-                                                  attempt + 1, driver, readElapsed,
-                                                  control.map { $0.isControlReady ? "ready" : "not ready" } ?? "no control"))
-
-                    let fireRetry: (String) -> Void = { [weak self] nextDriver in
+                    let fireRetry: () -> Void = { [weak self] in
                         guard let self = self else { return }
                         self.takeoverRetryAction = nil
                         self.takeoverBackstop = nil
                         guard self.phase == .takingOver, self.epoch == grant.epoch else {
-                            SportLog.event("loan", "TAKEOVER SUPERSEDED — epoch \(grant.epoch) abandoned between reads (now phase \(self.phase.rawValue), epoch \(self.epoch.map(String.init) ?? "nil"))")
+                            SportLog.event("loan", "takeover of loan \(grant.epoch) abandoned: the loan moved on between pod reads")
                             return
                         }
-                        self.attemptTakeoverRead(manager: manager, grant: grant, attempt: attempt + 1, driver: nextDriver)
+                        self.attemptTakeoverRead(manager: manager, grant: grant, attempt: attempt + 1)
                     }
                     // Two objects: a cancelled work item performs nothing.
-                    self.takeoverRetryAction = { fireRetry("event") }
-                    let backstop = DispatchWorkItem { fireRetry("backstop") }
+                    self.takeoverRetryAction = { fireRetry() }
+                    let backstop = DispatchWorkItem { fireRetry() }
                     self.takeoverBackstop = backstop
                     self.schedule(after: 8, label: "takeover-read", execute: backstop)
                 }
