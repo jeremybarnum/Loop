@@ -734,6 +734,9 @@ class LoopAppManager: NSObject {
         guard let notification = notification else {
             return false
         }
+        if let deviceDataManager, deviceDataManager.podLoanHandlesPush(notification) {
+            return true
+        }
         servicesManager.handleRemoteNotification(notification)
         return true
     }
