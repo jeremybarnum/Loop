@@ -117,14 +117,18 @@ final class StockLoopSession {
 
                 NotificationCenter.default.post(name: .podLoanPhaseDidChange, object: nil)
 
-
                 self.startLogPulse()
                 RuntimeStateLog.startHeartbeat()
+
+                // Uploads, when the Start grant carried service configurations.
+                LoanRemoteUploads.shared.begin(loopManager: self.stack.loopManager)
             } else {
                 self.stopLogPulse()
                 RuntimeStateLog.stopHeartbeat()
                 self.sendLogSnapshot("loan end")
 
+                // Normally already done by teardownPump.
+                LoanRemoteUploads.shared.end()
 
                 LoopStallWatchdog.disarm()
 

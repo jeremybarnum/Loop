@@ -352,6 +352,9 @@ extension PodLoanWatchController {
             return
         }
 
+        // The phone's upload services, staged until uploads start at ACTIVE.
+        LoanRemoteUploads.shared.stage(services: grant.sharedServiceConfigurations, phoneCGMUploadsGlucose: grant.phoneCGMUploadsGlucose)
+
         // A seize over a parked drain folds the old events into this epoch, keeping their identities.
         if seizeActivationInFlight, journal.hasUndrainedEvents {
             let carried = journal.adoptEpoch(grant.epoch)
@@ -379,6 +382,7 @@ extension PodLoanWatchController {
         }
         handbackRequested = false
         finalOfferSent = false
+        uploadsConfirmed = nil
 
         // Timed from the grant, so the ladder measures the pod, not the phone.
         attemptStartedAt = self.now()
@@ -390,7 +394,9 @@ extension PodLoanWatchController {
             $0.grantedSettings = .init(therapySettingsRaw: grant.therapySettingsRaw,
                                        supplementRaw: grant.therapySettingsSupplementRaw,
                                        glucoseAlertSettings: grant.glucoseAlertSettings,
-                                       settingsHistory: grant.settingsHistory)
+                                       settingsHistory: grant.settingsHistory,
+                                       serviceConfigurations: grant.serviceConfigurations,
+                                       phoneCGMUploadsGlucose: grant.phoneCGMUploadsGlucose)
         }
         loopManager.settings = decodedSettings!
         loopManager.settingsProvider.history = grant.settingsHistory
