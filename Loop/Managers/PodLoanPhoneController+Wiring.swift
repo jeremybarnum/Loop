@@ -64,6 +64,9 @@ extension WatchDataManager {
                 }
             },
             cgmUploadsGlucose: { [weak self] in self?.deviceManager.cgmManager?.shouldSyncToRemoteService ?? true },
+            phoneReach: { [weak self] in
+                FeatureFlags.sportModePushEnabled ? SportModePushKey.phoneReach(deviceToken: self?.settingsManager.settings.deviceToken) : nil
+            },
             addPumpEvents: { [weak self] events, lastReconciliation, completion in
                 guard let self = self else { completion(nil); return }
 
