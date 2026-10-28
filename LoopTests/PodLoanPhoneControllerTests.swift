@@ -2669,12 +2669,13 @@ extension PodLoanPhoneControllerTests {
 
     // MARK: - Request TTL (queued-channel ghosts)
 
-    /// A request older than the TTL earns no grant; a fresh one still grants.
+    /// A request older than the watch's wait earns no grant; a fresh one still grants.
     func testStaleRequestIsIgnoredAndAFreshOneStillGrants() throws {
         let controller = makeController(now: { self.clock })
 
+        // Delivered 30 s late: the watch gave up after its 10 s wait and may have started without this phone.
         controller.handleIncoming(userInfo: try LoanMessage.request(
-            LoanRequest(watchBuild: "t", sentAt: clock.addingTimeInterval(-300))).transportDictionary())
+            LoanRequest(watchBuild: "t", sentAt: clock.addingTimeInterval(-30))).transportDictionary())
 
         // The rejection is a silent return; stillness is the assertion.
         spinMain(0.4)

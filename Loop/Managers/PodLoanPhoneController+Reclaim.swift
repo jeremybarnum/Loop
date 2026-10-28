@@ -17,8 +17,9 @@ extension PodLoanPhoneController {
     /// A repeat inside this window is transport redelivery, not the user asking again.
     static let requestDedupeWindow: TimeInterval = .minutes(2)
 
-    /// Older requests have a sender that has moved on (the watch waits 60 s).
-    static let requestTTL: TimeInterval = 90
+    /// Older requests have a sender that has moved on: past its wait, the watch may already have
+    /// started without this phone.
+    static let requestTTL: TimeInterval = LoanControl.Wait.onScreen.seconds
 
     /// How long a take-back waits for the pod's link before it refuses. Short on purpose: the pod is
     /// normally in reach at once, and a refusal costs the user one more tap. Shortened by tests.
