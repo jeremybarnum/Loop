@@ -6,8 +6,8 @@
 //  current watchOS no longer takes new ClockKit complications). The same two as before:
 //  "Loop Status" — the reading, its trend and the loop's freshness — and "Glucose Graph" — the
 //  reading over the chart of recent and predicted glucose. The watch app publishes a
-//  ComplicationSnapshot (and the graph image) to the shared app group and asks WidgetKit to reload;
-//  this extension only reads and lays it out.
+//  ComplicationSnapshot (with the graph's data) to the shared app group and asks WidgetKit to reload;
+//  this extension only reads it, lays it out and draws the graph at its slot's size.
 //
 
 import SwiftUI
@@ -16,19 +16,15 @@ import WidgetKit
 struct ComplicationEntry: TimelineEntry {
     let date: Date
     let snapshot: ComplicationSnapshot?
-    /// The face editor's preview, which shows sample content.
-    var isPreview = false
 }
 
 struct ComplicationProvider: TimelineProvider {
     func placeholder(in context: Context) -> ComplicationEntry {
-        ComplicationEntry(date: Date(), snapshot: .sample, isPreview: true)
+        ComplicationEntry(date: Date(), snapshot: .sample)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (ComplicationEntry) -> Void) {
-        completion(context.isPreview
-                   ? ComplicationEntry(date: Date(), snapshot: .sample, isPreview: true)
-                   : ComplicationEntry(date: Date(), snapshot: ComplicationSnapshot.load()))
+        completion(ComplicationEntry(date: Date(), snapshot: context.isPreview ? .sample : ComplicationSnapshot.load()))
     }
 
     /// Now, then each moment something visible changes on its own (the reading goes stale, the loop's
@@ -126,58 +122,74 @@ struct GlucoseGraphView: View {
     private var snapshot: ComplicationSnapshot { entry.snapshot ?? ComplicationSnapshot() }
 
     var body: some View {
-        // Stock's layout: the reading and its trend, the chart under it across the slot.
+        // Stock's layout: the reading and its trend, the chart under it.
         VStack(alignment: .leading, spacing: 1) {
             Text(snapshot.glucose(at: entry.date) + snapshot.trend(at: entry.date))
                 .font(.headline)
                 .widgetAccentable()
-            GeometryReader { space in
-                chart(in: space.size)
+            if let graph = snapshot.graph {
+                GlucoseGraphCanvas(graph: graph, now: entry.date)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .complicationBackground()
     }
-
-    /// The app draws the chart at the size this slot reports, so it fills the width on every watch.
-    @ViewBuilder private func chart(in size: CGSize) -> some View {
-        if entry.isPreview {
-            SampleGraph()
-        } else {
-            let _ = ComplicationSnapshot.saveGraphSize(size)
-            if snapshot.graphRenderedAt != nil, let url = ComplicationSnapshot.graphURL,
-               let image = UIImage(contentsOfFile: url.path) {
-                Image(uiImage: image).resizable().aspectRatio(contentMode: .fit)
-                    .frame(width: size.width, height: size.height, alignment: .leading)
-            }
-        }
-    }
 }
 
-/// The face editor's preview of the chart, in the real one's style: the target band, the recent
-/// readings dotted, the prediction dashed. The real chart exists only once the watch app has drawn one.
-private struct SampleGraph: View {
+/// Stock's ClockKit chart (ComplicationChartManager), drawn at whatever size the slot leaves it.
+struct GlucoseGraphCanvas: View {
+    let graph: ComplicationGraph
+    let now: Date
+
+    /// The watch app's "glucose" asset.
+    private static let glucoseColor = Color(red: 0.310, green: 0.678, blue: 0.973)
+
     var body: some View {
-        GeometryReader { space in
-            let w = space.size.width, h = space.size.height
-            let target = h * 0.7
-            // A rise and fall back to the target: readings to 60 % of the width, the prediction after.
-            let point = { (x: CGFloat) -> CGPoint in
-                CGPoint(x: x * w, y: x < 0.75 ? target - h * 0.55 * sin(.pi * x / 0.75) : target)
+        Canvas { context, size in
+            let start = now.addingTimeInterval(-ComplicationGraph.halfSpan)
+            let end = now.addingTimeInterval(ComplicationGraph.halfSpan)
+            let valueSpan = max(graph.glucoseMax - graph.glucoseMin, 1)
+
+            func x(_ date: Date) -> CGFloat {
+                CGFloat(date.timeIntervalSince(start) / end.timeIntervalSince(start)) * size.width
             }
-            let curve = { (from: CGFloat, to: CGFloat) -> Path in
-                Path { path in
-                    path.move(to: point(from))
-                    stride(from: from, through: to, by: 0.02).forEach { path.addLine(to: point($0)) }
+            func y(_ value: Double) -> CGFloat {
+                CGFloat((graph.glucoseMax - value) / valueSpan) * size.height
+            }
+            func fill(_ band: ComplicationGraph.Band, until bandEnd: Date, opacity: Double) {
+                let left = x(max(start, band.start)), right = x(min(end, bandEnd))
+                guard right > left else { return }
+                let top = y(band.max)
+                let rect = CGRect(x: left, y: top, width: right - left, height: max(y(band.min) - top, 2))
+                context.fill(Path(rect), with: .color(Self.glucoseColor.opacity(opacity)))
+            }
+
+            for band in graph.targetRanges {
+                fill(band, until: band.end, opacity: graph.override != nil ? 0.2 : 0.3)
+            }
+            if let override = graph.override {
+                fill(override, until: override.end, opacity: 0.4)
+                if end > override.end {
+                    fill(override, until: end, opacity: 0.25)
                 }
             }
-            ZStack(alignment: .topLeading) {
-                Rectangle().fill(Color.blue.opacity(0.4))
-                    .frame(width: w, height: h * 0.12)
-                    .offset(y: target - h * 0.06)
-                curve(0, 0.6).stroke(Color.blue, style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [0.5, 3]))
-                curve(0.6, 1).stroke(Color.white.opacity(0.8), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+
+            for point in graph.historical where point.date >= start && point.date <= end {
+                let side: CGFloat = point.isManual ? 3 : 2
+                context.fill(Path(CGRect(x: x(point.date), y: y(point.value), width: side, height: side)),
+                             with: .color(point.isManual ? .red : Self.glucoseColor))
             }
+
+            if graph.predicted.count > 2 {
+                var path = Path()
+                path.addLines(graph.predicted.map { CGPoint(x: x($0.date), y: y($0.value)) })
+                context.stroke(path, with: .color(.white), style: StrokeStyle(lineWidth: 1, dash: [5, 3], dashPhase: 11))
+            }
+
+            let label = { (text: String) in Text(text).font(.system(size: 10)).foregroundColor(.white) }
+            context.draw(label(graph.maxLabel), at: CGPoint(x: size.width - 2, y: 2), anchor: .topTrailing)
+            context.draw(label(graph.minLabel), at: CGPoint(x: size.width - 2, y: size.height - 2), anchor: .bottomTrailing)
         }
     }
 }
