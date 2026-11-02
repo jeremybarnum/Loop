@@ -23,14 +23,16 @@ enum WatchAlertPresenter {
         requestIdentifier.hasPrefix(requestPrefix)
     }
 
-    /// Uses `backgroundContent`; a `.repeating` trigger becomes a repeating notification.
-    static func present(_ alert: LoopKit.Alert) {
+    /// Uses `backgroundContent`; a `.repeating` trigger becomes a repeating notification. A failed
+    /// pump's alert also offers to deactivate it.
+    static func present(_ alert: LoopKit.Alert, offeringDeactivation: Bool = false) {
         let content = UNMutableNotificationContent()
         content.title = alert.backgroundContent.title
         content.body = alert.backgroundContent.body
         content.threadIdentifier = alert.identifier.managerIdentifier
         // Stock's keys and acknowledge category, so an OK on the wrist reaches the alert's manager.
-        content.categoryIdentifier = alert.categoryIdentifier ?? LoopNotificationCategory.alert.rawValue
+        content.categoryIdentifier = offeringDeactivation ? failedDeviceCategory
+            : alert.categoryIdentifier ?? LoopNotificationCategory.alert.rawValue
         content.userInfo = [LoopNotificationUserInfoKey.managerIDForAlert.rawValue: alert.identifier.managerIdentifier,
                             LoopNotificationUserInfoKey.alertTypeID.rawValue: alert.identifier.alertIdentifier]
 
@@ -60,6 +62,15 @@ enum WatchAlertPresenter {
                                                         trigger: trigger))
     }
 
+    /// Withdraws every alert that offered to deactivate the pump: it is gone.
+    static func retractFailedDeviceAlerts() {
+        UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
+            let ids = delivered.map(\.request).filter { $0.content.categoryIdentifier == failedDeviceCategory }.map(\.identifier)
+            WristAlerts.scheduler.removePendingRequests(withIdentifiers: ids)
+            WristAlerts.scheduler.removeDeliveredRequests(withIdentifiers: ids)
+        }
+    }
+
     /// Withdraws a pending or delivered alert when the condition clears.
     static func retract(_ identifier: LoopKit.Alert.Identifier) {
         let request = requestIdentifier(for: identifier)
@@ -69,13 +80,22 @@ enum WatchAlertPresenter {
 
     // MARK: - Acknowledgement
 
+    /// A failed pump's alert: stock's, plus Deactivate Pod, which opens the app on its confirmation.
+    static let failedDeviceCategory = "sportmode.failedDevice"
+    static let deactivateAction = "sportmode.deactivateFailedDevice"
+
     /// Stock's device-alert category: OK, and a dismissal that also acknowledges.
     static func registerCategory() {
         let ok = UNNotificationAction(identifier: NotificationManager.Action.acknowledgeAlert.rawValue,
                                       title: NSLocalizedString("OK", comment: "The title of the notification action to acknowledge a device alert"),
                                       options: [])
+        let deactivate = UNNotificationAction(identifier: deactivateAction,
+                                              title: NSLocalizedString("Deactivate Pod", comment: "Watch notification action on a faulted pod's alarm: opens the app to confirm deactivating it"),
+                                              options: [.foreground, .destructive])
         UNUserNotificationCenter.current().setNotificationCategories([
             UNNotificationCategory(identifier: LoopNotificationCategory.alert.rawValue, actions: [ok],
+                                   intentIdentifiers: [], options: .customDismissAction),
+            UNNotificationCategory(identifier: failedDeviceCategory, actions: [ok, deactivate],
                                    intentIdentifiers: [], options: .customDismissAction)
         ])
     }

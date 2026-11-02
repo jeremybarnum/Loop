@@ -151,6 +151,8 @@ extension PodLoanPhoneController {
             return
         }
 
+        if offer.podDeactivated, offer.epoch == epoch { notePodDeactivatedOnWatch(loan: offer.epoch) }
+
         // One commit at a time; coalesce by epoch, and never let an interim replace a waiting final.
         if commitInFlight {
             let storedIsFinal = coalescedOffers[offer.epoch]?.released == true

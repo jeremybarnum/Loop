@@ -17,8 +17,9 @@ import os.log
 extension PodLoanWatchController {
 
     /// The user's End: starts the drain; dosing continues until everything is acked. A phone
-    /// without interim-offer support gets the single-phase path.
-    func beginHandback() {
+    /// without interim-offer support gets the single-phase path. `trigger` is the End tap, or the
+    /// looper's Deactivate of a faulted pod.
+    func beginHandback(trigger: LoanControl.Trigger = .endTapped) {
         DispatchQueue.main.async {
             guard self.phase == .active, let pumpManager = self.pumpManager else { return }
             guard !self.handbackRequested else { return }
@@ -41,16 +42,24 @@ extension PodLoanWatchController {
             self.handbackStartedAt = self.now()
             HandbackStuckAlert.arm()
             SportLog.event("loan", "hand-back requested with \(self.journal.unackedEvents().count) record(s) to send; the watch doses until the phone answers")
-            // Rows 7, 8 and 21: the offer is the query; `LoanControl` decides what silence means.
+            // Rows 7, 8, 21, 26 and 27: the offer is the query; `LoanControl` decides what silence means.
             let tappedAt = self.now()
             self.handbackAckedAt = nil
             self.sendHandbackOffer(recovered: false)
-            guard case .query(let wait, let onSilence) = LoanControl.decide(LoanControl.Situation(device: .watch, trigger: .endTapped)) else { return }
+            guard case .query(let wait, let onSilence) = LoanControl.decide(LoanControl.Situation(device: .watch, trigger: trigger)) else { return }
             self.schedule(after: wait.seconds, label: "handback-answer") { [weak self] in
                 guard let self = self, self.phase == .active, self.handbackRequested,
                       self.handbackAckedAt.map({ $0 >= tappedAt }) != true else { return }
-                if case .refuse = LoanControl.afterQuery(.silence, onSilence: onSilence) {
+                switch LoanControl.afterQuery(.silence, onSilence: onSilence) {
+                case .refuse:
                     self.handbackTimedOut(unreachable: true)
+                case .tell(.podDeactivatedPhoneAway):
+                    self.handbackTimedOut(unreachable: true)
+                    // Queued, and by push where it can: the phone ends Sport Mode when it hears (row 27).
+                    self.sendHoldsPodStatusReport(reason: "the pod is deactivated and the phone did not answer the End")
+                    if !self.isPhoneReachable() { self.pushHoldsPodStatusReport() }
+                default:
+                    break
                 }
             }
         }
@@ -254,7 +263,8 @@ extension PodLoanWatchController {
             seizeToken: persisted.seizeToken,
 
             lastLoopCompleted: loopManager.lastLoopCompleted,
-            uploadsConfirmed: phase != .active ? uploadsConfirmed : nil)
+            uploadsConfirmed: phase != .active ? uploadsConfirmed : nil,
+            podDeactivated: persisted.podDeactivatedEpoch == epoch)
         if offer.released == true, finalOfferSentAt == nil { finalOfferSentAt = self.now() }
         handbackResendCount += 1
 
@@ -521,7 +531,8 @@ extension PodLoanWatchController {
             holdsPod: phase == .active,
             knowsGrant: true,
             podReachable: phase == .active ? podReachedLately : nil,
-            loanStartedAt: persisted.deliveredAtTakeoverAt)
+            loanStartedAt: persisted.deliveredAtTakeoverAt,
+            podDeactivated: persisted.podDeactivatedEpoch == current)
         sendMessage(.statusReport(report))
     }
 
@@ -542,4 +553,60 @@ extension PodLoanWatchController {
             faultCode: pumpFaultDescription)
     }
 
+}
+
+// MARK: - A faulted pod, deactivated here (rows 26 and 27)
+
+extension PodLoanWatchController {
+
+    /// The kit's name for ending the pod while it has failed for good; nil otherwise.
+    var failedPodDeactivationTitle: String? {
+        guard phase == .active, !podDeactivatedHere else { return nil }
+        return pumpControl?.failedDeviceDeactivationTitle
+    }
+
+    var podDeactivatedHere: Bool {
+        epoch != nil && persisted.podDeactivatedEpoch == epoch
+    }
+
+    /// The looper's Deactivate: the pod is ended and forgotten, its last delivery booked here as the
+    /// kit books it, and Sport Mode ends.
+    func deactivateFailedPod() {
+        DispatchQueue.main.async {
+            guard !self.deactivatingPod, self.failedPodDeactivationTitle != nil, let control = self.pumpControl else { return }
+            self.deactivatingPod = true
+            self.podDeactivationError = nil
+            self.notifyUI()
+            SportLog.event("loan", "deactivating the faulted pod from the watch: \(self.pumpFaultDescription ?? "no fault text")")
+            // Read before the pod is forgotten: the hand-back's insulin check rules on it.
+            let reading = self.pumpOdometer?.deliveredUnits
+            Task {
+                do {
+                    try await control.deactivateFailedDevice()
+                    await MainActor.run { self.podWasDeactivated(lastReading: reading) }
+                } catch {
+                    await MainActor.run {
+                        self.deactivatingPod = false
+                        self.podDeactivationError = error.localizedDescription
+                        SportLog.event("loan", "deactivating the pod failed, so it stays: \(error)")
+                        self.notifyUI()
+                    }
+                }
+            }
+        }
+    }
+
+    private func podWasDeactivated(lastReading: (units: Double, at: Date)?) {
+        deactivatingPod = false
+        guard phase == .active, let current = epoch else { return }
+        updateState { $0.podDeactivatedEpoch = current }
+        revokeCapturedDelivered = lastReading?.units
+        revokeCapturedDeliveredAt = lastReading?.at
+        WatchAlertPresenter.retractFailedDeviceAlerts()
+        // Stopped on purpose: no Loop Failure ladder while the End reaches the phone.
+        LoopStallWatchdog.disarm()
+        SportLog.event("loan", "the pod is deactivated; Sport Mode ends")
+        notifyUI()
+        beginHandback(trigger: .podDeactivated)
+    }
 }
