@@ -180,11 +180,16 @@ public struct LoanGrant: Codable, Equatable {
     /// The phone's glucose alert settings (JSON), so the wrist sounds the same lows.
     public let glucoseAlertSettings: Data?
 
-    /// The phone's overrides of the last 24 h, ended ones included, as a binary plist of raw values.
+    /// The phone's overrides of the last 24 h (84 h with slow retrospective correction), ended ones
+    /// included, as a binary plist of raw values.
     public let overrideHistoryRaw: Data?
 
-    /// The phone's settings over the last 24 h, up to the grant.
+    /// The phone's settings over the last 24 h (84 h with slow retrospective correction), up to the grant.
     public let settingsHistory: LoanSettingsHistory?
+
+    /// Present while the phone runs slow retrospective correction: its history from before the windows
+    /// above (`LoanOlderHistory`, encoded). The watch runs the experiment only with it.
+    public let slowRetrospectiveCorrectionHistory: Data?
 
     public init(epoch: Int, expiresAt: Date, pumpConfiguration: Data,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
@@ -201,7 +206,8 @@ public struct LoanGrant: Codable, Equatable {
                 lastLoopCompleted: Date? = nil,
                 glucoseAlertSettings: Data? = nil,
                 overrideHistoryRaw: Data? = nil,
-                settingsHistory: LoanSettingsHistory? = nil) {
+                settingsHistory: LoanSettingsHistory? = nil,
+                slowRetrospectiveCorrectionHistory: Data? = nil) {
         self.epoch = epoch
         self.expiresAt = expiresAt
         self.pumpConfiguration = pumpConfiguration
@@ -221,6 +227,7 @@ public struct LoanGrant: Codable, Equatable {
         self.glucoseAlertSettings = glucoseAlertSettings
         self.overrideHistoryRaw = overrideHistoryRaw
         self.settingsHistory = settingsHistory
+        self.slowRetrospectiveCorrectionHistory = slowRetrospectiveCorrectionHistory
     }
 }
 

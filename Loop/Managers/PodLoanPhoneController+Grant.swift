@@ -207,8 +207,10 @@ extension PodLoanPhoneController {
         // The algorithm's glucose window (`fetch` reads back to the carb window), so a loan without a
         // watch G7 sees the carb absorption the phone sees.
         let glucoseStart = referenceDate.addingTimeInterval(LoopConstants.maxCarbEntryPastTime)
-        // The watch keeps 24 h of overrides and settings; the algorithm looks back about 18.
-        let dayStart = referenceDate.addingTimeInterval(-.hours(24))
+        // The watch keeps 24 h of overrides and settings; the algorithm looks back about 18, and about 83
+        // with slow retrospective correction.
+        let slowRetrospectiveCorrection = UserDefaults.standard.slowRetrospectiveCorrectionEnabled
+        let dayStart = referenceDate.addingTimeInterval(slowRetrospectiveCorrection ? -.hours(84) : -.hours(24))
         deps.doseHistory(historyStart) { [weak self] history in
             guard let self = self else { return }
             self.deps.carbHistory(historyStart) { [weak self] carbs in
@@ -220,6 +222,8 @@ extension PodLoanPhoneController {
                     self.deps.overrideHistory(dayStart) { [weak self] overrides in
                     guard let self = self else { return }
                     self.deps.settingsHistory(dayStart, referenceDate) { [weak self] settingsHistory in
+                    guard let self = self else { return }
+                    self.olderHistory(referenceDate: referenceDate, enabled: slowRetrospectiveCorrection) { [weak self] olderHistory in
                     guard let self = self else { return }
                     DispatchQueue.main.async {
                         guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pumpConfiguration.rawValue, format: .binary, options: 0),
@@ -275,12 +279,33 @@ extension PodLoanPhoneController {
                             lastLoopCompleted: self.deps.lastLoopCompleted(),
                             glucoseAlertSettings: glucoseAlertSettings,
                             overrideHistoryRaw: overrideHistoryData,
-                            settingsHistory: settingsHistory)
+                            settingsHistory: settingsHistory,
+                            slowRetrospectiveCorrectionHistory: olderHistory)
                         completion(grant)
                     }
                     }
                     }
                     }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Slow retrospective correction's history from before the grant's windows, encoded; nil with the
+    /// experiment off, or when it cannot be encoded (the watch then runs without the experiment).
+    private func olderHistory(referenceDate: Date, enabled: Bool, completion: @escaping (Data?) -> Void) {
+        guard enabled else { completion(nil); return }
+        let windows = LoanOlderHistory.windows(referenceDate: referenceDate)
+        deps.glucoseHistory(windows.glucose) { [weak self] glucose in
+            guard let self = self else { return }
+            self.deps.doseHistory(windows.doses) { [weak self] doses in
+                guard let self = self else { return }
+                self.deps.carbHistory(windows.carbs) { carbs in
+                    let history = LoanOlderHistory(boundary: windows.boundary, glucose: glucose, doses: doses, carbs: carbs)
+                    let data = try? history.encoded()
+                    PhoneLog.event("loan", "slow retrospective correction: the grant carries \(history.glucose.count) readings, \(history.doses.count) doses and \(history.carbs.count) carb entries from before its windows, \(data.map { String(format: "%.1f KB", Double($0.count) / 1024) } ?? "but they could not be encoded")")
+                    completion(data)
                 }
             }
         }
@@ -312,6 +337,7 @@ extension PodLoanPhoneController {
                 "\(UserDefaults.standard.integralRetrospectiveCorrectionEnabled)",
                 "\(UserDefaults.standard.glucoseBasedApplicationFactorEnabled)",
                 "\(UserDefaults.standard.guardAndRunwayEnabled)",
+                "\(UserDefaults.standard.slowRetrospectiveCorrectionEnabled)",
                 String(describing: deps.pumpManager()?.status.insulinType),
                 String(describing: glucoseAlertSettingsSeen)].joined(separator: "|")
     }

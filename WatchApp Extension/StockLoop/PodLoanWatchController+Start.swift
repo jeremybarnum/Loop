@@ -413,7 +413,8 @@ extension PodLoanWatchController {
         loopManager.setAlgorithmExperiments(integralRetrospectiveCorrection: grant.integralRetrospectiveCorrectionEnabled ?? false,
                                             glucoseBasedApplicationFactor: grant.glucoseBasedApplicationFactorEnabled ?? false,
                                             guardAndRunway: grant.guardAndRunwayEnabled ?? false,
-                                            volatilityBaseline: grant.volatilityBaseline)
+                                            volatilityBaseline: grant.volatilityBaseline,
+                                            slowRetrospectiveCorrectionHistory: grant.slowRetrospectiveCorrectionHistory)
 
         // The loan inherits the phone's loop mode; an old phone defaults to open loop.
         loopManager.setClosedLoopEnabled(grant.phoneClosedLoopEnabled ?? false,

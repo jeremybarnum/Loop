@@ -184,12 +184,14 @@ class LoopDataManager {
         // Observers do not run in an initializer.
         displayContext = activeContext
 
-        // Glucose kept 24 hours: the loop reads 12 (the carb absorption window), the chart less.
+        // Glucose kept 96 hours: the loop reads 12 (the carb absorption window), the chart less. With slow
+        // retrospective correction the loop reads 72: the grant brings the phone's readings from before its
+        // own 12 h, and a long loan keeps its own here.
         storesOpened = Task {
             glucoseStore = await GlucoseStore(
                 healthKitSampleStore: nil,
                 cacheStore: glucoseCacheStore,
-                cacheLength: .hours(24),
+                cacheLength: .hours(96),
                 provenanceIdentifier: provenanceIdentifier
             )
             loopStores = await WatchLoopStores.open(cacheStore: cacheStore, cacheLength: localCacheDuration,

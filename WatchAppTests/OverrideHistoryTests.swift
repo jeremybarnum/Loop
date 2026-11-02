@@ -72,7 +72,8 @@ final class OverrideHistoryTests: XCTestCase {
     /// (and tears down) after the overrides are applied.
     private func grant(activeOverride: TemporaryScheduleOverride?, overrideHistory: [TemporaryScheduleOverride]? = nil,
                        settingsHistory: LoanSettingsHistory? = nil, glucoseBasedApplicationFactor: Bool? = nil,
-                       guardAndRunway: Bool? = nil, volatilityBaseline: Double? = nil) -> LoanGrant {
+                       guardAndRunway: Bool? = nil, volatilityBaseline: Double? = nil,
+                       slowRetrospectiveCorrectionHistory: Data? = nil) -> LoanGrant {
         var settings = LoopSettings()
         settings.glucoseTargetRangeSchedule = GlucoseRangeSchedule(
             unit: .milligramsPerDeciliter,
@@ -94,7 +95,8 @@ final class OverrideHistoryTests: XCTestCase {
                          activeOverrideRaw: activeOverride.map { plist($0.rawValue) },
                          therapySettingsSupplementRaw: plist(supplement),
                          overrideHistoryRaw: overrideHistory.flatMap(LoanGrant.overrideHistoryRaw),
-                         settingsHistory: settingsHistory)
+                         settingsHistory: settingsHistory,
+                         slowRetrospectiveCorrectionHistory: slowRetrospectiveCorrectionHistory)
     }
 
     /// Glucose for the last `hours`, every five minutes: the history starts there, not earlier.
@@ -342,7 +344,7 @@ final class OverrideHistoryTests: XCTestCase {
         let records = c.loopManager.algorithmExperiments(for: .tempBasalOnly)
         XCTAssertEqual(records.map(\.identifier), [ExperimentOption.guardAndRunway.rawValue],
                        "the application factor is in effect only with automatic bolus, as on the phone")
-        XCTAssertEqual(records.first?.parameters, .object(["volatilityBaseline": .number(4.2)]))
+        XCTAssertEqual(records.first?.parameters, .object(["version": .number(2), "volatilityBaseline": .number(4.2)]))
     }
 
     /// An older phone sends no flag: guard + runway stays off, and a baseline alone is not used.
@@ -387,5 +389,87 @@ final class OverrideHistoryTests: XCTestCase {
         let copy = grant(activeOverride: nil, settingsHistory: settingsHistory(changedAt: now.addingTimeInterval(-.hours(2)), now: now))
         XCTAssertNotNil(copy.settingsHistory)
         XCTAssertEqual(copy.withEpoch(9, leaseUntil: Date()).settingsHistory, copy.settingsHistory)
+    }
+
+    // MARK: - Slow retrospective correction
+
+    /// The phone's history as a grant at `now` would carry it: readings every 5 min back 72 h, half-hour temps,
+    /// a carb entry 30 h back, each with some on both sides of the boundary.
+    private func olderHistory(now: Date) -> LoanOlderHistory {
+        let windows = LoanOlderHistory.windows(referenceDate: now)
+        let glucose = stride(from: 72.0 * 12, through: 0, by: -1).map { i in
+            LoanGlucoseRecord(syncIdentifier: "phone-\(i)", startDate: now.addingTimeInterval(-i * 300 - 90),
+                              valueMgdl: 110 + i.truncatingRemainder(dividingBy: 7), trendRateMgdlPerMin: nil,
+                              isDisplayOnly: false, wasUserEntered: false)
+        }
+        let doses = stride(from: 79.0 * 2, through: 1, by: -1).map { i in
+            DoseEntry(type: .tempBasal, startDate: now.addingTimeInterval(-i * 1800), endDate: now.addingTimeInterval(-(i - 1) * 1800),
+                      value: 1.2, unit: .unitsPerHour, decisionId: nil, deliveredUnits: 0.6, insulinType: .novolog, automatic: true)
+        }
+        let carbs = [30.0, 6].map { hours in
+            LoanCarbRecord(syncIdentifier: "carb-\(hours)", provenanceIdentifier: "phone", syncVersion: 1,
+                           startDate: now.addingTimeInterval(-.hours(hours)), grams: 40, absorptionTime: .hours(3),
+                           foodType: nil, userCreatedDate: now.addingTimeInterval(-.hours(hours)), userUpdatedDate: nil)
+        }
+        return LoanOlderHistory(boundary: windows.boundary, glucose: glucose, doses: doses, carbs: carbs)
+    }
+
+    /// The history keeps only what is before the boundary, as the stores split it, and survives the wire.
+    func testTheOlderHistorySplitsAsTheStoresDoAndSurvivesTheWire() throws {
+        let now = Date()
+        let history = olderHistory(now: now)
+        XCTAssertTrue(history.glucose.allSatisfy { $0.date < history.boundary })
+        XCTAssertTrue(history.doses.allSatisfy { $0.endDate < history.boundary }, "a dose ending at or after it is in the watch's store")
+        XCTAssertEqual(history.carbs.map(\.syncIdentifier), ["carb-30.0"])
+        XCTAssertEqual(history.glucose.count, 72 * 12 - 12 * 12 + 1)
+
+        let data = try history.encoded()
+        let decoded = try LoanOlderHistory(encoded: data)
+        XCTAssertEqual(decoded.boundary, history.boundary)
+        XCTAssertEqual(decoded.glucose.count, history.glucose.count)
+        XCTAssertEqual(decoded.doses.count, history.doses.count)
+        for (a, b) in zip(decoded.glucose, history.glucose) {
+            XCTAssertEqual(a.date.timeIntervalSince(b.date), 0, accuracy: 0.001)
+            XCTAssertEqual(a.mgdl, b.mgdl)
+        }
+        for (a, b) in zip(decoded.doses, history.doses) {
+            XCTAssertEqual(a.type, b.type)
+            XCTAssertEqual(a.startDate.timeIntervalSince(b.startDate), 0, accuracy: 0.001)
+            XCTAssertEqual(a.endDate.timeIntervalSince(b.endDate), 0, accuracy: 0.001)
+            XCTAssertEqual(a.units, b.units)
+            XCTAssertEqual(a.automatic, b.automatic)
+            XCTAssertEqual(a.insulinType, b.insulinType)
+        }
+        XCTAssertEqual(decoded.carbs.map(\.syncIdentifier), history.carbs.map(\.syncIdentifier))
+        for (a, b) in zip(decoded.carbs, history.carbs) {
+            XCTAssertEqual(a.startDate.timeIntervalSince(b.startDate), 0, accuracy: 0.001, "whole milliseconds, as every loan message")
+            XCTAssertEqual(a.grams, b.grams)
+            XCTAssertEqual(a.absorptionTime, b.absorptionTime)
+        }
+        XCTAssertLessThan(data.count, 20_000, "\(data.count) bytes")
+    }
+
+    /// With the phone's older history the watch runs the experiment over the phone's 72 h: its readings before
+    /// the boundary, the watch's own after, nothing twice; the old doses and the carb entry 30 h back included.
+    func testSlowRetrospectiveCorrectionReadsThePhonesOlderHistory() async throws {
+        let now = Date()
+        let history = olderHistory(now: now)
+        let input = try await input(afterGrant: grant(activeOverride: nil, slowRetrospectiveCorrectionHistory: try history.encoded()))
+        XCTAssertTrue(input.experiments.contains(.slowRetrospectiveCorrection))
+
+        let dates = input.glucoseHistory.map(\.startDate)
+        XCTAssertEqual(Set(dates).count, dates.count, "no reading twice")
+        XCTAssertLessThan(dates.first!, now.addingTimeInterval(-.hours(71.9)))
+        XCTAssertEqual(dates.filter { $0 < history.boundary }.count, history.glucose.filter { $0.date >= now.addingTimeInterval(-.hours(72)) }.count)
+        XCTAssertGreaterThan(dates.filter { $0 >= history.boundary }.count, 0, "the watch's own readings")
+
+        XCTAssertLessThan(input.doses.map(\.startDate).min()!, now.addingTimeInterval(-.hours(77)))
+        XCTAssertTrue(input.carbEntries.contains { abs($0.startDate.timeIntervalSince(now.addingTimeInterval(-.hours(30)))) < 1 })
+    }
+
+    /// Without it, the watch's 12 h would give a wrong level: the experiment stays off.
+    func testWithoutTheOlderHistorySlowRetrospectiveCorrectionStaysOff() async throws {
+        let input = try await input(afterGrant: grant(activeOverride: nil))
+        XCTAssertFalse(input.experiments.contains(.slowRetrospectiveCorrection))
     }
 }

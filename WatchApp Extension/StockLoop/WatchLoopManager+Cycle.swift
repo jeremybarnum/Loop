@@ -149,10 +149,10 @@ extension WatchLoopManager {
         FeatureFlags.dosingStrategySelectionEnabled ? settingsProvider.settings.automaticDosingStrategy : .automaticBolus
     }
 
-    /// Stock `LoopDataManager.algorithmExperiments(for:guardAndRunway:)`, from the grant's experiments.
-    func algorithmExperiments(for dosingStrategy: AutomaticDosingStrategy, guardAndRunway: GuardAndRunwayOutput? = nil) -> [AlgorithmExperiment] {
+    /// Stock `LoopDataManager.algorithmExperiments(for:output:)`, from the grant's experiments.
+    func algorithmExperiments(for dosingStrategy: AutomaticDosingStrategy, output: AlgorithmOutput<StoredCarbEntry>? = nil) -> [AlgorithmExperiment] {
         AlgorithmExperiment.records(enabled: enabledAlgorithmExperiments, dosingStrategy: dosingStrategy,
-                                    volatilityBaseline: guardAndRunwayEnabled ? volatilityBaseline : nil, guardAndRunway: guardAndRunway)
+                                    volatilityBaseline: guardAndRunwayEnabled ? volatilityBaseline : nil, output: output)
     }
 
     /// The grant's experiment flags as LoopAlgorithm's experiments, with the phone's volatility baseline.
@@ -166,6 +166,10 @@ extension WatchLoopManager {
         }
         if guardAndRunwayEnabled {
             experiments.insert(.guardAndRunway)
+        }
+        // Only with the phone's older history: from the watch's own 12 h the level would be wrong.
+        if olderHistory != nil {
+            experiments.insert(.slowRetrospectiveCorrection)
         }
         return experiments
     }
@@ -194,7 +198,12 @@ extension WatchLoopManager {
 
     /// Lane work.
     func updateDisplayStateOnLane(forceStoreRemoteRecommendation: Bool = false) async {
+        let started = Date()
         displayState = await cycle.displayState()
+        if olderHistory != nil {
+            SportLog.event("loop", String(format: "display run with slow retrospective correction's 72 h took %.0f ms",
+                                          Date().timeIntervalSince(started) * 1000))
+        }
 
         await publishHUDContext()
         refreshGlanceData()
@@ -233,3 +242,103 @@ extension WatchLoopManager: LoopCycleHost {
         WKInterfaceDevice.current().controllerStatus
     }
 }
+
+// MARK: - Slow retrospective correction's older history
+
+/// The grant's older history (`LoanOlderHistory`) as the stores return it, built once.
+struct OlderHistoryInputs {
+    let boundary: Date
+    let glucose: [StoredGlucoseSample]
+    let doses: [DoseEntry]
+    let carbs: [StoredCarbEntry]
+
+    init(_ history: LoanOlderHistory) {
+        boundary = history.boundary
+        glucose = history.storedGlucose
+        doses = history.doseEntries
+        carbs = history.storedCarbs
+    }
+}
+
+/// The cycle's stores: the watch's own, with the older history read beside them for a request that reaches
+/// before its boundary, splitting as the stores do (`LoanOlderHistory.init`). Without it, each is its store.
+final class OlderHistoryDoseStore: DoseStoreProtocol {
+    private let store: DoseStore
+    private let history: () -> OlderHistoryInputs?
+
+    init(_ store: DoseStore, history: @escaping () -> OlderHistoryInputs?) {
+        self.store = store
+        self.history = history
+    }
+
+    func getNormalizedDoseEntries(start: Date, end: Date?) async throws -> [DoseEntry] {
+        guard let history = history(), start < history.boundary else {
+            return try await store.getNormalizedDoseEntries(start: start, end: end)
+        }
+        let recent = try await store.getNormalizedDoseEntries(start: history.boundary, end: end)
+        return (history.doses.filterDateRange(start, end) + recent).sorted { $0.startDate < $1.startDate }
+    }
+
+    func addDoses(_ doses: [DoseEntry], from device: HKDevice?) async throws {
+        try await store.addDoses(doses, from: device)
+    }
+
+    var lastReservoirValue: ReservoirValue? { store.lastReservoirValue }
+    var lastAddedPumpData: Date { store.lastAddedPumpData }
+}
+
+final class OlderHistoryGlucoseStore: GlucoseStoreProtocol {
+    private let store: GlucoseStore
+    private let history: () -> OlderHistoryInputs?
+
+    init(_ store: GlucoseStore, history: @escaping () -> OlderHistoryInputs?) {
+        self.store = store
+        self.history = history
+    }
+
+    var latestGlucose: GlucoseSampleValue? { store.latestGlucose }
+
+    func getGlucoseSamples(start: Date?, end: Date?) async throws -> [StoredGlucoseSample] {
+        guard let history = history(), let start, start < history.boundary else {
+            return try await store.getGlucoseSamples(start: start, end: end)
+        }
+        let older = history.glucose.filter { entry in entry.startDate >= start && end.map { entry.startDate < $0 } ?? true }
+        return try await older + store.getGlucoseSamples(start: history.boundary, end: end)
+    }
+
+    func addGlucoseSamples(_ samples: [NewGlucoseSample]) async throws -> [StoredGlucoseSample] {
+        try await store.addGlucoseSamples(samples)
+    }
+}
+
+final class OlderHistoryCarbStore: CarbStoreProtocol {
+    private let store: CarbStore
+    private let history: () -> OlderHistoryInputs?
+
+    init(_ store: CarbStore, history: @escaping () -> OlderHistoryInputs?) {
+        self.store = store
+        self.history = history
+    }
+
+    func getCarbEntries(start: Date?, end: Date?, dateAscending: Bool, fetchLimit: Int?, with favoriteFoodID: String?) async throws -> [StoredCarbEntry] {
+        guard let history = history(), let start, start < history.boundary, fetchLimit == nil, favoriteFoodID == nil else {
+            return try await store.getCarbEntries(start: start, end: end, dateAscending: dateAscending, fetchLimit: fetchLimit, with: favoriteFoodID)
+        }
+        let older = history.carbs.filter { entry in entry.startDate >= start && end.map { entry.startDate < $0 } ?? true }
+        let entries = try await older + store.getCarbEntries(start: history.boundary, end: end, dateAscending: true, fetchLimit: nil, with: nil)
+        return dateAscending ? entries : entries.reversed()
+    }
+
+    func replaceCarbEntry(_ oldEntry: StoredCarbEntry, withEntry newEntry: CarbEntryUpdate) async throws -> StoredCarbEntry {
+        try await store.replaceCarbEntry(oldEntry, withEntry: newEntry)
+    }
+
+    func addCarbEntry(_ entry: NewCarbEntry) async throws -> StoredCarbEntry {
+        try await store.addCarbEntry(entry)
+    }
+
+    func deleteCarbEntry(_ oldEntry: StoredCarbEntry) async throws -> Bool {
+        try await store.deleteCarbEntry(oldEntry)
+    }
+}
+

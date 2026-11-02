@@ -114,7 +114,9 @@ final class WatchLoopManager {
     }
 
     /// The dosing loop both apps run (`LoopCycle.swift`); this manager is its host on the watch.
-    private(set) lazy var cycle = LoopCycle(doseStore: doseStore, carbStore: carbStore, glucoseStore: glucoseStore,
+    private(set) lazy var cycle = LoopCycle(doseStore: OlderHistoryDoseStore(doseStore) { [weak self] in self?.olderHistory },
+                                            carbStore: OlderHistoryCarbStore(carbStore) { [weak self] in self?.olderHistory },
+                                            glucoseStore: OlderHistoryGlucoseStore(glucoseStore) { [weak self] in self?.olderHistory },
                                             dosingDecisionStore: dosingDecisionStore, settingsProvider: settingsProvider,
                                             host: self, now: { [weak self] in self?.now() ?? Date() })
 
@@ -363,6 +365,7 @@ final class WatchLoopManager {
         self.glucoseBasedApplicationFactorEnabled = loopState.glucoseBasedApplicationFactorEnabled
         self.guardAndRunwayEnabled = loopState.guardAndRunwayEnabled
         self.volatilityBaseline = loopState.volatilityBaseline
+        self.olderHistory = loopState.slowRetrospectiveCorrectionHistory.flatMap(Self.olderHistory(from:))
 
         // The store asks us for the scheduled basal it nets doses against; see the
         // `DoseStoreDelegate` conformance.
@@ -425,19 +428,36 @@ final class WatchLoopManager {
     }
 
     /// The phone's Algorithm Experiments. Applied on the lane, ahead of the first prediction.
+    /// `slowRetrospectiveCorrectionHistory` is the grant's: present while the phone runs that experiment.
     func setAlgorithmExperiments(integralRetrospectiveCorrection: Bool, glucoseBasedApplicationFactor: Bool,
-                                 guardAndRunway: Bool, volatilityBaseline: Double?) {
+                                 guardAndRunway: Bool, volatilityBaseline: Double?,
+                                 slowRetrospectiveCorrectionHistory: Data? = nil) {
+        let olderHistory = slowRetrospectiveCorrectionHistory.flatMap(Self.olderHistory(from:))
         updateLoopState {
             $0.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrection
             $0.glucoseBasedApplicationFactorEnabled = glucoseBasedApplicationFactor
             $0.guardAndRunwayEnabled = guardAndRunway
             $0.volatilityBaseline = volatilityBaseline
+            $0.slowRetrospectiveCorrectionHistory = olderHistory == nil ? nil : slowRetrospectiveCorrectionHistory
         }
         onLane {
             self.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrection
             self.glucoseBasedApplicationFactorEnabled = glucoseBasedApplicationFactor
             self.guardAndRunwayEnabled = guardAndRunway
             self.volatilityBaseline = volatilityBaseline
+            self.olderHistory = olderHistory
+        }
+    }
+
+    /// The grant's older history, ready for the cycle's stores; nil (and said) when it cannot be read.
+    static func olderHistory(from data: Data) -> OlderHistoryInputs? {
+        do {
+            let history = try LoanOlderHistory(encoded: data)
+            SportLog.event("loan", "slow retrospective correction: \(history.glucose.count) readings, \(history.doses.count) doses and \(history.carbs.count) carb entries from the phone before \(history.boundary)")
+            return OlderHistoryInputs(history)
+        } catch {
+            SportLog.event("loan", "slow retrospective correction: the phone's older history could not be read (\(error)); this loan doses without the experiment")
+            return nil
         }
     }
 
@@ -446,6 +466,8 @@ final class WatchLoopManager {
     var glucoseBasedApplicationFactorEnabled = false
     var guardAndRunwayEnabled = false
     var volatilityBaseline: Double?
+    /// Slow retrospective correction's older history; nil while the phone runs without the experiment.
+    var olderHistory: OlderHistoryInputs?
 
     /// Stock glucose alerts, built from the phone's settings for a loan; nil between loans.
     var glucoseAlerts: GlucoseAlertManager?
@@ -556,6 +578,8 @@ struct WatchLoopState: RawRepresentable {
     var glucoseBasedApplicationFactorEnabled = false
     var guardAndRunwayEnabled = false
     var volatilityBaseline: Double?
+    /// The grant's `slowRetrospectiveCorrectionHistory`, kept so a relaunch mid-loan runs the experiment too.
+    var slowRetrospectiveCorrectionHistory: Data?
     var lastLoopCompleted: Date?
     /// The override history's events, as LoopKit encodes them; read back only by a resume.
     var overrideEvents: Data?
@@ -568,6 +592,7 @@ struct WatchLoopState: RawRepresentable {
         glucoseBasedApplicationFactorEnabled = rawValue["glucoseBasedApplicationFactorEnabled"] as? Bool ?? false
         guardAndRunwayEnabled = rawValue["guardAndRunwayEnabled"] as? Bool ?? false
         volatilityBaseline = rawValue["volatilityBaseline"] as? Double
+        slowRetrospectiveCorrectionHistory = rawValue["slowRetrospectiveCorrectionHistory"] as? Data
         lastLoopCompleted = rawValue["lastLoopCompleted"] as? Date
         overrideEvents = rawValue["overrideEvents"] as? Data
     }
@@ -578,6 +603,7 @@ struct WatchLoopState: RawRepresentable {
                                   "glucoseBasedApplicationFactorEnabled": glucoseBasedApplicationFactorEnabled,
                                   "guardAndRunwayEnabled": guardAndRunwayEnabled]
         raw["volatilityBaseline"] = volatilityBaseline
+        raw["slowRetrospectiveCorrectionHistory"] = slowRetrospectiveCorrectionHistory
         raw["lastLoopCompleted"] = lastLoopCompleted
         raw["overrideEvents"] = overrideEvents
         return raw

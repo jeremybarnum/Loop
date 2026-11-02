@@ -214,6 +214,7 @@ extension LoanGrant {
                   lastLoopCompleted: lastLoopCompleted,
                   glucoseAlertSettings: glucoseAlertSettings,
                   overrideHistoryRaw: overrideHistoryRaw,
-                  settingsHistory: settingsHistory)
+                  settingsHistory: settingsHistory,
+                  slowRetrospectiveCorrectionHistory: slowRetrospectiveCorrectionHistory)
     }
 }

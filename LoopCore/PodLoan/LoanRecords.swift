@@ -300,3 +300,115 @@ public struct LoanGlucoseRecord: Codable, Equatable {
         self.wasUserEntered = wasUserEntered
     }
 }
+
+/// The phone's history from before the grant's own windows, for slow retrospective correction, which reads
+/// 72 h of glucose with the doses and carbs that explain it. In a grant only while the phone runs the
+/// experiment. Everything here is before `boundary` and the watch's stores cover from it, so the watch reads
+/// it beside them, never storing it. Only what the algorithm reads travels, compressed.
+public struct LoanOlderHistory: Equatable {
+    public struct Glucose: Equatable {
+        public let date: Date
+        public let mgdl: Double
+        public let isDisplayOnly: Bool
+        public let wasUserEntered: Bool
+    }
+
+    public struct Dose: Equatable {
+        public let type: DoseType
+        public let startDate: Date
+        public let endDate: Date
+        public let units: Double
+        public let automatic: Bool
+        public let insulinType: InsulinType?
+    }
+
+    public let boundary: Date
+    public let glucose: [Glucose]
+    public let doses: [Dose]
+    public let carbs: [LoanCarbRecord]
+
+    /// From the phone's history, keeping what is before `boundary` as its stores would split it: a dose that
+    /// ends at or after it, and a reading or carb entry that starts at or after it, is in the watch's stores.
+    public init(boundary: Date, glucose: [LoanGlucoseRecord], doses: [DoseEntry], carbs: [LoanCarbRecord]) {
+        // Whole milliseconds, as the wire carries it.
+        let boundary = Date(timeIntervalSince1970: (boundary.timeIntervalSince1970 * 1000).rounded() / 1000)
+        self.boundary = boundary
+        self.glucose = glucose.filter { $0.startDate < boundary }.map {
+            Glucose(date: $0.startDate, mgdl: $0.valueMgdl, isDisplayOnly: $0.isDisplayOnly, wasUserEntered: $0.wasUserEntered)
+        }
+        self.doses = doses.filter { $0.endDate < boundary }.map {
+            Dose(type: $0.type, startDate: $0.startDate, endDate: $0.endDate, units: $0.volume,
+                 automatic: $0.automatic ?? false, insulinType: $0.insulinType)
+        }
+        self.carbs = carbs.filter { $0.startDate < boundary }
+    }
+
+    /// Times as milliseconds before the boundary, doses as number rows.
+    private struct Wire: Codable {
+        var boundary: Date
+        /// [ms before the boundary, mg/dL, 1 if display only + 2 if entered by the user]
+        var glucose: [[Double]]
+        /// [type (DoseType.allCases index), start, end (ms before the boundary), units, 1 if automatic, insulin type or -1]
+        var doses: [[Double]]
+        var carbs: [LoanCarbRecord]
+    }
+
+    public func encoded() throws -> Data {
+        func ms(_ date: Date) -> Double { (boundary.timeIntervalSince(date) * 1000).rounded() }
+        let wire = Wire(
+            boundary: boundary,
+            glucose: glucose.map { [ms($0.date), $0.mgdl, Double(($0.isDisplayOnly ? 1 : 0) + ($0.wasUserEntered ? 2 : 0))] },
+            doses: doses.map {
+                [Double(DoseType.allCases.firstIndex(of: $0.type) ?? 0), ms($0.startDate), ms($0.endDate), $0.units,
+                 $0.automatic ? 1 : 0, Double($0.insulinType?.rawValue ?? -1)]
+            },
+            carbs: carbs)
+        return try (LoanProtocol.encoder.encode(wire) as NSData).compressed(using: .zlib) as Data
+    }
+
+    public init(encoded data: Data) throws {
+        let wire = try LoanProtocol.decoder.decode(Wire.self, from: (data as NSData).decompressed(using: .zlib) as Data)
+        func date(_ ms: Double) -> Date { wire.boundary.addingTimeInterval(-ms / 1000) }
+        func corrupt(_ what: String) -> DecodingError {
+            DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "older history: \(what)"))
+        }
+        boundary = wire.boundary
+        glucose = try wire.glucose.map { row in
+            guard row.count == 3 else { throw corrupt("a reading row has \(row.count) values") }
+            let flags = Int(row[2])
+            return Glucose(date: date(row[0]), mgdl: row[1], isDisplayOnly: flags & 1 != 0, wasUserEntered: flags & 2 != 0)
+        }
+        doses = try wire.doses.map { row in
+            guard row.count == 6, let index = Int(exactly: row[0]), DoseType.allCases.indices.contains(index) else {
+                throw corrupt("a dose row cannot be read")
+            }
+            return Dose(type: DoseType.allCases[index], startDate: date(row[1]), endDate: date(row[2]), units: row[3],
+                        automatic: row[4] != 0, insulinType: row[5] < 0 ? nil : InsulinType(rawValue: Int(row[5])))
+        }
+        carbs = wire.carbs
+    }
+
+    /// As the watch's stores return them.
+    public var storedGlucose: [StoredGlucoseSample] {
+        glucose.map {
+            StoredGlucoseSample(startDate: $0.date, quantity: LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: $0.mgdl),
+                                isDisplayOnly: $0.isDisplayOnly, wasUserEntered: $0.wasUserEntered)
+        }
+    }
+
+    public var doseEntries: [DoseEntry] {
+        doses.map {
+            DoseEntry(type: $0.type, startDate: $0.startDate, endDate: $0.endDate, value: $0.units, unit: .units,
+                      decisionId: nil, deliveredUnits: $0.units, insulinType: $0.insulinType, automatic: $0.automatic)
+        }
+    }
+
+    public var storedCarbs: [StoredCarbEntry] {
+        carbs.map {
+            StoredCarbEntry(startDate: $0.startDate, quantity: LoopQuantity(unit: .gram, doubleValue: $0.grams),
+                            syncIdentifier: $0.syncIdentifier, foodType: $0.foodType, absorptionTime: $0.absorptionTime,
+                            createdByCurrentApp: $0.createdByCurrentApp ?? false, userCreatedDate: $0.userCreatedDate,
+                            userUpdatedDate: $0.userUpdatedDate)
+        }
+    }
+}
