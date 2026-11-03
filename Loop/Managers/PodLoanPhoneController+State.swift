@@ -157,6 +157,8 @@ extension PodLoanPhoneController {
         // can be asked at once.
         watchAskedAt = nil
         if oldValue != .owner, state == .owner {
+            // The return has forgotten or taken the pod; a mark never outlives its loan.
+            if persisted.podDeactivatedOnWatch != nil { updateState { $0.podDeactivatedOnWatch = nil } }
             beginReclaimSettleWindow()
         }
         deps.ownershipDidChange()

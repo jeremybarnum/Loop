@@ -3476,6 +3476,25 @@ extension PodLoanPhoneControllerTests {
         XCTAssertTrue(urgentNotices.contains("Pod Deactivated on the Watch"))
     }
 
+    /// The watch's final offer, queued while the phone was away, can land after the phone took the loan back
+    /// on the watch's report. It must not mark the pod for forgetting again: the next pod paired here would
+    /// be forgotten at its own loan's End (rig, 2026-11-02).
+    func testAQueuedOfferAfterTheTakeBackDoesNotMarkTheNextPod() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        connectionReady = false
+        controller.handleIncoming(userInfo: try report(epoch: grant.epoch, podDeactivated: true))
+        waitForState(controller, .owner)
+        waitUntil(timeout: 5, "forgotten") { MockPumpManager.testForgotDeactivatedCount == 1 }
+
+        let late = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                                 events: [], tombstones: [], recovered: false, released: true, podDeactivated: true)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(late).transportDictionary())
+        drainMainQueue()
+
+        XCTAssertNil(controller.persisted.podDeactivatedOnWatch, "no mark is left for the next pod")
+    }
+
     /// A pod paired on this phone since is not the watch's to end: only a released pod is forgotten.
     func testADeactivationForAPodThisPhoneNoLongerLendsForgetsNothing() throws {
         let controller = makeController()
