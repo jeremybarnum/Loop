@@ -74,12 +74,13 @@ extension PodLoanPhoneController {
 
         // Background time from the tap, so pocketing the phone cannot freeze the attempt.
         deps.beginReclaimBackgroundTask()
-        handbackDiag(epoch, String(format: "take-back: reaching for the pod, giving up after %.0f s", Self.takeBackLinkLimit))
         state = .reclaimPending
         if persisted.podDeactivatedOnWatch != nil {
+            handbackDiag(epoch, "take-back: the pod was deactivated on the watch, not reaching for it")
             finishTakeBack(waited: 0)
             return
         }
+        handbackDiag(epoch, String(format: "take-back: reaching for the pod, giving up after %.0f s", Self.takeBackLinkLimit))
         reclaimPodConnection()
         awaitPodForTakeBack(started: started, tick: 0)
     }

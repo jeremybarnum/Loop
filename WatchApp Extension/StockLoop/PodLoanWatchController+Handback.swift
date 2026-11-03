@@ -152,7 +152,8 @@ extension PodLoanWatchController {
             issueProtocolAlert(title: NSLocalizedString("End Not Confirmed", comment: "Watch alert title: the phone has not confirmed a hand-back"),
                                body: NSLocalizedString("Neither device is looping. Reclaim the pod on the iPhone.", comment: "Watch alert body: released but unconfirmed hand-back"))
         } else {
-            SportLog.event("loan", "hand-back \(why); Sport Mode continues on the watch\(wedgeNote)")
+            let after = podDeactivatedHere ? "the pod is deactivated; the phone ends Sport Mode when it hears" : "Sport Mode continues on the watch"
+            SportLog.event("loan", "hand-back \(why); \(after)\(wedgeNote)")
         }
         // A link stuck one way, while the loan is still live and the watch still doses: a normal
         // alert. A re-establishing link self-heals in a minute or two, so it is never alerted.
