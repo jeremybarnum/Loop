@@ -214,12 +214,18 @@ extension PodLoanWatchController {
 
         // No pod read here: the phone judges the loan by its own read after it takes the pod back.
         // What the watch uploaded in full: the phone uploads only the rest.
+        let pumpIdentifier = manager.pluginIdentifier, loopManager = self.loopManager
         LoanRemoteUploads.shared.confirmUploads(within: 5) { confirmed in
-            DispatchQueue.main.async {
-                self.uploadsConfirmed = confirmed
-                SportLog.event("uploads", "hand-back: uploads confirmed \(confirmed.isEmpty ? "none — the phone uploads its own copies" : confirmed.map { "\($0.key): \($0.value.joined(separator: ", "))" }.joined(separator: "; "))")
-                self.finalOfferSent = true
-                self.sendHandbackOffer(recovered: false)
+            Task {
+                // The pod's alerts are the phone's from here. Closed before the final offer, so its
+                // records carry the close; one left open, the phone replays at its next launch.
+                await loopManager.retractStandingAlerts(ofPump: pumpIdentifier)
+                DispatchQueue.main.async {
+                    self.uploadsConfirmed = confirmed
+                    SportLog.event("uploads", "hand-back: uploads confirmed \(confirmed.isEmpty ? "none — the phone uploads its own copies" : confirmed.map { "\($0.key): \($0.value.joined(separator: ", "))" }.joined(separator: "; "))")
+                    self.finalOfferSent = true
+                    self.sendHandbackOffer(recovered: false)
+                }
             }
         }
     }
