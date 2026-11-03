@@ -62,15 +62,6 @@ enum WatchAlertPresenter {
                                                         trigger: trigger))
     }
 
-    /// Withdraws every alert that offered to deactivate the pump: it is gone.
-    static func retractFailedDeviceAlerts() {
-        UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
-            let ids = delivered.map(\.request).filter { $0.content.categoryIdentifier == failedDeviceCategory }.map(\.identifier)
-            WristAlerts.scheduler.removePendingRequests(withIdentifiers: ids)
-            WristAlerts.scheduler.removeDeliveredRequests(withIdentifiers: ids)
-        }
-    }
-
     /// Withdraws a pending or delivered alert when the condition clears.
     static func retract(_ identifier: LoopKit.Alert.Identifier) {
         let request = requestIdentifier(for: identifier)

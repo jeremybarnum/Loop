@@ -609,11 +609,15 @@ extension PodLoanWatchController {
         updateState { $0.podDeactivatedEpoch = current }
         revokeCapturedDelivered = lastReading?.units
         revokeCapturedDeliveredAt = lastReading?.at
-        WatchAlertPresenter.retractFailedDeviceAlerts()
         // Stopped on purpose: no Loop Failure ladder while the End reaches the phone.
         LoopStallWatchdog.disarm()
         SportLog.event("loan", "the pod is deactivated; Sport Mode ends")
         notifyUI()
-        beginHandback(trigger: .podDeactivated)
+        // Its alarms are over: closed on the wrist and in the records the offer carries, then the End.
+        let pumpIdentifier = pumpManager?.pluginIdentifier, loopManager = self.loopManager
+        Task {
+            if let pumpIdentifier { await loopManager.retractStandingAlerts(ofPump: pumpIdentifier) }
+            DispatchQueue.main.async { self.beginHandback(trigger: .podDeactivated) }
+        }
     }
 }
