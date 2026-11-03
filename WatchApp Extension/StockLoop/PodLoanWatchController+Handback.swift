@@ -55,8 +55,9 @@ extension PodLoanWatchController {
                     self.handbackTimedOut(unreachable: true)
                 case .tell(.podDeactivatedPhoneAway):
                     self.handbackTimedOut(unreachable: true)
-                    // Queued: the phone ends Sport Mode when it hears (row 27).
+                    // Queued, and by push where it can: the phone ends Sport Mode when it hears (row 27).
                     self.sendHoldsPodStatusReport(reason: "the pod is deactivated and the phone did not answer the End")
+                    if !self.isPhoneReachable() { self.pushHoldsPodStatusReport() }
                 default:
                     break
                 }
