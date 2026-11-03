@@ -2687,6 +2687,9 @@ extension PodLoanPhoneControllerTests {
         }
         XCTAssertFalse(controller.isReclaimSettling, "the pump tile is no longer held as reconnecting")
         waitUntil(timeout: 5, "the take-back check ruled") { self.diagMatching("take-back check: delivered") != nil }
+        drainMainQueue()
+        lock.lock(); let returns = diags.filter { $0.contains("back in control of the pod") }.count; lock.unlock()
+        XCTAssertEqual(returns, 1, "one return, one settle window")
     }
 
     /// The settle after a take-back runs against its own promise and holds at cap.
