@@ -48,6 +48,8 @@ extension MockPumpManager {
     static var testPodBolusEndsAt: Date?
     /// How many times the phone forgot a pod deactivated on the watch.
     static var testForgotDeactivatedCount = 0
+    /// The pod has faulted: its total is final and it answers no read.
+    static var testPodFaulted = false
 }
 
 /// Test-only hand-off conformance so the full grant path runs against the test pump.
@@ -71,6 +73,12 @@ final class LendableMockPumpManager: MockPumpManager, ExclusiveDeviceControl, Pu
     var bolusUnderWayEndsAt: Date? { Self.testPodBolusEndsAt }
     func deactivateFailedDevice() async throws {}
     func forgetDeviceDeactivatedElsewhere() async { Self.testForgotDeactivatedCount += 1 }
+    var deliveredUnitsAreFinal: Bool { Self.testPodFaulted }
+    /// A faulted pod refuses reads, so its last sync stays where its fault left it.
+    override func ensureCurrentPumpData(completion: ((Date?) -> Void)?) {
+        guard Self.testPodFaulted else { return super.ensureCurrentPumpData(completion: completion) }
+        completion?(Self.testOdometerAt)
+    }
 }
 
 @MainActor
@@ -193,6 +201,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         MockPumpManager.testKeepsControl = false
         MockPumpManager.testOdometer = nil
         MockPumpManager.testOdometerAt = nil
+        MockPumpManager.testPodFaulted = false
 
         let timeZone = TimeZone(identifier: "GMT")!
         settings = LoopSettings(
@@ -2659,6 +2668,25 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 5, "refused after relaunch") { relaunched.state == .loaned }
         waitUntil(timeout: 5, "pump released") { MockPumpManager.testConnectionReleased }
         XCTAssertTrue(relaunched.holdsAutomaticDosing)
+    }
+
+    /// A take-back of a faulted pod: the take-back's own read is the pod's last, before the settle
+    /// opens, and the pod refuses every read after. Its total is final, so it settles the return and
+    /// the take-back check rules on it, instead of the settle reopening every cycle.
+    func testATakeBackOfAFaultedPodSettlesOnItsFinalTotal() throws {
+        MockPumpManager.testOdometer = 12.0
+        let controller = makeController()
+        establishLoan(controller)
+        MockPumpManager.testOdometerAt = Date().addingTimeInterval(-60)
+        MockPumpManager.testPodFaulted = true
+
+        controller.reclaimNow()
+        waitForState(controller, .owner)
+        waitUntil(timeout: 8, "the return settles on the final total") {
+            self.diagMatching("its last total is final") != nil
+        }
+        XCTAssertFalse(controller.isReclaimSettling, "the pump tile is no longer held as reconnecting")
+        waitUntil(timeout: 5, "the take-back check ruled") { self.diagMatching("take-back check: delivered") != nil }
     }
 
     /// The settle after a take-back runs against its own promise and holds at cap.
