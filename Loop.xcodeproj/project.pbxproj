@@ -878,6 +878,7 @@
 		28EAD7E064ED541AA9ABE58D /* LoopGlanceWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = E508C6EB2C06F7554A9C1759 /* LoopGlanceWidget.swift */; };
 		44CA233C68157DDA296C98FE /* GlanceComplicationSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63AC351285766326725D8073 /* GlanceComplicationSnapshot.swift */; };
 		46596A54FBF8C7F5C89AF1D1 /* GlanceComplicationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 687DE1D14C48349AF99125E6 /* GlanceComplicationTests.swift */; };
+		B7C1A0F12E9D4A6B00C0FFEE /* BackgroundTaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C1A0F22E9D4A6B00C0FFEE /* BackgroundTaskTests.swift */; };
 		4D0555E77F94BD1752D8244D /* GlanceComplicationSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63AC351285766326725D8073 /* GlanceComplicationSnapshot.swift */; };
 		5155644B2FF8A562552905A3 /* GlanceComplicationPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 216A392DC9F44D90F6448717 /* GlanceComplicationPublisher.swift */; };
 		C67DD5BDFD25E0B3BAC31A61 /* LoanPushSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 533D4A039573750D44A23B29 /* LoanPushSender.swift */; };
@@ -1906,6 +1907,7 @@
 		FCF57BFE5DDB939285839898 /* ComplicationSnapshot.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ComplicationSnapshot.swift; sourceTree = "<group>"; };
 		216A392DC9F44D90F6448717 /* GlanceComplicationPublisher.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = GlanceComplicationPublisher.swift; path = "WatchApp Extension/StockLoop/GlanceComplicationPublisher.swift"; sourceTree = SOURCE_ROOT; };
 		63AC351285766326725D8073 /* GlanceComplicationSnapshot.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = GlanceComplicationSnapshot.swift; path = "Loop Complications/GlanceComplicationSnapshot.swift"; sourceTree = SOURCE_ROOT; };
+		B7C1A0F22E9D4A6B00C0FFEE /* BackgroundTaskTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BackgroundTaskTests.swift; path = WatchAppTests/BackgroundTaskTests.swift; sourceTree = SOURCE_ROOT; };
 		687DE1D14C48349AF99125E6 /* GlanceComplicationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = GlanceComplicationTests.swift; path = WatchAppTests/GlanceComplicationTests.swift; sourceTree = SOURCE_ROOT; };
 		E508C6EB2C06F7554A9C1759 /* LoopGlanceWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LoopGlanceWidget.swift; path = "Loop Complications/LoopGlanceWidget.swift"; sourceTree = SOURCE_ROOT; };
 		533D4A039573750D44A23B29 /* LoanPushSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LoanPushSender.swift; path = "WatchApp Extension/StockLoop/LoanPushSender.swift"; sourceTree = SOURCE_ROOT; };
@@ -3272,6 +3274,7 @@
 				8564B298B7F91A5B62826D45 /* OverrideHistoryTests.swift */,
 				22969076523D145599EA2FBF /* WristCarbDeleteTests.swift */,
 				94E05C050AF4C0CC0B314040 /* WristGlucoseAlertTests.swift */,
+				B7C1A0F22E9D4A6B00C0FFEE /* BackgroundTaskTests.swift */,
 				687DE1D14C48349AF99125E6 /* GlanceComplicationTests.swift */,
 			);
 			path = WatchAppTests;
@@ -4961,6 +4964,7 @@
 				5CD53E8B45B61D0DF32D19BA /* OverrideHistoryTests.swift in Sources */,
 				7AF2FE0D12D46279AA80608B /* WristCarbDeleteTests.swift in Sources */,
 				5FDDEC8709A17CE196A2F202 /* WristGlucoseAlertTests.swift in Sources */,
+				B7C1A0F12E9D4A6B00C0FFEE /* BackgroundTaskTests.swift in Sources */,
 				46596A54FBF8C7F5C89AF1D1 /* GlanceComplicationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
