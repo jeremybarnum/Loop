@@ -2878,7 +2878,6 @@
 				3E0817A2A6F276A886CA6A15 /* PodLoanPhoneController+State.swift */,
 				C03823C4CE664226A1EDAF41 /* RileyLinkBLEKit.framework */,
 				ACC381BA270149C9B0DDCB01 /* RileyLinkKit.framework */,
-				F8760AF31E3C43F6AFBA1BE7 /* G7SensorKit.framework */,
 				A60E55AC77554C50A4196482 /* OmnipodKit.framework */,
 				028762051A01C56F4C39A986 /* NightscoutServiceKit.framework */,
 				5AE73BCF5BD85D409647BE21 /* TidepoolServiceKit.framework */,
