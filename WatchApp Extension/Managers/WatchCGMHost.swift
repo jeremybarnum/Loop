@@ -45,10 +45,17 @@ final class WatchCGMHost {
     static let acquisitionBackstopDelay: TimeInterval = 60
 
     private init() {
+        // BENCH_WATCH_NO_CGM (bench builds only): the watch never reads the sensor itself, so readings
+        // reach it only from the phone, as when the sensor is out of its range. The saved manager is
+        // kept, so a build without the flag picks the sensor up again.
+        #if BENCH_WATCH_NO_CGM
+        log.default("Bench: BENCH_WATCH_NO_CGM is set, so the watch does not read the sensor")
+        #else
         if let raw = rawManager, let manager = watchCGMManager(rawValue: raw) {
             builtFrom = raw["builtFrom"] as? [String: Any]
             install(manager)
         }
+        #endif
         NotificationCenter.default.addObserver(forName: watchCGMStatusDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateStatusNote() }
         }
@@ -64,6 +71,9 @@ final class WatchCGMHost {
     /// The phone's context arrived. Builds a manager when its export names a different sensor or code,
     /// lets go of the sensor when the phone stopped sharing, and otherwise treats it as a wake.
     func update(from context: WatchContext) {
+        #if BENCH_WATCH_NO_CGM
+        return
+        #endif
         guard let raw = context.cgmConfiguration, let configuration = SharedDeviceConfiguration(rawValue: raw) else {
             if cgmManager != nil {
                 log.default("The phone stopped sharing its CGM; letting go of the sensor")
