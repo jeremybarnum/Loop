@@ -339,6 +339,7 @@ final class PodLoanWatchController {
             return
         }
         guard let message = message else { return }
+        WatchLogFile.append("[msg] from the iPhone: \(WatchLogFile.kind(of: message))")
 
         switch message {
         case .grant(let grant):
@@ -376,6 +377,7 @@ final class PodLoanWatchController {
 
     func sendMessage(_ message: LoanMessage) {
         guard let dictionary = try? message.transportDictionary() else { return }
+        WatchLogFile.append("[msg] to the iPhone: \(WatchLogFile.kind(of: message))")
         send?(dictionary)
     }
 

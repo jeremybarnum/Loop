@@ -121,6 +121,7 @@ final class StockLoopSession {
                 NotificationCenter.default.post(name: .podLoanPhaseDidChange, object: nil)
             } else {
                 LoopStallWatchdog.disarm()
+                WatchLogFile.sendToPhone("loan ended")
 
                 // Loop mode is per session.
                 self.stack.loopManager.resetClosedLoopForSessionEnd()

@@ -108,6 +108,7 @@ extension WatchLoopManager {
                                           enactVerdict,
                                           watchdogRefreshed ? "refreshed" : "held",
                                           sinceCompleted.map { "\($0) s ago" } ?? "never"))
+            Task { @MainActor in PowerLog.note("loop cycle") }   // Testing: battery and processor use
 
             if let error {
                 self.log.error("Loop ended with error: %{public}@", String(describing: error))

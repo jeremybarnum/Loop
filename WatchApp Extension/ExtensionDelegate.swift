@@ -100,6 +100,8 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     }
 
     func applicationDidFinishLaunching() {
+        WatchLogFile.append("[app] launched, pid \(ProcessInfo.processInfo.processIdentifier)")
+        PowerLog.start()   // Testing: a power line every 10 seconds while the app runs
         podLoanDidFinishLaunching()
         UNUserNotificationCenter.current().delegate = self
         if #available(watchOSApplicationExtension 5.0, *) {
@@ -108,6 +110,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     }
 
     func applicationDidBecomeActive() {
+        WatchLogFile.append("[app] in front")
         usageRecorder.didBecomeActive()
 
         if WCSession.default.activationState != .activated {
@@ -127,6 +130,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     }
 
     func applicationWillResignActive() {
+        WatchLogFile.append("[app] leaving the front")
         usageRecorder.willResignActive()
         podLoanWillResignActive()
     }
@@ -143,6 +147,8 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
             DispatchQueue.main.async { self.handle(backgroundTasks) }
             return
         }
+        WatchLogFile.append("[app] woken: " + backgroundTasks.map { String(describing: type(of: $0)) }.sorted().joined(separator: ", "))
+        PowerLog.note("woken")   // Testing
         loopManager.requestGlucoseBackfillIfNecessary()
         finish(Array(backgroundTasks))
     }

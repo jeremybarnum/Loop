@@ -13,5 +13,6 @@ enum PhoneLog {
     /// `category` names the part of Sport Mode the line is about.
     static func event(_ category: String, _ message: String) {
         log.default("[%{public}@] %{public}@", category, message)
+        WatchLogKeeper.appendPhoneLine("[\(category)] \(message)")
     }
 }
