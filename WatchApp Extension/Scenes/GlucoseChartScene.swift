@@ -176,6 +176,7 @@ class GlucoseChartScene: SKScene {
 
     override func update(_ currentTime: TimeInterval) {
         logger.debug("update(_:)")
+        MainActor.assumeIsolated { PowerLog.noteChartFrame() }   // Testing: counts the chart's frames
 
         if needsUpdate {
             needsUpdate = false

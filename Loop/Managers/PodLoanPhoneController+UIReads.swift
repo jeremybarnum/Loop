@@ -26,6 +26,8 @@ extension PodLoanPhoneController {
             "* take-back insulin check owed: \(saved.pendingForceAudit != nil)",
             "* insulin estimates standing: \(saved.ledger.bookings.count)",
             "* automatic dosing held: \(holdsAutomaticDosing)",
+            "",
+            WatchLogKeeper.reportSection(),
         ].joined(separator: "\n")
     }
 

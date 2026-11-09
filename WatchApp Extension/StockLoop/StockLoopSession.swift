@@ -126,6 +126,7 @@ final class StockLoopSession {
                 // Normally already done by teardownPump.
                 LoanRemoteUploads.shared.end()
                 LoopStallWatchdog.disarm()
+                WatchLogFile.sendToPhone("loan ended")
 
                 // Loop mode is per session.
                 self.stack.loopManager.resetClosedLoopForSessionEnd()

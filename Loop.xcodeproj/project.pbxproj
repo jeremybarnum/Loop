@@ -794,6 +794,7 @@
 		A87ACB92DBC4CA2D50EFAB07 /* PodLoanPhoneController+UIReads.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F73A2676DA24049E2D391ED /* PodLoanPhoneController+UIReads.swift */; };
 		4E2EBC6125D8F32220F01615 /* PodLoanPhoneController+Reclaim.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3251D935F398630AC07CA3E9 /* PodLoanPhoneController+Reclaim.swift */; };
 		403B9622AF3540FB052C59C3 /* WatchDataManager+PodLoan.swift in Sources */ = {isa = PBXBuildFile; fileRef = A272AF93197B2BD41B81B693 /* WatchDataManager+PodLoan.swift */; };
+		105B39859FF7421195028EA2 /* WatchLogKeeper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 536FF5B9A4E6433D97D8D7D6 /* WatchLogKeeper.swift */; };
 		BADED19355C7566CF6CB0A19 /* LoopDataManager+PodLoan.swift in Sources */ = {isa = PBXBuildFile; fileRef = FED34CEFF556A1454634CD73 /* LoopDataManager+PodLoan.swift */; };
 		7107C26D3A4713D7FB208B3F /* AlertManager+PodLoan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1475514C54ADC466268A8652 /* AlertManager+PodLoan.swift */; };
 		D8C2C308CDCA40C885044C9A /* StatusTableViewController+PodLoan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BB5940F7EE8E813C6C458FE /* StatusTableViewController+PodLoan.swift */; };
@@ -858,6 +859,7 @@
 		E9C58A7F24DB529A00487A17 /* counteraction_effect_falling_glucose.json in Resources */ = {isa = PBXBuildFile; fileRef = E9C58A7A24DB529A00487A17 /* counteraction_effect_falling_glucose.json */; };
 		E9C58A8024DB529A00487A17 /* insulin_effect.json in Resources */ = {isa = PBXBuildFile; fileRef = E9C58A7B24DB529A00487A17 /* insulin_effect.json */; };
 		F06FDE1F67AF4011937B1529 /* SportLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C940C6F431E6435B971D98B2 /* SportLog.swift */; };
+		1552D942FEB5416FAC25238A /* WatchLogFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3DE8CEAE5944BEDACEBEFA8 /* WatchLogFile.swift */; };
 		FA2B53E0B7A546DB996D8B5E /* RileyLinkBLEKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C03823C4CE664226A1EDAF41 /* RileyLinkBLEKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		FA37F6EC10FF02D4F985D724 /* honk.caf in Resources */ = {isa = PBXBuildFile; fileRef = 6D5FCC7207E50ACC682E9E6E /* honk.caf */; };
 		FADE0001000000000000DE02 /* DevelopmentBranchAlerter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE0001000000000000DE01 /* DevelopmentBranchAlerter.swift */; };
@@ -1602,6 +1604,7 @@
 		4F73A2676DA24049E2D391ED /* PodLoanPhoneController+UIReads.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PodLoanPhoneController+UIReads.swift"; path = "Loop/Managers/PodLoanPhoneController+UIReads.swift"; sourceTree = SOURCE_ROOT; };
 		3251D935F398630AC07CA3E9 /* PodLoanPhoneController+Reclaim.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PodLoanPhoneController+Reclaim.swift"; path = "Loop/Managers/PodLoanPhoneController+Reclaim.swift"; sourceTree = SOURCE_ROOT; };
 		A272AF93197B2BD41B81B693 /* WatchDataManager+PodLoan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchDataManager+PodLoan.swift"; path = "Loop/Managers/PodLoan/WatchDataManager+PodLoan.swift"; sourceTree = SOURCE_ROOT; };
+		536FF5B9A4E6433D97D8D7D6 /* WatchLogKeeper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WatchLogKeeper.swift; path = "Loop/Managers/PodLoan/WatchLogKeeper.swift"; sourceTree = SOURCE_ROOT; };
 		FED34CEFF556A1454634CD73 /* LoopDataManager+PodLoan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LoopDataManager+PodLoan.swift"; path = "Loop/Managers/PodLoan/LoopDataManager+PodLoan.swift"; sourceTree = SOURCE_ROOT; };
 		1475514C54ADC466268A8652 /* AlertManager+PodLoan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "AlertManager+PodLoan.swift"; path = "Loop/Managers/PodLoan/AlertManager+PodLoan.swift"; sourceTree = SOURCE_ROOT; };
 		6BB5940F7EE8E813C6C458FE /* StatusTableViewController+PodLoan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "StatusTableViewController+PodLoan.swift"; path = "Loop/Managers/PodLoan/StatusTableViewController+PodLoan.swift"; sourceTree = SOURCE_ROOT; };
@@ -1775,6 +1778,7 @@
 		C1FB428E217921D600FAB378 /* PumpManagerUI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PumpManagerUI.swift; sourceTree = "<group>"; };
 		C8B06DC011B54C348CC2A48F /* LoopStallWatchdog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LoopStallWatchdog.swift; path = "WatchApp Extension/StockLoop/LoopStallWatchdog.swift"; sourceTree = SOURCE_ROOT; };
 		C940C6F431E6435B971D98B2 /* SportLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SportLog.swift; path = "WatchApp Extension/StockLoop/SportLog.swift"; sourceTree = SOURCE_ROOT; };
+		B3DE8CEAE5944BEDACEBEFA8 /* WatchLogFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WatchLogFile.swift; path = "WatchApp Extension/StockLoop/WatchLogFile.swift"; sourceTree = SOURCE_ROOT; };
 		C9A47B0175B13A9543390BC5 /* CriticalAlertAudioPlayer.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = CriticalAlertAudioPlayer.swift; sourceTree = "<group>"; };
 		C9A47B0275B13A9543390BC6 /* GlucoseAlertManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = GlucoseAlertManager.swift; sourceTree = "<group>"; };
 		C71A6661AA828EAFD63C8F08 /* GlucoseAlertManager+Sharing.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = "GlucoseAlertManager+Sharing.swift"; sourceTree = "<group>"; };
@@ -2865,6 +2869,7 @@
 				4F73A2676DA24049E2D391ED /* PodLoanPhoneController+UIReads.swift */,
 				3251D935F398630AC07CA3E9 /* PodLoanPhoneController+Reclaim.swift */,
 				A272AF93197B2BD41B81B693 /* WatchDataManager+PodLoan.swift */,
+				536FF5B9A4E6433D97D8D7D6 /* WatchLogKeeper.swift */,
 				FED34CEFF556A1454634CD73 /* LoopDataManager+PodLoan.swift */,
 				1475514C54ADC466268A8652 /* AlertManager+PodLoan.swift */,
 				6BB5940F7EE8E813C6C458FE /* StatusTableViewController+PodLoan.swift */,
@@ -2902,6 +2907,7 @@
 				F89D20C8E12BA79EEB440570 /* WatchLoopManager+Dosing.swift */,
 				C4975B7BB91A91CB21F89ED6 /* WatchLoopManager+Cycle.swift */,
 				C940C6F431E6435B971D98B2 /* SportLog.swift */,
+				B3DE8CEAE5944BEDACEBEFA8 /* WatchLogFile.swift */,
 				036B897A66F14CAA9CD5CAD0 /* PodLoanWatchController.swift */,
 				5B7EDF8F4E611C98701399C6 /* CarbAndBolusFlow+PodLoan.swift */,
 				DAB6D8790872D927B336A1E3 /* ContentView+PodLoan.swift */,
@@ -4268,6 +4274,7 @@
 				A87ACB92DBC4CA2D50EFAB07 /* PodLoanPhoneController+UIReads.swift in Sources */,
 				4E2EBC6125D8F32220F01615 /* PodLoanPhoneController+Reclaim.swift in Sources */,
 				403B9622AF3540FB052C59C3 /* WatchDataManager+PodLoan.swift in Sources */,
+				105B39859FF7421195028EA2 /* WatchLogKeeper.swift in Sources */,
 				BADED19355C7566CF6CB0A19 /* LoopDataManager+PodLoan.swift in Sources */,
 				7107C26D3A4713D7FB208B3F /* AlertManager+PodLoan.swift in Sources */,
 				D8C2C308CDCA40C885044C9A /* StatusTableViewController+PodLoan.swift in Sources */,
@@ -4577,6 +4584,7 @@
 				3DAF0D06E678E7616137C84A /* WatchLoopManager+Dosing.swift in Sources */,
 				344ABCF8A638888D8C0AC47B /* WatchLoopManager+Cycle.swift in Sources */,
 				F06FDE1F67AF4011937B1529 /* SportLog.swift in Sources */,
+				1552D942FEB5416FAC25238A /* WatchLogFile.swift in Sources */,
 				4624A94E56A6ABB49478893A /* DoseEnactor.swift in Sources */,
 				6A838D32706E94DA476EF481 /* NetBasal.swift in Sources */,
 				BA74C0C0BF4E8CFCB0D9EBAD /* BasalDeliveryState.swift in Sources */,

@@ -76,6 +76,7 @@ extension WatchLoopManager: AlertIssuer, PersistedAlertStore {
     /// The CGM's lines are `WatchCGMHost`'s.
     func deviceManager(_ manager: DeviceManager, logEventForDeviceIdentifier deviceIdentifier: String?, type: DeviceLogEntryType, message: String, completion: ((Error?) -> Void)?) {
         log.default("Device %{public}@: %{public}@", deviceIdentifier ?? "unknown", message)
+        WatchLogFile.append("[pump] \(deviceIdentifier ?? "-") \(type) \(message)")
 
         if let deviceLog, manager is PumpManager || pumpManager != nil {
             deviceLog.log(managerIdentifier: manager.pluginIdentifier, deviceIdentifier: deviceIdentifier, type: type, message: message, completion: completion)
