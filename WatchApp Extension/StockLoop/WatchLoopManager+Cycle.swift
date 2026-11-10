@@ -130,6 +130,8 @@ extension WatchLoopManager {
             // Stock's predicted-low alert reads `LoopDataManager.predictedGlucose`, the display
             // run's forecast, on both arms.
             self.evaluatePredictedLowAlert(self.displayState.output?.predictedGlucose.map(\.loopKit))
+            // Testing: the log's new lines go to the phone (WatchLogFile.swift).
+            WatchLogFile.sendNow()
         }
     }
 
