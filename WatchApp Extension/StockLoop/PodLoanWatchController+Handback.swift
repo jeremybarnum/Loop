@@ -196,7 +196,10 @@ extension PodLoanWatchController {
         }
         // Dosing stops on the loop's lane, behind any cycle already sending: its dose is then
         // journaled while the loan is still live, and rides in the final offer.
+        let queuedAt = now()
+        SportLog.event("loan", "End: stopping dosing, queued behind the loop's work under way")
         loopManager.onLane { [loopManager] in
+            SportLog.event("loan", String(format: "End: the loop's work finished after %.1f s; stopping dosing", self.now().timeIntervalSince(queuedAt)))
             loopManager.pumpManager = nil
             self.finalizeHandback(releasing: manager)
         }
@@ -347,6 +350,9 @@ extension PodLoanWatchController {
         handbackAckedAt = now()
         // An empty backlog is the finalize gate.
         journal.applyAck(committedCursor: ack.committedCursor)
+        if handbackRequested {
+            SportLog.event("loan", "phone answered the End: acknowledged up to \(ack.committedCursor) of \(journal.lastEventSeq), \(journal.unackedEvents().count) record(s) still to send")
+        }
         guard journal.unackedEvents().isEmpty else { return }
 
         // Fully drained while the user is still waiting: that is what triggers finalize.
