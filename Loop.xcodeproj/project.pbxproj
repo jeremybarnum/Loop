@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		101AA7370B0E499FBD88BB9F /* G7SensorKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = F8760AF31E3C43F6AFBA1BE7 /* G7SensorKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		52CB9A826E3B3DFC4E483084 /* AlgorithmBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36421A4B9676EF68CDDC4ECD /* AlgorithmBridge.swift */; };
 		01F99A06F17502CC60E9535C /* AlgorithmBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36421A4B9676EF68CDDC4ECD /* AlgorithmBridge.swift */; };
 		9950DD7109C8F6C854AAAB48 /* LoopKitTypeAliases.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35FAEFD820F50BFF211AC6D9 /* LoopKitTypeAliases.swift */; };
@@ -62,7 +63,6 @@
 		0580A71C73134CBC9DE309C5 /* LoopStallWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8B06DC011B54C348CC2A48F /* LoopStallWatchdog.swift */; };
 		0A02E77AD7536C322933D49B /* minimal.caf in Resources */ = {isa = PBXBuildFile; fileRef = 74145BE3C46270883D295A1F /* minimal.caf */; };
 		0FA5104ABA1346E891F759AD /* OmnipodKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A60E55AC77554C50A4196482 /* OmnipodKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		101AA7370B0E499FBD88BB9F /* G7SensorKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = F8760AF31E3C43F6AFBA1BE7 /* G7SensorKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		124B300527D84BE2A1233A91 /* urgent_low.caf in Resources */ = {isa = PBXBuildFile; fileRef = C9EA3F48338B49BD9C6BD0F9 /* urgent_low.caf */; };
 		7877942ED674BA37847514AD /* Loop/Resources/Sounds/acoustic_hg_harsh.caf in Resources */ = {isa = PBXBuildFile; fileRef = A9B1F564432BCBF70C0C6CBB /* Loop/Resources/Sounds/acoustic_hg_harsh.caf */; };
 		A82DB18B916DC17D2E180D59 /* Loop/Resources/Sounds/acoustic_hg_medium.caf in Resources */ = {isa = PBXBuildFile; fileRef = 3481DFC7974E27ABE6AAC4C3 /* Loop/Resources/Sounds/acoustic_hg_medium.caf */; };
