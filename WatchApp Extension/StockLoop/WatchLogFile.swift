@@ -9,6 +9,7 @@
 //
 
 import Foundation
+import CoreBluetooth
 import WatchConnectivity
 import WatchKit
 
@@ -157,4 +158,89 @@ enum PowerLog {
         guard result == KERN_SUCCESS else { return (0, 0, 0) }
         return (info.task_interrupt_wakeups, info.task_platform_idle_wakeups, info.task_timer_wakeups_bin_1 &+ info.task_timer_wakeups_bin_2)
     }
+}
+
+/// Testing only: one line when the pod or the sensor connects again after a long silence, with how
+/// long it was and where the app stood. The watch's Bluetooth can hold every connection while it waits
+/// to change its own address, until the screen lights or the app in front wakes; these lines count
+/// such gaps without a sysdiagnose.
+enum RadioLog {
+    private static let lock = NSLock()
+    private static var lastReached: [String: Date] = [:]
+    private static var place = "launched"
+    private static var placeSince = Date()
+
+    /// The app moved: in front, leaving the front, behind the clock, back from behind the clock.
+    static func app(_ now: String) {
+        lock.lock(); place = now; placeSince = Date(); lock.unlock()
+        WatchLogFile.append("[app] \(now)")
+    }
+
+    /// The pod or the sensor connected. Silent unless its last connection was over 7 minutes ago.
+    static func reached(_ device: String) {
+        let now = Date()
+        lock.lock()
+        let last = lastReached[device]
+        lastReached[device] = now
+        let (place, since) = (self.place, placeSince)
+        lock.unlock()
+        guard let last, now.timeIntervalSince(last) > 420 else { return }
+        WatchLogFile.append(String(format: "[radio] %@ connected again after %.0f s · app %@ for the last %.0f s",
+                                   device, now.timeIntervalSince(last), place, now.timeIntervalSince(since)))
+    }
+}
+
+/// Testing only: a workaround for a watchOS fault. About every 20 minutes the watch's Bluetooth changes
+/// its own address; with a connection pending it holds every connection until its scan is restarted,
+/// and with the screen dark and the app behind the clock nothing restarts it. A scan started and
+/// stopped by the app restarts it. This is the one place that does so, for the pod and the sensor:
+/// when the pod's connection has been pending for a minute, or the sensor (which connects every five
+/// minutes) has not connected for six, start and stop a scan, at most once a minute.
+final class ScanRestart: NSObject, CBCentralManagerDelegate {
+    static let shared = ScanRestart()
+
+    private let queue = DispatchQueue(label: "ScanRestart")
+    private var central: CBCentralManager?
+    private var timer: DispatchSourceTimer?
+    private var podPendingSince: Date?
+    private var sensorLastConnected: Date?
+    private var lastRestart = Date.distantPast
+    /// Matches no device; a scan request is all that is needed.
+    private let filter = CBUUID(string: "7B1C0001-5C0A-4E0B-9A57-2F6D0C4E7A10")
+
+    /// Starts watching. Checks every 20 seconds while the app runs; a check that came due while the
+    /// app was suspended runs as soon as it wakes.
+    func start() {
+        queue.async {
+            guard self.central == nil else { return }
+            self.central = CBCentralManager(delegate: self, queue: self.queue)
+            let timer = DispatchSource.makeTimerSource(queue: self.queue)
+            timer.schedule(deadline: .now() + 20, repeating: 20)
+            timer.setEventHandler { [weak self] in self?.check() }
+            timer.resume()
+            self.timer = timer
+        }
+    }
+
+    func podConnectRequested() { queue.async { if self.podPendingSince == nil { self.podPendingSince = Date() }; self.check() } }
+    func podConnected() { queue.async { self.podPendingSince = nil } }
+    func sensorConnected() { queue.async { self.sensorLastConnected = Date() } }
+
+    private func check() {
+        let now = Date()
+        let podWait = podPendingSince.map { now.timeIntervalSince($0) } ?? 0
+        let sensorWait = sensorLastConnected.map { now.timeIntervalSince($0) } ?? 0
+        guard podWait > 60 || sensorWait > 360 else { return }
+        guard now.timeIntervalSince(lastRestart) > 60 else { return }
+        guard let central, central.state == .poweredOn else {
+            WatchLogFile.append("[radio] scan restart wanted but Bluetooth is not ready")
+            return
+        }
+        lastRestart = now
+        WatchLogFile.append(String(format: "[radio] scan restart: pod pending %.0f s, sensor silent %.0f s", podWait, sensorWait))
+        central.scanForPeripherals(withServices: [filter], options: nil)
+        queue.asyncAfter(deadline: .now() + 1) { central.stopScan() }
+    }
+
+    func centralManagerDidUpdateState(_ central: CBCentralManager) {}
 }

@@ -102,6 +102,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     func applicationDidFinishLaunching() {
         WatchLogFile.append("[app] launched, pid \(ProcessInfo.processInfo.processIdentifier)")
         PowerLog.start()   // Testing: a power line every 10 seconds while the app runs
+        ScanRestart.shared.start()   // Testing: see ScanRestart
         podLoanDidFinishLaunching()
         UNUserNotificationCenter.current().delegate = self
         if #available(watchOSApplicationExtension 5.0, *) {
@@ -110,7 +111,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     }
 
     func applicationDidBecomeActive() {
-        WatchLogFile.append("[app] in front")
+        RadioLog.app("in front")
         usageRecorder.didBecomeActive()
 
         if WCSession.default.activationState != .activated {
@@ -130,9 +131,18 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     }
 
     func applicationWillResignActive() {
-        WatchLogFile.append("[app] leaving the front")
+        RadioLog.app("leaving the front")
         usageRecorder.willResignActive()
         podLoanWillResignActive()
+    }
+
+    // Testing: the app going behind the clock (or another app) and coming back, for the watch's log.
+    func applicationDidEnterBackground() {
+        RadioLog.app("behind the clock")
+    }
+
+    func applicationWillEnterForeground() {
+        RadioLog.app("back from behind the clock")
     }
 
     func handleUserActivity(_ userInfo: [AnyHashable: Any]?) {
