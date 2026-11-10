@@ -78,13 +78,13 @@ extension WatchDataManager {
             phoneReach: { [weak self] in
                 FeatureFlags.sportModePushEnabled ? SportModePushKey.phoneReach(deviceToken: self?.settingsManager.settings.deviceToken) : nil
             },
-            addPumpEvents: { [weak self] events, completeUpTo, completion in
+            addPumpEvents: { [weak self] events, completeUpTo, loanEndsNow, completion in
                 guard let self = self else { completion(nil); return }
 
                 Task {
                     do {
                         let released = (self.deviceManager.pumpManager as? ExclusiveDeviceControl)?.isControlReleased == true
-                        let amended = try await self.deviceManager.doseStore.saveLoanRecords(events, completeUpTo: completeUpTo, phoneHasReleasedThePod: released)
+                        let amended = try await self.deviceManager.doseStore.saveLoanRecords(events, completeUpTo: completeUpTo, phoneHasReleasedThePod: released, loanEndsNow: loanEndsNow)
                         if !amended.isEmpty {
                             PhoneLog.event("loan", "\(amended.count) of the watch's rate records are older than the scheduled basal already recorded; written to the dose store directly")
                         }
