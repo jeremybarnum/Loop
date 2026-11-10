@@ -26,6 +26,8 @@ extension WatchLoopManager {
         let mgdl = Int(latest.quantity.doubleValue(for: .milligramsPerDeciliter).rounded())
         SportLog.event("glucose", "G7 reading \(mgdl) mg/dL, \(Int(self.now().timeIntervalSince(latest.date))) s old"
             + (samples.count > 1 ? ", with \(samples.count - 1) backfilled" : "") + (storedNew ? "" : ", already stored"))
+        // Testing: the log's new lines go to the phone from the background too, at most every 15 minutes (WatchLogFile.swift).
+        WatchLogFile.sendIfDue()
 
         let now = self.now()
         if storedNew, claimCGMLoopTrigger(at: now) {

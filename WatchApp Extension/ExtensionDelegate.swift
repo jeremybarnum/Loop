@@ -133,6 +133,8 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         WatchLogFile.append("[app] leaving the front")
         usageRecorder.willResignActive()
         podLoanWillResignActive()
+        // Testing: the log's new lines go to the phone (WatchLogFile.swift).
+        WatchLogFile.sendNow()
     }
 
     func handleUserActivity(_ userInfo: [AnyHashable: Any]?) {

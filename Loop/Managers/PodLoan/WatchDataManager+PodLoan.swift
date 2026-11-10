@@ -150,6 +150,7 @@ extension WatchDataManager {
     /// A loan's history, read at once (the system deletes the file on return) for the stores.
     nonisolated func session(_ session: WCSession, didReceive file: WCSessionFile) {
         if file.metadata?["kind"] as? String == WatchLogKeeper.fileKind { WatchLogKeeper.keep(file); return }
+        if file.metadata?["kind"] as? String == WatchLogKeeper.linesFileKind { WatchLogKeeper.keepLines(file); return }
         guard FeatureFlags.sportModeEnabled, file.metadata?["kind"] as? String == LoanHistory.fileKind else { return }
         do {
             let transfer = try LoanHistory.decode(Data(contentsOf: file.fileURL))

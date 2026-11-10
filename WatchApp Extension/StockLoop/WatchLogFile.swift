@@ -3,7 +3,9 @@
 //  WatchApp Extension
 //
 //  Testing only: Sport Mode's log lines also go to a file on the watch, sent to the phone once at
-//  the end of each loan (nothing is sent during a loan). Not part of the Sport Mode pull requests.
+//  the end of each loan. Its new lines also go to the phone in between: at the end of each loop cycle,
+//  when the app leaves the screen, and at a sensor reading 15 minutes after the last send, so a loan
+//  that never ends cleanly still leaves its lines on the phone. Not part of the Sport Mode pull requests.
 //
 //  Copyright © 2026 LoopKit Authors. All rights reserved.
 //
@@ -31,21 +33,73 @@ enum WatchLogFile {
         return f
     }()
 
+    /// The lines not yet sent to the phone.
+    private static let unsent: URL? = url?.deletingLastPathComponent().appendingPathComponent("watch-unsent.log")
+
     /// Stamped at the call; never blocks the caller.
     static func append(_ line: String) {
         guard let url else { return }
         let data = Data("\(stamp.string(from: Date())) \(line)\n".utf8)
         queue.async {
-            var size: UInt64 = 0
-            if let handle = try? FileHandle(forWritingTo: url) {
-                size = (try? handle.seekToEnd()) ?? 0
-                try? handle.write(contentsOf: data)
-                try? handle.close()
-            } else {
-                try? data.write(to: url)
-            }
-            if size > maxBytes { trim(url) }
+            write(data, to: url)
+            if let unsent { write(data, to: unsent) }
         }
+    }
+
+    // MARK: - Sending new lines to the phone
+
+    /// The phone adds files of this kind to its Documents/WatchLogs/watch-live.log.
+    static let linesFileKind = "watchLogLines"
+    private static let sendQueue = DispatchQueue(label: "com.loopkit.Loop.WatchLogFile.send", qos: .utility)
+    private static let backgroundInterval: TimeInterval = 15 * 60
+    private static var lastSent = Date.distantPast   // `sendQueue`-confined
+
+    /// At each sensor reading: a send when the last was 15 minutes ago or more, so the lines reach the
+    /// phone without Loop being opened.
+    static func sendIfDue() {
+        sendQueue.async {
+            guard Date().timeIntervalSince(lastSent) >= backgroundInterval else { return }
+            send()
+        }
+    }
+
+    static func sendNow() {
+        sendQueue.async { send() }
+    }
+
+    /// On `sendQueue`. Transfers queue while the phone is out of reach.
+    private static func send() {
+        let session = WCSession.default
+        guard session.activationState == .activated,
+              let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+        lastSent = Date()
+        let directory = caches.appendingPathComponent("WatchLogOut", isDirectory: true)
+        // Files whose transfer has finished; the system may still be reading one that is outstanding.
+        let outstanding = Set(session.outstandingFileTransfers.map { $0.file.fileURL.lastPathComponent })
+        for old in (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        where !outstanding.contains(old.lastPathComponent) {
+            try? FileManager.default.removeItem(at: old)
+        }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let lines = directory.appendingPathComponent("watch-lines-\(UUID().uuidString).log")
+        let moved: Bool = queue.sync {
+            guard let unsent, FileManager.default.fileExists(atPath: unsent.path) else { return false }
+            return (try? FileManager.default.moveItem(at: unsent, to: lines)) != nil
+        }
+        if moved { session.transferFile(lines, metadata: ["kind": linesFileKind]) }
+    }
+
+    /// On `queue`.
+    private static func write(_ data: Data, to url: URL) {
+        var size: UInt64 = 0
+        if let handle = try? FileHandle(forWritingTo: url) {
+            size = (try? handle.seekToEnd()) ?? 0
+            try? handle.write(contentsOf: data)
+            try? handle.close()
+        } else {
+            try? data.write(to: url)
+        }
+        if size > maxBytes { trim(url) }
     }
 
     /// Keeps the newest bytes, starting on a line boundary.
