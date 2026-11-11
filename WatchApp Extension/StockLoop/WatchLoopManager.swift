@@ -405,6 +405,8 @@ final class WatchLoopManager {
         ]
         for (name, store) in storeChanges {
             NotificationCenter.default.addObserver(forName: name, object: store, queue: nil) { [weak self] _ in
+                // Testing: what set off this display run.
+                SportLog.event("display", "run asked for by \(name.rawValue) from \(StoreChangeOrigin.describe())")
                 Task { @MainActor in self?.updateDisplayStateForChange() }
             }
         }
