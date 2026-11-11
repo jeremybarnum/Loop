@@ -170,6 +170,8 @@ enum RadioLog {
     private static var place = "launched"
     private static var placeSince = Date()
 
+    static var inFront: Bool { lock.lock(); defer { lock.unlock() }; return place == "in front" }
+
     /// The app moved: in front, leaving the front, behind the clock, back from behind the clock.
     static func app(_ now: String) {
         lock.lock(); place = now; placeSince = Date(); lock.unlock()
@@ -194,8 +196,11 @@ enum RadioLog {
 /// its own address; with a connection pending it holds every connection until its scan is restarted,
 /// and with the screen dark and the app behind the clock nothing restarts it. A scan started and
 /// stopped by the app restarts it. This is the one place that does so, for the pod and the sensor:
-/// when the pod's connection has been pending for a minute, or the sensor (which connects every five
-/// minutes) has not connected for six, start and stop a scan, at most once a minute.
+/// when the pod's connection has been pending for a minute, or the app runs behind the clock more
+/// than two minutes after the sensor last connected, start and stop a scan, at most once a minute.
+/// Two minutes, not an overdue reading: a hold sets between readings, and the wake that could end it
+/// (a message from the phone) may come before the next reading is due. Within those two minutes the
+/// cycle's own pod connection restarts the scan. A restart with no change waiting does nothing.
 final class ScanRestart: NSObject, CBCentralManagerDelegate {
     static let shared = ScanRestart()
 
@@ -230,7 +235,7 @@ final class ScanRestart: NSObject, CBCentralManagerDelegate {
         let now = Date()
         let podWait = podPendingSince.map { now.timeIntervalSince($0) } ?? 0
         let sensorWait = sensorLastConnected.map { now.timeIntervalSince($0) } ?? 0
-        guard podWait > 60 || sensorWait > 360 else { return }
+        guard podWait > 60 || (sensorWait > 120 && !RadioLog.inFront) else { return }
         guard now.timeIntervalSince(lastRestart) > 60 else { return }
         guard let central, central.state == .poweredOn else {
             WatchLogFile.append("[radio] scan restart wanted but Bluetooth is not ready")
