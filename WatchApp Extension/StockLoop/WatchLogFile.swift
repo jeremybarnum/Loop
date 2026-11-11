@@ -198,6 +198,7 @@ enum RadioLog {
 /// stopped by the app restarts it. This is the one place that does so, for the pod and the sensor:
 /// when the pod's connection has been pending for a minute, or the app runs behind the clock more
 /// than two minutes after the sensor last connected, start and stop a scan, at most once a minute.
+/// It is checked when watchOS wakes the app and when the pod is dialed, not on a timer.
 /// Two minutes, not an overdue reading: a hold sets between readings, and the wake that could end it
 /// (a message from the phone) may come before the next reading is due. Within those two minutes the
 /// cycle's own pod connection restarts the scan. A restart with no change waiting does nothing.
@@ -206,26 +207,23 @@ final class ScanRestart: NSObject, CBCentralManagerDelegate {
 
     private let queue = DispatchQueue(label: "ScanRestart")
     private var central: CBCentralManager?
-    private var timer: DispatchSourceTimer?
     private var podPendingSince: Date?
     private var sensorLastConnected: Date?
     private var lastRestart = Date.distantPast
     /// Matches no device; a scan request is all that is needed.
     private let filter = CBUUID(string: "7B1C0001-5C0A-4E0B-9A57-2F6D0C4E7A10")
 
-    /// Starts watching. Checks every 20 seconds while the app runs; a check that came due while the
-    /// app was suspended runs as soon as it wakes.
+    /// No timer: the rule runs when watchOS wakes the app (`appWoken`) and when the pod is dialed.
+    /// With the app suspended neither happens, and the rule does nothing.
     func start() {
         queue.async {
             guard self.central == nil else { return }
             self.central = CBCentralManager(delegate: self, queue: self.queue)
-            let timer = DispatchSource.makeTimerSource(queue: self.queue)
-            timer.schedule(deadline: .now() + 20, repeating: 20)
-            timer.setEventHandler { [weak self] in self?.check() }
-            timer.resume()
-            self.timer = timer
         }
     }
+
+    /// watchOS handed the app a background task: a message from the phone, or a Bluetooth event.
+    func appWoken() { queue.async { self.check() } }
 
     func podConnectRequested() { queue.async { if self.podPendingSince == nil { self.podPendingSince = Date() }; self.check() } }
     func podConnected() { queue.async { self.podPendingSince = nil } }

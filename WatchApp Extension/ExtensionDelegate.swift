@@ -159,6 +159,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         }
         WatchLogFile.append("[app] woken: " + backgroundTasks.map { String(describing: type(of: $0)) }.sorted().joined(separator: ", "))
         PowerLog.note("woken")   // Testing
+        ScanRestart.shared.appWoken()   // Testing: see ScanRestart
         loopManager.requestGlucoseBackfillIfNecessary()
         finish(Array(backgroundTasks))
     }
