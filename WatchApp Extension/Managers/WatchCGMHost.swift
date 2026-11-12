@@ -166,6 +166,7 @@ extension WatchCGMHost: CGMManagerDelegate {
     nonisolated func deviceManager(_ manager: DeviceManager, logEventForDeviceIdentifier deviceIdentifier: String?, type: DeviceLogEntryType, message: String, completion: ((Error?) -> Void)?) {
         os_log("%{public}@ %{public}@", log: OSLog(category: "WatchCGMDevice"), type: .default, String(describing: type), message)
         WatchLogFile.append("[cgm] \(deviceIdentifier ?? "-") \(type) \(message)")
+        if message == "Sensor connected" { RadioLog.reached("sensor"); ScanRestart.shared.sensorConnected() }   // Testing
         completion?(nil)
     }
 

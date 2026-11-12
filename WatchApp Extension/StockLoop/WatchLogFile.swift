@@ -11,6 +11,7 @@
 //
 
 import Foundation
+import CoreBluetooth
 import WatchConnectivity
 import WatchKit
 
@@ -211,4 +212,155 @@ enum PowerLog {
         guard result == KERN_SUCCESS else { return (0, 0, 0) }
         return (info.task_interrupt_wakeups, info.task_platform_idle_wakeups, info.task_timer_wakeups_bin_1 &+ info.task_timer_wakeups_bin_2)
     }
+}
+
+/// Testing only: one line each time the app's main thread went half a second or more without taking
+/// new work, with what the loop's queue was running. watchOS ends the app when a phone message waits
+/// too long for the main thread; these lines count how close the app comes, without a crash report.
+/// A background timer asks the main thread to answer four times a second and counts the ticks that pass
+/// before it does. Ticks, not clock time: a suspended app's timer doesn't fire, so time asleep isn't counted.
+enum MainThreadLog {
+    private static let queue = DispatchQueue(label: "MainThreadLog", qos: .utility)
+    private static let interval = 0.25
+    // On `queue`.
+    private static var timer: DispatchSourceTimer?
+    private static var asked = false
+    private static var missed = 0
+    // On the main thread.
+    @MainActor private static var laneWork: String?
+    @MainActor private static var laneWorkEnded: Date?
+    @MainActor private static var lastCPU = 0.0
+
+    static func start() {
+        queue.async {
+            guard timer == nil else { return }
+            let t = DispatchSource.makeTimerSource(queue: queue)
+            t.schedule(deadline: .now() + interval, repeating: interval, leeway: .milliseconds(50))
+            t.setEventHandler {
+                if asked { missed += 1; return }
+                asked = true
+                DispatchQueue.main.async {
+                    let missed: Int = queue.sync { defer { self.missed = 0; asked = false }; return self.missed }
+                    MainActor.assumeIsolated { answered(afterMissing: missed) }
+                }
+            }
+            t.resume()
+            timer = t
+        }
+    }
+
+    /// The loop's queue began or finished one piece of work (WatchLoopManager.onLane).
+    @MainActor static func laneBegan(_ work: String) { laneWork = work; laneWorkEnded = nil }
+    @MainActor static func laneEnded() { laneWorkEnded = Date() }
+
+    @MainActor private static func answered(afterMissing missed: Int) {
+        let cpu = mainThreadCPUSeconds()
+        defer { lastCPU = cpu }
+        guard missed >= 2 else { return }
+        let held = Double(missed) * interval
+        let during: String
+        if let laneWork, let ended = laneWorkEnded {
+            during = Date().timeIntervalSince(ended) < held + 2 * interval ? "as the queue finished \(laneWork)" : "queue idle"
+        } else if let laneWork {
+            during = "while the queue ran \(laneWork)"
+        } else {
+            during = "queue idle"
+        }
+        SportLog.event("app", String(format: "main thread held at least %.1f s (its cpu +%.2f s), %@", held, cpu - lastCPU, during))
+    }
+
+    /// Processor time the calling thread has used.
+    private static func mainThreadCPUSeconds() -> Double {
+        var t = timespec()
+        guard clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t) == 0 else { return 0 }
+        return Double(t.tv_sec) + Double(t.tv_nsec) / 1_000_000_000
+    }
+}
+
+/// Testing only: one line when the pod or the sensor connects again after a long silence, with how
+/// long it was and where the app stood. The watch's Bluetooth can hold every connection while it waits
+/// to change its own address, until the screen lights or the app in front wakes; these lines count
+/// such gaps without a sysdiagnose.
+enum RadioLog {
+    private static let lock = NSLock()
+    private static var lastReached: [String: Date] = [:]
+    private static var place = "launched"
+    private static var placeSince = Date()
+
+    static var inFront: Bool { lock.lock(); defer { lock.unlock() }; return place == "in front" }
+
+    /// The app moved: in front, leaving the front, behind the clock, back from behind the clock.
+    static func app(_ now: String) {
+        lock.lock(); place = now; placeSince = Date(); lock.unlock()
+        WatchLogFile.append("[app] \(now)")
+    }
+
+    /// The pod or the sensor connected. Silent unless its last connection was over 7 minutes ago.
+    static func reached(_ device: String) {
+        let now = Date()
+        lock.lock()
+        let last = lastReached[device]
+        lastReached[device] = now
+        let (place, since) = (self.place, placeSince)
+        lock.unlock()
+        guard let last, now.timeIntervalSince(last) > 420 else { return }
+        WatchLogFile.append(String(format: "[radio] %@ connected again after %.0f s · app %@ for the last %.0f s",
+                                   device, now.timeIntervalSince(last), place, now.timeIntervalSince(since)))
+    }
+}
+
+/// Testing only: a workaround for a watchOS fault. About every 20 minutes the watch's Bluetooth changes
+/// its own address; with a connection pending it holds every connection until its scan is restarted,
+/// and with the screen dark and the app behind the clock nothing restarts it. A scan started and
+/// stopped by the app restarts it. This is the one place that does so, for the pod and the sensor:
+/// when the pod's connection has been pending for a minute, or the app runs behind the clock more
+/// than two minutes after the sensor last connected, start and stop a scan, at most once a minute.
+/// It is checked when watchOS wakes the app and when the pod is dialed, not on a timer.
+/// Two minutes, not an overdue reading: a hold sets between readings, and the wake that could end it
+/// (a message from the phone) may come before the next reading is due. Within those two minutes the
+/// cycle's own pod connection restarts the scan. A restart with no change waiting does nothing.
+final class ScanRestart: NSObject, CBCentralManagerDelegate {
+    static let shared = ScanRestart()
+
+    private let queue = DispatchQueue(label: "ScanRestart")
+    private var central: CBCentralManager?
+    private var podPendingSince: Date?
+    private var sensorLastConnected: Date?
+    private var lastRestart = Date.distantPast
+    /// Matches no device; a scan request is all that is needed.
+    private let filter = CBUUID(string: "7B1C0001-5C0A-4E0B-9A57-2F6D0C4E7A10")
+
+    /// No timer: the rule runs when watchOS wakes the app (`appWoken`) and when the pod is dialed.
+    /// With the app suspended neither happens, and the rule does nothing.
+    func start() {
+        queue.async {
+            guard self.central == nil else { return }
+            self.central = CBCentralManager(delegate: self, queue: self.queue)
+        }
+    }
+
+    /// watchOS handed the app a background task: a message from the phone, or a Bluetooth event.
+    func appWoken() { queue.async { self.check() } }
+
+    func podConnectRequested() { queue.async { if self.podPendingSince == nil { self.podPendingSince = Date() }; self.check() } }
+    func podConnected() { queue.async { self.podPendingSince = nil } }
+    func sensorConnected() { queue.async { self.sensorLastConnected = Date() } }
+
+    private func check() {
+        let now = Date()
+        let podWait = podPendingSince.map { now.timeIntervalSince($0) } ?? 0
+        let sensorWait = sensorLastConnected.map { now.timeIntervalSince($0) } ?? 0
+        guard podWait > 60 || (sensorWait > 120 && !RadioLog.inFront) else { return }
+        guard now.timeIntervalSince(lastRestart) > 60 else { return }
+        guard let central, central.state == .poweredOn else {
+            WatchLogFile.append("[radio] scan restart wanted but Bluetooth is not ready")
+            return
+        }
+        lastRestart = now
+        WatchLogFile.append(String(format: "[radio] scan restart: pod pending %.0f s, sensor silent %.0f s", podWait, sensorWait))
+        central.scanForPeripherals(withServices: [filter], options: nil)
+        queue.asyncAfter(deadline: .now() + 1) { central.stopScan() }
+    }
+
+    func centralManagerDidUpdateState(_ central: CBCentralManager) {}
 }

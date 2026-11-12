@@ -240,7 +240,15 @@ final class LoopDataManager: ObservableObject {
             }
         ]
 
-        // Turn off preMeal when going into closed loop off mode
+        // Testing: what sets off each display run. Logging only; the observers above are unchanged.
+        for (name, store) in [(CarbStore.carbEntriesDidChange, carbStore as AnyObject),
+                              (GlucoseStore.glucoseSamplesDidChange, glucoseStore as AnyObject),
+                              (DoseStore.valuesDidChange, doseStore as AnyObject)] {
+            notificationObservers.append(NotificationCenter.default.addObserver(forName: name, object: store, queue: nil) { _ in
+                PhoneLog.event("display", "run asked for by \(name.rawValue) from \(StoreChangeOrigin.describe())")
+            })
+        }
+
         // Cancel any active temp basal when going into closed loop off mode
         // The dispatch is necessary in case this is coming from a didSet already on the settings struct.
         
@@ -342,6 +350,9 @@ final class LoopDataManager: ObservableObject {
     }
 
     func updateDisplayState(forceStoreRemoteRecommendation: Bool = false) async {
+        // Testing: how long each display run takes.
+        let displayRunStarted = Date()
+        defer { PhoneLog.event("display", String(format: "run took %.1f s", Date().timeIntervalSince(displayRunStarted))) }
 
         let newState = await cycle.displayState()
         if let input = newState.input {

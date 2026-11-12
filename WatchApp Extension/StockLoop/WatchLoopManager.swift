@@ -314,11 +314,20 @@ final class WatchLoopManager {
     /// awaits on the stores and the pod. The phone's operations interleave at their awaits; the watch
     /// keeps the order it has been tested with. In call order, so a grant's settings land before the
     /// loan's first prediction.
-    func onLane(_ work: @escaping @MainActor () async -> Void) {
+    func onLane(caller: String = #function, line: Int = #line, _ work: @escaping @MainActor () async -> Void) {
         let previous = laneTail
+        let queuedAt = Date()
         laneTail = Task {
             await previous?.value
+            let startedAt = Date()
+            MainThreadLog.laneBegan("\(caller) (line \(line))")   // Testing: see MainThreadLog
             await work()
+            MainThreadLog.laneEnded()
+            // Slow operations only: which one held the lane, and how long it had waited for it.
+            let ran = Date().timeIntervalSince(startedAt), waited = startedAt.timeIntervalSince(queuedAt)
+            if ran >= 1 || waited >= 1 {
+                SportLog.event("loop", String(format: "queue: %@ (line %d) ran %.1f s after waiting %.1f s", caller, line, ran, waited))
+            }
         }
     }
 
@@ -398,6 +407,8 @@ final class WatchLoopManager {
         ]
         for (name, store) in storeChanges {
             NotificationCenter.default.addObserver(forName: name, object: store, queue: nil) { [weak self] _ in
+                // Testing: what set off this display run.
+                SportLog.event("display", "run asked for by \(name.rawValue) from \(StoreChangeOrigin.describe())")
                 Task { @MainActor in self?.updateDisplayStateForChange() }
             }
         }

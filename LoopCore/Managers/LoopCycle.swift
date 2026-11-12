@@ -537,3 +537,18 @@ public final class LoopCycle {
         return Algorithm.run(input: input)
     }
 }
+
+/// Testing: which code announced a store change, read from the call stack at the announcement.
+/// Call it inside a notification observer registered with `queue: nil`, which runs on the poster's stack.
+public enum StoreChangeOrigin {
+    public static func describe() -> String {
+        Thread.callStackSymbols
+            .filter { !$0.contains("Foundation") && !$0.contains("StoreChangeOrigin") }
+            .prefix(5)
+            .map { frame -> String in
+                let parts = frame.split(separator: " ", omittingEmptySubsequences: true)
+                return parts.count > 3 ? String(parts[3].prefix(70)) : frame
+            }
+            .joined(separator: " < ")
+    }
+}
