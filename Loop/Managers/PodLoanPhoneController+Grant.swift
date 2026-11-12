@@ -34,6 +34,13 @@ extension PodLoanPhoneController {
             lastRequestAt = deps.now()
         }
 
+        // Tell the watch at once that its request is here, before the pod read and the grant.
+        // Testing: how long the request took to arrive.
+        if let sentAt = request.sentAt {
+            PhoneLog.event("loan", String(format: "Start request arrived %.1f s after the watch sent it", deps.now().timeIntervalSince(sentAt)))
+        }
+        sendMessage(.requestReceived(RequestReceived(requestID: request.requestID)))
+
         if !persisted.watchUsesSportMode {
             updateState { $0.watchUsesSportMode = true }
         }
@@ -81,6 +88,14 @@ extension PodLoanPhoneController {
         }
         guard deps.watchReadsCGM() else {
             deny("Sport Mode needs the watch to read the CGM. Turn on Read on Apple Watch in the CGM's settings on the iPhone.")
+            return
+        }
+
+        // The next loan's seed is this phone's dose history, and starting clears staging: the last
+        // loan's records are saved first.
+        guard !holdsUnsavedWatchRecords else {
+            deny("Ending the previous Sport Mode session. Tap Start again in a few seconds.")
+            saveUnsavedRecords()
             return
         }
 
