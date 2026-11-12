@@ -30,9 +30,13 @@ extension WatchLoopManager {
         WatchLogFile.sendIfDue()
 
         let now = self.now()
-        if storedNew, claimCGMLoopTrigger(at: now) {
+        guard storedNew else { return }
+        if claimCGMLoopTrigger(at: now) {
             log.default("Triggering loop from new CGM data at %{public}@", String(describing: now))
             checkPumpDataAndLoop()
+        } else {
+            // A new reading too soon after the last cycle: the display still shows it.
+            updateDisplayStateForChange()
         }
     }
 
@@ -65,6 +69,8 @@ extension WatchLoopManager {
         SportLog.event("glucose", "phone reading \(mgdl) mg/dL, \(Int(self.now().timeIntervalSince(sample.date))) s old, fills a gap in the watch's own readings")
         if claimCGMLoopTrigger(at: now()) {
             checkPumpDataAndLoop()
+        } else {
+            updateDisplayStateForChange()
         }
     }
 
