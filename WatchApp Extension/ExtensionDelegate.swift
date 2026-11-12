@@ -102,6 +102,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     func applicationDidFinishLaunching() {
         WatchLogFile.append("[app] launched, pid \(ProcessInfo.processInfo.processIdentifier)")
         PowerLog.start()   // Testing: a power line every 10 seconds while the app runs
+        MainThreadLog.start()   // Testing: a line when the main thread is held half a second or more
         ScanRestart.shared.start()   // Testing: see ScanRestart
         podLoanDidFinishLaunching()
         UNUserNotificationCenter.current().delegate = self

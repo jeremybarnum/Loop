@@ -320,7 +320,9 @@ final class WatchLoopManager {
         laneTail = Task {
             await previous?.value
             let startedAt = Date()
+            MainThreadLog.laneBegan("\(caller) (line \(line))")   // Testing: see MainThreadLog
             await work()
+            MainThreadLog.laneEnded()
             // Slow operations only: which one held the lane, and how long it had waited for it.
             let ran = Date().timeIntervalSince(startedAt), waited = startedAt.timeIntervalSince(queuedAt)
             if ran >= 1 || waited >= 1 {

@@ -160,6 +160,69 @@ enum PowerLog {
     }
 }
 
+/// Testing only: one line each time the app's main thread went half a second or more without taking
+/// new work, with what the loop's queue was running. watchOS ends the app when a phone message waits
+/// too long for the main thread; these lines count how close the app comes, without a crash report.
+/// A background timer asks the main thread to answer four times a second and counts the ticks that pass
+/// before it does. Ticks, not clock time: a suspended app's timer doesn't fire, so time asleep isn't counted.
+enum MainThreadLog {
+    private static let queue = DispatchQueue(label: "MainThreadLog", qos: .utility)
+    private static let interval = 0.25
+    // On `queue`.
+    private static var timer: DispatchSourceTimer?
+    private static var asked = false
+    private static var missed = 0
+    // On the main thread.
+    @MainActor private static var laneWork: String?
+    @MainActor private static var laneWorkEnded: Date?
+    @MainActor private static var lastCPU = 0.0
+
+    static func start() {
+        queue.async {
+            guard timer == nil else { return }
+            let t = DispatchSource.makeTimerSource(queue: queue)
+            t.schedule(deadline: .now() + interval, repeating: interval, leeway: .milliseconds(50))
+            t.setEventHandler {
+                if asked { missed += 1; return }
+                asked = true
+                DispatchQueue.main.async {
+                    let missed: Int = queue.sync { defer { self.missed = 0; asked = false }; return self.missed }
+                    MainActor.assumeIsolated { answered(afterMissing: missed) }
+                }
+            }
+            t.resume()
+            timer = t
+        }
+    }
+
+    /// The loop's queue began or finished one piece of work (WatchLoopManager.onLane).
+    @MainActor static func laneBegan(_ work: String) { laneWork = work; laneWorkEnded = nil }
+    @MainActor static func laneEnded() { laneWorkEnded = Date() }
+
+    @MainActor private static func answered(afterMissing missed: Int) {
+        let cpu = mainThreadCPUSeconds()
+        defer { lastCPU = cpu }
+        guard missed >= 2 else { return }
+        let held = Double(missed) * interval
+        let during: String
+        if let laneWork, let ended = laneWorkEnded {
+            during = Date().timeIntervalSince(ended) < held + 2 * interval ? "as the queue finished \(laneWork)" : "queue idle"
+        } else if let laneWork {
+            during = "while the queue ran \(laneWork)"
+        } else {
+            during = "queue idle"
+        }
+        SportLog.event("app", String(format: "main thread held at least %.1f s (its cpu +%.2f s), %@", held, cpu - lastCPU, during))
+    }
+
+    /// Processor time the calling thread has used.
+    private static func mainThreadCPUSeconds() -> Double {
+        var t = timespec()
+        guard clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t) == 0 else { return 0 }
+        return Double(t.tv_sec) + Double(t.tv_nsec) / 1_000_000_000
+    }
+}
+
 /// Testing only: one line when the pod or the sensor connects again after a long silence, with how
 /// long it was and where the app stood. The watch's Bluetooth can hold every connection while it waits
 /// to change its own address, until the screen lights or the app in front wakes; these lines count
