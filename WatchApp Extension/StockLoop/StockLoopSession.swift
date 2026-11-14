@@ -79,6 +79,9 @@ final class StockLoopSession {
                 session.transferUserInfo(payload)
                 let cancelled = stale.filter { !$0.isTransferring }
                 cancelled.forEach { $0.cancel() }
+                if !cancelled.isEmpty, case .handbackOffer? = newer {
+                    SportLog.event("wc", "the End's offer replaced \(cancelled.count) older queued send(s)")
+                }
             }
 
             guard urgent else {
