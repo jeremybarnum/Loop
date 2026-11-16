@@ -32,6 +32,16 @@ final class BackgroundTaskTests: XCTestCase {
         get throws { try XCTUnwrap(ExtensionDelegate.sharedIfAvailable(), "the test host's delegate") }
     }
 
+    override func setUp() {
+        super.setUp()
+        ExtensionDelegate.refreshTaskHold = 0   // finished at once; the device build holds it 2 s
+    }
+
+    override func tearDown() {
+        ExtensionDelegate.refreshTaskHold = 2
+        super.tearDown()
+    }
+
     func testARefreshAfterAPhoneMessageInTheSameWakeIsFinished() throws {
         let refresh = RecordingRefreshTask()
         try delegate.finish([RecordingConnectivityTask(), refresh])
