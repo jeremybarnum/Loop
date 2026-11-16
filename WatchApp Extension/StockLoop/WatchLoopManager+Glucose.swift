@@ -84,9 +84,6 @@ extension WatchLoopManager: AlertIssuer, PersistedAlertStore {
         log.default("Device %{public}@: %{public}@", deviceIdentifier ?? "unknown", message)
         WatchLogFile.append("[pump] \(deviceIdentifier ?? "-") \(type) \(message)")
         if message.hasPrefix("Pod connected") { RadioLog.reached("pod") }   // Testing
-        // Testing: see ScanRestart.
-        if message.hasPrefix("Pod connected") || message.hasPrefix("[release] releasing") { ScanRestart.shared.podConnected() }
-        else if message == "[connectOnDemand] connect" || message.hasPrefix("[eager] direct connect") { ScanRestart.shared.podConnectRequested() }
 
         if let deviceLog, manager is PumpManager || pumpManager != nil {
             deviceLog.log(managerIdentifier: manager.pluginIdentifier, deviceIdentifier: deviceIdentifier, type: type, message: message, completion: completion)

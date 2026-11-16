@@ -103,7 +103,6 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         WatchLogFile.append("[app] launched, pid \(ProcessInfo.processInfo.processIdentifier)")
         PowerLog.start()   // Testing: a power line every 10 seconds while the app runs
         MainThreadLog.start()   // Testing: a line when the main thread is held half a second or more
-        ScanRestart.shared.start()   // Testing: see ScanRestart
         podLoanDidFinishLaunching()
         UNUserNotificationCenter.current().delegate = self
         if #available(watchOSApplicationExtension 5.0, *) {
@@ -160,7 +159,6 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         }
         WatchLogFile.append("[app] woken: " + backgroundTasks.map { String(describing: type(of: $0)) }.sorted().joined(separator: ", "))
         PowerLog.note("woken")   // Testing
-        ScanRestart.shared.appWoken()   // Testing: see ScanRestart
         loopManager.requestGlucoseBackfillIfNecessary()
         finish(Array(backgroundTasks))
     }

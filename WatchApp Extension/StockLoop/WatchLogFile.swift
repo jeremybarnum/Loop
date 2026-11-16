@@ -9,7 +9,6 @@
 //
 
 import Foundation
-import CoreBluetooth
 import WatchConnectivity
 import WatchKit
 
@@ -253,60 +252,4 @@ enum RadioLog {
         WatchLogFile.append(String(format: "[radio] %@ connected again after %.0f s · app %@ for the last %.0f s",
                                    device, now.timeIntervalSince(last), place, now.timeIntervalSince(since)))
     }
-}
-
-/// Testing only: a workaround for a watchOS fault. About every 20 minutes the watch's Bluetooth changes
-/// its own address; with a connection pending it holds every connection until its scan is restarted,
-/// and with the screen dark and the app behind the clock nothing restarts it. A scan started and
-/// stopped by the app restarts it. This is the one place that does so, for the pod and the sensor:
-/// when the pod's connection has been pending for a minute, or the app runs behind the clock more
-/// than two minutes after the sensor last connected, start and stop a scan, at most once a minute.
-/// It is checked when watchOS wakes the app and when the pod is dialed, not on a timer.
-/// Two minutes, not an overdue reading: a hold sets between readings, and the wake that could end it
-/// (a message from the phone) may come before the next reading is due. Within those two minutes the
-/// cycle's own pod connection restarts the scan. A restart with no change waiting does nothing.
-final class ScanRestart: NSObject, CBCentralManagerDelegate {
-    static let shared = ScanRestart()
-
-    private let queue = DispatchQueue(label: "ScanRestart")
-    private var central: CBCentralManager?
-    private var podPendingSince: Date?
-    private var sensorLastConnected: Date?
-    private var lastRestart = Date.distantPast
-    /// Matches no device; a scan request is all that is needed.
-    private let filter = CBUUID(string: "7B1C0001-5C0A-4E0B-9A57-2F6D0C4E7A10")
-
-    /// No timer: the rule runs when watchOS wakes the app (`appWoken`) and when the pod is dialed.
-    /// With the app suspended neither happens, and the rule does nothing.
-    func start() {
-        queue.async {
-            guard self.central == nil else { return }
-            self.central = CBCentralManager(delegate: self, queue: self.queue)
-        }
-    }
-
-    /// watchOS handed the app a background task: a message from the phone, or a Bluetooth event.
-    func appWoken() { queue.async { self.check() } }
-
-    func podConnectRequested() { queue.async { if self.podPendingSince == nil { self.podPendingSince = Date() }; self.check() } }
-    func podConnected() { queue.async { self.podPendingSince = nil } }
-    func sensorConnected() { queue.async { self.sensorLastConnected = Date() } }
-
-    private func check() {
-        let now = Date()
-        let podWait = podPendingSince.map { now.timeIntervalSince($0) } ?? 0
-        let sensorWait = sensorLastConnected.map { now.timeIntervalSince($0) } ?? 0
-        guard podWait > 60 || (sensorWait > 120 && !RadioLog.inFront) else { return }
-        guard now.timeIntervalSince(lastRestart) > 60 else { return }
-        guard let central, central.state == .poweredOn else {
-            WatchLogFile.append("[radio] scan restart wanted but Bluetooth is not ready")
-            return
-        }
-        lastRestart = now
-        WatchLogFile.append(String(format: "[radio] scan restart: pod pending %.0f s, sensor silent %.0f s", podWait, sensorWait))
-        central.scanForPeripherals(withServices: [filter], options: nil)
-        queue.asyncAfter(deadline: .now() + 1) { central.stopScan() }
-    }
-
-    func centralManagerDidUpdateState(_ central: CBCentralManager) {}
 }
