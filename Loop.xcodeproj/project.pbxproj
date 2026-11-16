@@ -319,6 +319,7 @@
 		A9DE3D1E90432124BB5738B2 /* WatchLoopManager+GlucoseAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC6E574D826158B33EE53EF6 /* WatchLoopManager+GlucoseAlerts.swift */; };
 		3DAF0D06E678E7616137C84A /* WatchLoopManager+Dosing.swift in Sources */ = {isa = PBXBuildFile; fileRef = F89D20C8E12BA79EEB440570 /* WatchLoopManager+Dosing.swift */; };
 		344ABCF8A638888D8C0AC47B /* WatchLoopManager+Cycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4975B7BB91A91CB21F89ED6 /* WatchLoopManager+Cycle.swift */; };
+		B7C1A0F52E9D4A6B00C0FFEE /* AddressHold.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C1A0F62E9D4A6B00C0FFEE /* AddressHold.swift */; };
 		4F08DE8F1E7BB871006741EA /* CollectionType+Loop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F08DE8E1E7BB871006741EA /* CollectionType+Loop.swift */; };
 		4F11D3C220DD80B3006E072C /* WatchHistoricalGlucose.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F11D3C120DD80B3006E072C /* WatchHistoricalGlucose.swift */; };
 		4F11D3C420DD881A006E072C /* WatchHistoricalGlucose.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F11D3C120DD80B3006E072C /* WatchHistoricalGlucose.swift */; };
@@ -887,6 +888,7 @@
 		5155644B2FF8A562552905A3 /* GlanceComplicationPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 216A392DC9F44D90F6448717 /* GlanceComplicationPublisher.swift */; };
 		C67DD5BDFD25E0B3BAC31A61 /* LoanPushSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 533D4A039573750D44A23B29 /* LoanPushSender.swift */; };
 		FF4EC45EBBB59B2BA7D31FC9 /* SportModePushKeyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9E50198EC77A38E61C5B98E /* SportModePushKeyView.swift */; };
+		B7C1A0F32E9D4A6B00C0FFEE /* OverdueRefreshTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C1A0F42E9D4A6B00C0FFEE /* OverdueRefreshTests.swift */; };
 		17EA66859884C0208DED47CF /* LoopKitTypeAliases.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35FAEFD820F50BFF211AC6D9 /* LoopKitTypeAliases.swift */; };
 		1C99EE4A3BB181BB23DEF066 /* LoopAlgorithm in Frameworks */ = {isa = PBXBuildFile; productRef = C42F6B8A2B1B9E0142078BF9 /* LoopAlgorithm */; };
 		BD37CA2F10445DB600A35199 /* TemporaryScheduleOverrideAlgorithmTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C372374D3D3D9C5F8E3AD93 /* TemporaryScheduleOverrideAlgorithmTests.swift */; };
@@ -1344,6 +1346,7 @@
 		DC6E574D826158B33EE53EF6 /* WatchLoopManager+GlucoseAlerts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchLoopManager+GlucoseAlerts.swift"; path = "WatchApp Extension/StockLoop/WatchLoopManager+GlucoseAlerts.swift"; sourceTree = SOURCE_ROOT; };
 		F89D20C8E12BA79EEB440570 /* WatchLoopManager+Dosing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchLoopManager+Dosing.swift"; path = "WatchApp Extension/StockLoop/WatchLoopManager+Dosing.swift"; sourceTree = SOURCE_ROOT; };
 		C4975B7BB91A91CB21F89ED6 /* WatchLoopManager+Cycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchLoopManager+Cycle.swift"; path = "WatchApp Extension/StockLoop/WatchLoopManager+Cycle.swift"; sourceTree = SOURCE_ROOT; };
+		B7C1A0F62E9D4A6B00C0FFEE /* AddressHold.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AddressHold.swift; path = "WatchApp Extension/StockLoop/AddressHold.swift"; sourceTree = SOURCE_ROOT; };
 		7C9DDCE80C384964BDDF1C8B /* PhoneLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PhoneLog.swift; path = Loop/Managers/PhoneLog.swift; sourceTree = SOURCE_ROOT; };
 		7D23667C21250C7E0028B67D /* LocalizedString.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = LocalizedString.swift; path = LoopUI/Common/LocalizedString.swift; sourceTree = SOURCE_ROOT; };
 		C1F2CAA92B76B3EE00D7F581 /* TempBasalRecommendation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TempBasalRecommendation.swift; sourceTree = "<group>"; };
@@ -1918,6 +1921,7 @@
 		E508C6EB2C06F7554A9C1759 /* LoopGlanceWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LoopGlanceWidget.swift; path = "Loop Complications/LoopGlanceWidget.swift"; sourceTree = SOURCE_ROOT; };
 		533D4A039573750D44A23B29 /* LoanPushSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LoanPushSender.swift; path = "WatchApp Extension/StockLoop/LoanPushSender.swift"; sourceTree = SOURCE_ROOT; };
 		F9E50198EC77A38E61C5B98E /* SportModePushKeyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SportModePushKeyView.swift; sourceTree = "<group>"; };
+		B7C1A0F42E9D4A6B00C0FFEE /* OverdueRefreshTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = OverdueRefreshTests.swift; path = WatchAppTests/OverdueRefreshTests.swift; sourceTree = SOURCE_ROOT; };
 		35FAEFD820F50BFF211AC6D9 /* LoopKitTypeAliases.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LoopKitTypeAliases.swift; sourceTree = "<group>"; };
 		36421A4B9676EF68CDDC4ECD /* AlgorithmBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AlgorithmBridge.swift; sourceTree = "<group>"; };
 		6C372374D3D3D9C5F8E3AD93 /* TemporaryScheduleOverrideAlgorithmTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemporaryScheduleOverrideAlgorithmTests.swift; sourceTree = "<group>"; };
@@ -2906,6 +2910,7 @@
 				DC6E574D826158B33EE53EF6 /* WatchLoopManager+GlucoseAlerts.swift */,
 				F89D20C8E12BA79EEB440570 /* WatchLoopManager+Dosing.swift */,
 				C4975B7BB91A91CB21F89ED6 /* WatchLoopManager+Cycle.swift */,
+				B7C1A0F62E9D4A6B00C0FFEE /* AddressHold.swift */,
 				C940C6F431E6435B971D98B2 /* SportLog.swift */,
 				B3DE8CEAE5944BEDACEBEFA8 /* WatchLogFile.swift */,
 				036B897A66F14CAA9CD5CAD0 /* PodLoanWatchController.swift */,
@@ -3283,6 +3288,7 @@
 				94E05C050AF4C0CC0B314040 /* WristGlucoseAlertTests.swift */,
 				B7C1A0F22E9D4A6B00C0FFEE /* BackgroundTaskTests.swift */,
 				687DE1D14C48349AF99125E6 /* GlanceComplicationTests.swift */,
+				B7C1A0F42E9D4A6B00C0FFEE /* OverdueRefreshTests.swift */,
 			);
 			path = WatchAppTests;
 			sourceTree = "<group>";
@@ -4583,6 +4589,7 @@
 				A9DE3D1E90432124BB5738B2 /* WatchLoopManager+GlucoseAlerts.swift in Sources */,
 				3DAF0D06E678E7616137C84A /* WatchLoopManager+Dosing.swift in Sources */,
 				344ABCF8A638888D8C0AC47B /* WatchLoopManager+Cycle.swift in Sources */,
+				B7C1A0F52E9D4A6B00C0FFEE /* AddressHold.swift in Sources */,
 				F06FDE1F67AF4011937B1529 /* SportLog.swift in Sources */,
 				1552D942FEB5416FAC25238A /* WatchLogFile.swift in Sources */,
 				4624A94E56A6ABB49478893A /* DoseEnactor.swift in Sources */,
@@ -4977,6 +4984,7 @@
 				5FDDEC8709A17CE196A2F202 /* WristGlucoseAlertTests.swift in Sources */,
 				B7C1A0F12E9D4A6B00C0FFEE /* BackgroundTaskTests.swift in Sources */,
 				46596A54FBF8C7F5C89AF1D1 /* GlanceComplicationTests.swift in Sources */,
+				B7C1A0F32E9D4A6B00C0FFEE /* OverdueRefreshTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
