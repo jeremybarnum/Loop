@@ -103,6 +103,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         WatchLogFile.append("[app] launched, pid \(ProcessInfo.processInfo.processIdentifier)")
         PowerLog.start()   // Testing: a power line every 10 seconds while the app runs
         MainThreadLog.start()   // Testing: a line when the main thread is held half a second or more
+        AddressHold.logLine = WatchLogFile.append   // Testing: the workaround's lines go to the watch's log file
         AddressHold.shared.start()
         podLoanDidFinishLaunching()
         UNUserNotificationCenter.current().delegate = self
