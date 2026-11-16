@@ -132,6 +132,7 @@ extension WatchCGMHost: CGMManagerDelegate {
         switch readingResult {
         case .newData(let samples):
             log.default("Direct reading: %d sample(s)", samples.count)
+            if let taken = samples.map(\.date).max() { AddressHold.shared.readingArrived(taken: taken) }
             LoopDataManager.shared.addDirectGlucose(samples)
             scheduleAcquisitionBackstop()
         case .error(let error):
@@ -167,6 +168,7 @@ extension WatchCGMHost: CGMManagerDelegate {
 
     nonisolated func deviceManager(_ manager: DeviceManager, logEventForDeviceIdentifier deviceIdentifier: String?, type: DeviceLogEntryType, message: String, completion: ((Error?) -> Void)?) {
         os_log("%{public}@ %{public}@", log: OSLog(category: "WatchCGMDevice"), type: .default, String(describing: type), message)
+        if message == "Sensor connected" { AddressHold.shared.sensorConnected() }
         completion?(nil)
     }
 

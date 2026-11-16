@@ -143,6 +143,8 @@ extension WatchLoopManager {
 
     /// How a cycle ends, after its decision. Lane work.
     func finishCycleOnLane() async {
+        AddressHold.shared.cycleEnded()
+
         // Both arms, as stock's `loop()` ends: the display run, its forced
         // "updateRemoteRecommendation" decision, then the stock pages' context.
         await updateDisplayStateOnLane(forceStoreRemoteRecommendation: true)

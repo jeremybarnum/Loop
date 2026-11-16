@@ -82,6 +82,9 @@ extension WatchLoopManager: AlertIssuer, PersistedAlertStore {
     /// The CGM's lines are `WatchCGMHost`'s.
     func deviceManager(_ manager: DeviceManager, logEventForDeviceIdentifier deviceIdentifier: String?, type: DeviceLogEntryType, message: String, completion: ((Error?) -> Void)?) {
         log.default("Device %{public}@: %{public}@", deviceIdentifier ?? "unknown", message)
+        // The address-hold workaround (AddressHold.swift).
+        if message.hasPrefix("Pod connected") || message.hasPrefix("[release] releasing") { AddressHold.shared.podConnected() }
+        else if message == "[connectOnDemand] connect" || message.hasPrefix("[eager] direct connect") { AddressHold.shared.podConnectRequested() }
 
         if let deviceLog, manager is PumpManager || pumpManager != nil {
             deviceLog.log(managerIdentifier: manager.pluginIdentifier, deviceIdentifier: deviceIdentifier, type: type, message: message, completion: completion)
