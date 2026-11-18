@@ -154,4 +154,63 @@ final class FirstContactNoteTests: XCTestCase {
         let firstContact10 = await firstContactExpected(controller)
         XCTAssertTrue(firstContact10, "the next adopt searches")
     }
+
+    // MARK: - The sensor's first contact (control rows 1 and 2)
+
+    /// A watch set to read the CGM that has never authenticated with the sensor offers no Start, and a
+    /// Start that still arrives does not reach the phone.
+    func testAStartIsRefusedUntilTheWatchHasAuthenticatedWithTheSensor() async throws {
+        let controller = await makeController()
+        var need: LoanControl.WatchSensorNeed? = .pairingCode
+        var refusalsFelt = 0
+        await controller.onMain {
+            controller.watchSensorNeed = { need }
+            controller.playRefusal = { refusalsFelt += 1 }
+        }
+        let codeNeeded = await controller.fencedSnapshot().startRefusal
+        XCTAssertEqual(codeNeeded, .sensorPairingCodeNeeded)
+
+        need = .firstContact
+        let firstContact = await controller.fencedSnapshot().startRefusal
+        XCTAssertEqual(firstContact, .sensorFirstContactNeeded)
+
+        controller.requestLoan(watchBuild: "test")
+        let refused = await controller.fencedSnapshot()
+        XCTAssertEqual(refused.phase, .idle, "the request never went out")
+        XCTAssertEqual(refusalsFelt, 1)
+
+        need = nil
+        let ready = await controller.fencedSnapshot().startRefusal
+        XCTAssertNil(ready, "authenticated: Start is offered")
+        controller.requestLoan(watchBuild: "test")
+        let requested = await controller.fencedSnapshot()
+        XCTAssertEqual(requested.phase, .requested)
+        XCTAssertNil(requested.startRefusal, "the refusal is a resting-state answer only")
+    }
+
+    /// The page in the place of Start: the code, or a countdown built on the phone's last reading.
+    func testTheSensorWaitCountsDownToTheNextReading() {
+        let reading = Date(timeIntervalSince1970: 1_790_000_000)
+        func wait(_ refusal: LoanControl.Tell?, after: TimeInterval?) -> SensorWait? {
+            SensorWait.state(refusal: refusal, phoneReadingAt: after == nil ? nil : reading, now: reading.addingTimeInterval(after ?? 0))
+        }
+        XCTAssertNil(wait(nil, after: 100))
+        XCTAssertNil(wait(.noResponseFromPhone, after: 100), "only the sensor's refusals have a page")
+        XCTAssertEqual(wait(.sensorPairingCodeNeeded, after: 100), .pairingCodeNeeded)
+        XCTAssertEqual(wait(.sensorPairingCodeRejected, after: 100), .pairingCodeRejected, "a refused code has nothing to count down to")
+
+        // The sensor advertises for a display for a while after a reading: wrist up through that tail.
+        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 10), .wristUp(readingAt: reading))
+        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 40), .wristUp(readingAt: reading))
+        // Then the count to 10 s before the next reading.
+        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 41), .waiting(raiseWristAt: reading.addingTimeInterval(290)))
+        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 289), .waiting(raiseWristAt: reading.addingTimeInterval(290)))
+        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 290), .wristUp(readingAt: reading.addingTimeInterval(300)))
+        // A reading the phone missed does not stop the count: the sensor keeps its own five minutes.
+        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 700), .waiting(raiseWristAt: reading.addingTimeInterval(890)))
+        // No reading time, or one too old to count from: no countdown.
+        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: nil), .keepOpen)
+        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 3601), .keepOpen)
+        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: -5), .keepOpen)
+    }
 }

@@ -9,6 +9,7 @@
 //
 
 import LoopKit
+import LoopCore
 
 /// A CGM the watch reads beside the phone: its manager follows the phone's configuration as it changes.
 typealias WatchCGMManager = CGMManager & ShareableDeviceControl
@@ -39,6 +40,17 @@ func watchCGMStatusNote(_ manager: CGMManager?) -> String? {
 /// Whether the watch's CGM is searching for its sensor, which on the watch needs the app kept open.
 func watchCGMIsSearching(_ manager: CGMManager?) -> Bool {
     manager?.isSearchingForSensor == true
+}
+
+/// What the watch's CGM still needs before the watch can read it by itself: nil once it has authenticated
+/// with its sensor, and when the watch has no CGM. The kit reports; `LoanControl` decides what it stops.
+func watchCGMSensorNeed(_ manager: CGMManager?) -> LoanControl.WatchSensorNeed? {
+    switch manager?.directReadNeed {
+    case .pairingCode?: return .pairingCode
+    case .pairingCodeRejected?: return .pairingCodeRejected
+    case .firstConnection?: return .firstContact
+    case nil: return nil
+    }
 }
 
 func watchCGMSensorName(_ manager: CGMManager?) -> String? {

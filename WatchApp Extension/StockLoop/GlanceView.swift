@@ -179,6 +179,95 @@ struct GlanceView: View {
         }
     }
 
+    /// The wrist-up screen is all countdown: the phone's glucose gives way to it.
+    private var sensorWaitWantsTheRoom: Bool {
+        if case .wristUp? = model.state.sensorWait { return true }
+        return false
+    }
+
+    /// In the place of Start while the watch has not yet authenticated with the sensor.
+    @ViewBuilder
+    private func sensorWaitCenter(_ wait: SensorWait) -> some View {
+        switch wait {
+        case .pairingCodeNeeded:
+            VStack(spacing: 6) {
+                Text(NSLocalizedString("Pairing code needed", comment: "Glance, in the place of Start: the watch has no pairing code for the sensor"))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.glanceAttention)
+                Text(NSLocalizedString("Enter the sensor's 4-digit code in Loop's CGM settings on your phone.", comment: "Glance, in the place of Start: where the sensor's pairing code is entered"))
+                    .font(.system(size: 12))
+                    .foregroundColor(.glanceInk)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(NSLocalizedString("No Start yet", comment: "Glance, in the place of Start: Sport Mode cannot start until the sensor's code is entered"))
+                    .font(.system(size: 11))
+                    .foregroundColor(.glanceDim)
+            }
+            .multilineTextAlignment(.center)
+        case .pairingCodeRejected:
+            VStack(spacing: 6) {
+                Text(NSLocalizedString("Pairing code didn't match", comment: "Glance, in the place of Start: the sensor did not accept the watch's pairing code"))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.glanceAttention)
+                Text(NSLocalizedString("Check the sensor's 4-digit code in Loop's CGM settings on your phone.", comment: "Glance, in the place of Start: where the sensor's pairing code is corrected"))
+                    .font(.system(size: 12))
+                    .foregroundColor(.glanceInk)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(NSLocalizedString("No Start yet", comment: "Glance, in the place of Start: Sport Mode cannot start until the sensor's code is entered"))
+                    .font(.system(size: 11))
+                    .foregroundColor(.glanceDim)
+            }
+            .multilineTextAlignment(.center)
+        case .waiting(let raiseWristAt):
+            VStack(spacing: 2) {
+                Text(NSLocalizedString("Raise your wrist in", comment: "Glance, in the place of Start: above the countdown to the sensor's next reading"))
+                    .font(.system(size: 12))
+                    .foregroundColor(.glanceInk)
+                sensorWaitCountdown(to: raiseWristAt, color: .glanceInk)
+                Text(NSLocalizedString("to connect the sensor. A buzz will remind you.", comment: "Glance, in the place of Start: under the countdown to raising the wrist"))
+                    .font(.system(size: 11))
+                    .foregroundColor(.glanceDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .multilineTextAlignment(.center)
+        case .wristUp(let readingAt):
+            VStack(spacing: 2) {
+                Text(NSLocalizedString("Wrist up", comment: "Glance, in the place of Start: the sensor's reading is due"))
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(.glanceAttention)
+                sensorWaitCountdown(to: readingAt, color: .glanceAttention)
+                Text(NSLocalizedString("to the sensor reading", comment: "Glance, in the place of Start: under the countdown to the sensor's reading"))
+                    .font(.system(size: 12))
+                    .foregroundColor(.glanceInk)
+                Text(NSLocalizedString("Keep Loop on screen until it connects", comment: "Glance, in the place of Start: the app stays on screen across the sensor's reading"))
+                    .font(.system(size: 11))
+                    .foregroundColor(.glanceDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .multilineTextAlignment(.center)
+        case .keepOpen:
+            VStack(spacing: 6) {
+                Text(NSLocalizedString("Sensor not connected yet", comment: "Glance, in the place of Start: the watch has the code but has not connected, and the next reading's time is unknown"))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.glanceAttention)
+                Text(NSLocalizedString("Keep Loop on screen until it connects. This can take 5 minutes.", comment: "Glance, in the place of Start: the app stays on screen until the sensor's next reading"))
+                    .font(.system(size: 12))
+                    .foregroundColor(.glanceInk)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .multilineTextAlignment(.center)
+        case .connected:
+            EmptyView()
+        }
+    }
+
+    /// Counts down by itself; stops at 0:00.
+    private func sensorWaitCountdown(to date: Date, color: Color) -> some View {
+        Text(timerInterval: min(Date(), date)...date, countsDown: true, showsHours: false)
+            .font(.system(size: 40, weight: .semibold))
+            .monospacedDigit()
+            .foregroundColor(color)
+    }
+
     /// A watch back from off with a saved loan asks the phone before looping; nothing to act on meanwhile.
     private var resumeCheckCenter: some View {
         VStack(spacing: 6) {
@@ -195,7 +284,7 @@ struct GlanceView: View {
     /// Start, or the phoneless-start confirmation with the credential's age (shown, not enforced).
     private var idleCenter: some View {
         VStack(spacing: 12) {
-            if model.state.bgText != "—" {
+            if model.state.bgText != "—", !sensorWaitWantsTheRoom {
                 HStack(spacing: 5) {
                     Text("iPhone").font(.system(size: 11, weight: .medium)).foregroundColor(.glanceDim)
                     Text(model.state.bgText).font(.system(size: 22, weight: .semibold)).foregroundColor(.glanceDim)
@@ -227,7 +316,20 @@ struct GlanceView: View {
                     .buttonStyle(.plain)
                     .foregroundColor(.glanceDim)
                 }
+            } else if let wait = model.state.sensorWait, wait != .connected {
+                sensorWaitCenter(wait)
             } else {
+            if model.state.sensorWait == .connected {
+                VStack(spacing: 2) {
+                    Text(NSLocalizedString("Sensor connected", comment: "Glance: the watch has just connected to the sensor for the first time"))
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.glanceInk)
+                    Text(NSLocalizedString("You can lower your wrist", comment: "Glance: the sensor's first connection is done"))
+                        .font(.system(size: 11))
+                        .foregroundColor(.glanceDim)
+                }
+                .multilineTextAlignment(.center)
+            }
             // First contact needs the screen on: say so above Start, in the attention colour.
             if let note = model.state.firstContactNote {
                 Text(note)
@@ -710,6 +812,46 @@ private final class PreviewBolusProgress: DoseProgressReporter {
     GlanceView(model: GlanceViewModel(preview: previewState { s in
         s.phase = .idle; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
         s.viaPhone = true; s.loopStatusText = "phone loop active"
+    }))
+}
+
+#Preview("Idle · sensor code needed") {
+    GlanceView(model: GlanceViewModel(preview: previewState { s in
+        s.phase = .idle; s.bgText = "112"; s.bgColor = .dim
+        s.viaPhone = true; s.loopStatusText = "phone loop active"
+        s.sensorWait = .pairingCodeNeeded
+    }))
+}
+
+#Preview("Idle · sensor code rejected") {
+    GlanceView(model: GlanceViewModel(preview: previewState { s in
+        s.phase = .idle; s.bgText = "112"; s.bgColor = .dim
+        s.viaPhone = true; s.loopStatusText = "phone loop active"
+        s.sensorWait = .pairingCodeRejected
+    }))
+}
+
+#Preview("Idle · sensor wait") {
+    GlanceView(model: GlanceViewModel(preview: previewState { s in
+        s.phase = .idle; s.bgText = "112"; s.bgColor = .dim
+        s.viaPhone = true; s.loopStatusText = "phone loop active"
+        s.sensorWait = .waiting(raiseWristAt: Date().addingTimeInterval(150))
+    }))
+}
+
+#Preview("Idle · sensor wrist up") {
+    GlanceView(model: GlanceViewModel(preview: previewState { s in
+        s.phase = .idle; s.bgText = "112"; s.bgColor = .dim
+        s.viaPhone = true; s.loopStatusText = "phone loop active"
+        s.sensorWait = .wristUp(readingAt: Date().addingTimeInterval(12))
+    }))
+}
+
+#Preview("Idle · sensor connected") {
+    GlanceView(model: GlanceViewModel(preview: previewState { s in
+        s.phase = .idle; s.bgText = "114"; s.bgColor = .dim
+        s.viaPhone = true; s.loopStatusText = "phone loop active"
+        s.sensorWait = .connected
     }))
 }
 
