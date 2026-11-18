@@ -47,6 +47,8 @@ extension PodLoanWatchController {
         let takeoverPodReached: Bool
         /// Resting: the next Start must find a pump this watch has never met.
         let pumpFirstContactExpected: Bool
+        /// Resting: what a Start would be refused for (the sensor's code or first contact), or nil.
+        let startRefusal: LoanControl.Tell?
     }
 
     var isLoanActive: Bool {
@@ -82,7 +84,8 @@ extension PodLoanWatchController {
                     ? Self.takeoverHint(firstContact: takeoverFirstContact, podReached: takeoverPodReached, nudged: takeoverNudges > 0)
                     : nil,
                 takeoverPodReached: phase == .takingOver && takeoverPodReached,
-                pumpFirstContactExpected: pumpFirstContactExpected())
+                pumpFirstContactExpected: pumpFirstContactExpected(),
+                startRefusal: startRefusal())
     }
 
     /// nil: no pump manager, as opposed to a failed read.

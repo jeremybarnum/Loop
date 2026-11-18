@@ -78,6 +78,9 @@ struct GlanceUIState {
 
     var startingStageText: String? = nil
 
+    /// Resting, with a Start refused for the sensor: shown in the place of the Start button.
+    var sensorWait: SensorWait? = nil
+
     /// First contact with a new pod needs the screen on: the Start note, then the takeover hint.
     var firstContactNote: String? = nil
     var takeoverHint: String? = nil
@@ -127,6 +130,10 @@ final class GlanceViewModel: ObservableObject {
     /// COB is async: the last value read.
     private var latestCOB: Double?
 
+    /// The sensor wait last shown, and when the sensor connected under it.
+    private var lastSensorWait: SensorWait?
+    private var sensorConnectedAt: Date?
+
     private var appStateObservers: [NSObjectProtocol] = []
 
     /// Previews drive the real view with hand-written state and reach nothing.
@@ -171,6 +178,7 @@ final class GlanceViewModel: ObservableObject {
     /// The observer must not ask for a rebuild: a rebuild republishes, which re-notifies without bound.
     func startRefreshing() {
         guard !isPreview else { return }
+        SensorWaitReminder.disarm()
         if let o = oneShotGlanceDataObserver { NotificationCenter.default.removeObserver(o); oneShotGlanceDataObserver = nil }
         if glanceDataObserver == nil {
             glanceDataObserver = NotificationCenter.default.addObserver(
@@ -231,6 +239,44 @@ final class GlanceViewModel: ObservableObject {
     func stopRefreshing() {
         timer?.invalidate()
         timer = nil
+        // The page promised a reminder: set it as the page leaves the screen, which is when this runs.
+        if case .waiting(let raiseWristAt)? = state.sensorWait { SensorWaitReminder.arm(raiseWristAt: raiseWristAt) }
+    }
+
+    /// The sensor wait for the resting page, with its taps and log lines. The watch connecting ends the
+    /// wait; "Sensor connected" then stays above Start for a few minutes.
+    private func sensorWait(refusal: LoanControl.Tell?, now: Date) -> SensorWait? {
+        let phoneReadingAt = ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext?.glucoseDate
+        if let wait = SensorWait.state(refusal: refusal, phoneReadingAt: phoneReadingAt, now: now) {
+            switch (lastSensorWait, wait) {
+            case (nil, _):
+                SportLog.event("sensor", "wait: Start is held for the sensor (\(wait))")
+            case (.waiting?, .wristUp):
+                WKInterfaceDevice.current().play(.notification)
+                SportLog.event("sensor", "wait: reading due, wrist up")
+            case (.wristUp?, .waiting):
+                SportLog.event("sensor", "wait: that reading passed without a connection; counting to the next")
+            default:
+                break
+            }
+            lastSensorWait = wait
+            sensorConnectedAt = nil
+            return wait
+        }
+        if lastSensorWait != nil {
+            lastSensorWait = nil
+            // No refusal because the sensor connected, not because the phone stopped sharing its CGM.
+            if WatchCGMHost.shared.isReadingDirectly {
+                sensorConnectedAt = now
+                WKInterfaceDevice.current().play(.success)
+                SportLog.event("sensor", "wait: the watch connected to the sensor; Start is offered")
+            }
+        }
+        guard let connectedAt = sensorConnectedAt, now.timeIntervalSince(connectedAt) < SensorWait.connectedNoteDuration else {
+            sensorConnectedAt = nil
+            return nil
+        }
+        return .connected
     }
 
     init(preview: GlanceUIState) {
@@ -281,6 +327,7 @@ final class GlanceViewModel: ObservableObject {
             return
         }
 
+        sensorConnectedAt = nil
         session.loanController.requestLoan(watchBuild: build)
         refresh()
     }
@@ -331,8 +378,11 @@ final class GlanceViewModel: ObservableObject {
 
             // The note slot has one occupant. The controller's own note wins over the sensor-code
             // prompt: whatever just happened to a session matters more than a standing setup task.
+            // A sensor wait says what the sensor needs in the place of Start, so the sensor's note is not repeated.
+            let wait = sensorWait(refusal: snap.startRefusal, now: Date())
             var idle = Self.idleState(context: ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext,
-                                      note: snap.lastIdleNote ?? sensorNote, phoneHeardAt: snap.lastHeardFromPhoneAt)
+                                      note: snap.lastIdleNote ?? (wait == nil ? sensorNote : nil), phoneHeardAt: snap.lastHeardFromPhoneAt)
+            idle.sensorWait = wait
 
             if let issued = snap.seizeOfferIssuedAt {
                 let f = DateComponentsFormatter()
@@ -368,9 +418,10 @@ final class GlanceViewModel: ObservableObject {
         // A parked drain is startable: the idle page plus a note.
         case .recoveredDrain:
 
+            let wait = sensorWait(refusal: snap.startRefusal, now: Date())
             var restIdle = Self.idleState(context: ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext,
                                           note: snap.lastIdleNote
-                                            ?? sensorNote
+                                            ?? (wait == nil ? sensorNote : nil)
                                             ?? NSLocalizedString("Records from the last session are waiting for your iPhone. You can still start.",
                                                                  comment: "Glance note while resting on a parked drain"))
             if let issued = snap.seizeOfferIssuedAt {
@@ -380,6 +431,7 @@ final class GlanceViewModel: ObservableObject {
                 f.unitsStyle = .abbreviated
                 restIdle.seizeOfferAgeText = f.string(from: Date().timeIntervalSince(issued)) ?? "?"
             }
+            restIdle.sensorWait = wait
             if snap.pumpFirstContactExpected { restIdle.firstContactNote = PodLoanWatchController.firstContactStartNote }
             state = restIdle
         // The phone took the pod back. Nothing is left to offer the user and nothing is

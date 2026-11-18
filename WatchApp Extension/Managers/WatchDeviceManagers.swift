@@ -9,6 +9,7 @@
 //
 
 import LoopKit
+import LoopCore
 import G7SensorKit
 
 /// Keyed by each manager's `pluginIdentifier`, which is what its export carries.
@@ -42,6 +43,14 @@ func watchCGMStatusNote(_ manager: CGMManager?) -> String? {
 }
 
 let watchCGMStatusDidChange = G7CGMManager.statusDidChange
+
+/// What the watch's CGM still needs before the watch can read it by itself: nil once it has authenticated
+/// with its sensor, and when the watch has no CGM. The kit reports; `LoanControl` decides what it stops.
+func watchCGMSensorNeed(_ manager: CGMManager?) -> LoanControl.WatchSensorNeed? {
+    guard let g7 = manager as? G7CGMManager else { return nil }
+    guard g7.canAuthenticateDirectly else { return .pairingCode }
+    return g7.hasAuthenticatedDirectly ? nil : .firstContact
+}
 
 func watchCGMSensorName(_ manager: CGMManager?) -> String? {
     (manager as? G7CGMManager)?.sensorName

@@ -150,6 +150,13 @@ extension PodLoanWatchController {
                 SportLog.event("loan", "ignored a Start in phase \(self.phase.rawValue)")
                 return
             }
+            // The Start page offers no Start while this holds; a tap that still arrives is refused here.
+            if let refusal = self.startRefusal() {
+                SportLog.event("loan", "Start refused: \(refusal)")
+                self.playRefusal()
+                self.notifyUI()
+                return
+            }
             // Allowed over a parked drain: its records keep resending under their own epoch.
             if self.phase == .recoveredDrain {
                 SportLog.event("loan", "starting with \(self.journal.unackedEvents().count) record(s) of an earlier loan still going to the phone")
@@ -218,6 +225,15 @@ extension PodLoanWatchController {
         guard seizeOffer != nil else { return }
         seizeOffer = nil
         SportLog.event("seize", "offline start offer withdrawn: \(reason)")
+    }
+
+    /// Resting: what `LoanControl` refuses a Start for as things stand, or nil when a Start goes ahead.
+    /// Asked by the Start page, which then offers no Start, and again at the tap. On main.
+    func startRefusal() -> LoanControl.Tell? {
+        guard phase == .idle || phase == .recoveredDrain else { return nil }
+        let situation = LoanControl.Situation(device: .watch, trigger: .startTapped, watchSensorNeed: watchSensorNeed())
+        guard case .refuse(let tell) = LoanControl.decide(situation) else { return nil }
+        return tell
     }
 
     /// Resting, with a standing copy of a pump this watch would have to search for: Start needs the screen on.
@@ -616,5 +632,112 @@ extension PodLoanWatchController {
                 }
             }
         }
+    }
+}
+
+/// The Start page while a Start is refused for the sensor (control rows 1 and 2): what the looper is
+/// shown in the place of the Start button. A known sensor reconnects in the background; one this watch
+/// has never authenticated with is only known to connect with the app on screen across a reading, so
+/// the page counts down to the next one.
+enum SensorWait: Equatable {
+    /// The watch has no pairing code: it is entered on the phone.
+    case pairingCodeNeeded
+    /// The code is here and the next reading is some way off: when to bring the wrist back up.
+    case waiting(raiseWristAt: Date)
+    /// The reading is due (or just was): the app stays on screen until the sensor connects.
+    case wristUp(readingAt: Date)
+    /// The code is here but the time of the phone's last reading is not known.
+    case keepOpen
+    /// The watch authenticated with the sensor while this page was waiting for it.
+    case connected
+
+    /// The sensor broadcasts a reading every five minutes, on its own clock.
+    static let readingInterval: TimeInterval = 5 * 60
+    /// The wrist comes up this long before the reading is due.
+    static let wristUpLead: TimeInterval = 20
+    /// The sensor goes on advertising for a display for about 35 s after a reading; past this the
+    /// wait is for the next one.
+    static let lateAllowance: TimeInterval = 40
+    /// A phone reading older than this no longer says when the next one is due.
+    static let oldestUsefulReading: TimeInterval = 60 * 60
+    /// How long "Sensor connected" stays above the Start button.
+    static let connectedNoteDuration: TimeInterval = 5 * 60
+
+    /// The page for a refused Start, from the phone's last reading time; nil when the refusal is not
+    /// about the sensor.
+    static func state(refusal: LoanControl.Tell?, phoneReadingAt: Date?, now: Date) -> SensorWait? {
+        switch refusal {
+        case .sensorPairingCodeNeeded?: return .pairingCodeNeeded
+        case .sensorFirstContactNeeded?: break
+        default: return nil
+        }
+        guard let anchor = phoneReadingAt else { return .keepOpen }
+        let elapsed = now.timeIntervalSince(anchor)
+        guard elapsed >= 0, elapsed <= oldestUsefulReading else { return .keepOpen }
+        let sinceDue = elapsed.truncatingRemainder(dividingBy: readingInterval)
+        if sinceDue <= lateAllowance { return .wristUp(readingAt: now.addingTimeInterval(-sinceDue)) }
+        let due = now.addingTimeInterval(readingInterval - sinceDue)
+        if readingInterval - sinceDue <= wristUpLead { return .wristUp(readingAt: due) }
+        return .waiting(raiseWristAt: due.addingTimeInterval(-wristUpLead))
+    }
+}
+
+/// The reminder to bring the wrist back up for the sensor's reading. Armed when the Start page showing
+/// the countdown leaves the screen (the system's resign-active, which runs code), withdrawn when the app
+/// is back. Which kind is a bench choice while the watch's behaviour with the wrist down is being tested.
+enum SensorWaitReminder {
+    enum Mode: String, CaseIterable {
+        /// A notification scheduled ahead: delivered by the system, so it needs no run time.
+        case notification
+        /// A tap played by the app itself: only happens if the app still has run time then.
+        case inApp
+        case none
+
+        var label: String {
+            switch self {
+            case .notification: return "Notification"
+            case .inApp: return "App tap"
+            case .none: return "None"
+            }
+        }
+    }
+
+    private static let modeKey = "sensorWaitReminderMode"
+    private static let identifier = "g7.sensorWait"
+    private static var inAppTap: DispatchWorkItem?
+
+    static var mode: Mode {
+        get { UserDefaults.standard.string(forKey: modeKey).flatMap(Mode.init(rawValue:)) ?? .notification }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: modeKey) }
+    }
+
+    /// One reminder at `raiseWristAt`. Nothing is armed for a moment already here.
+    static func arm(raiseWristAt: Date, now: Date = Date()) {
+        let delay = raiseWristAt.timeIntervalSince(now)
+        guard delay > 2 else { return }
+        switch mode {
+        case .notification:
+            WristAlerts.arm(identifier, after: delay,
+                            title: NSLocalizedString("Raise Your Wrist", comment: "Watch reminder title: the sensor's reading is due and the watch still has to connect to the sensor"),
+                            body: NSLocalizedString("Open Loop to connect the sensor.", comment: "Watch reminder body: the sensor's reading is due and the watch still has to connect to the sensor"))
+            SportLog.event("sensor", String(format: "wait: reminder notification set for %.0f s from now", delay))
+        case .inApp:
+            let work = DispatchWorkItem {
+                let late = Date().timeIntervalSince(raiseWristAt)
+                WKInterfaceDevice.current().play(.notification)
+                SportLog.event("sensor", String(format: "wait: the app's own reminder tap ran %.0f s after its time", late))
+            }
+            inAppTap?.cancel()
+            inAppTap = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+            SportLog.event("sensor", String(format: "wait: the app's own reminder tap set for %.0f s from now", delay))
+        case .none:
+            break
+        }
+    }
+
+    static func disarm() {
+        inAppTap?.cancel(); inAppTap = nil
+        WristAlerts.disarm([identifier])
     }
 }

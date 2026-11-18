@@ -50,6 +50,7 @@ struct LoanDebugView: View {
     @State private var snapshot: PodLoanWatchController.DebugSnapshot?
     @State private var cgm: CGMHealth?
     @State private var lastAction: String = "—"
+    @State private var sensorWaitReminder = SensorWaitReminder.mode
 
     @State private var iobText: String = "—"
 
@@ -121,6 +122,15 @@ struct LoanDebugView: View {
                 row("bg", cgm?.bgLine ?? "—")
                 row("state", cgm?.lifecycle ?? "—")
                 row("expires", cgm?.expiresIn ?? "—")
+
+                row("start held for", snapshot?.startRefusal.map { String(describing: $0) } ?? "nothing")
+                // Bench choice: how the Start page's sensor wait reminds the looper to raise the wrist.
+                Button("Wait reminder: \(sensorWaitReminder.label)") {
+                    let modes = SensorWaitReminder.Mode.allCases
+                    let next = modes[((modes.firstIndex(of: sensorWaitReminder) ?? 0) + 1) % modes.count]
+                    SensorWaitReminder.mode = next
+                    sensorWaitReminder = next
+                }
 
                 if let needs = G7WatchDirectRead.needsCodeNote(for: cgm?.needsCodeFor) {
                     Text(needs).font(.caption2).foregroundColor(.red)

@@ -179,6 +179,7 @@ Each situation lists:
 | 23 | [Both dead](#23-both-dead) | nobody | accepted |
 | 24 | [Start, phone near, pod silent (highly abnormal)](#24-start-phone-near-pod-silent-highly-abnormal) | phone | not built |
 | 25 | [Start without the phone, pod silent (highly abnormal)](#25-start-without-the-phone-pod-silent-highly-abnormal) | phone, in name only: nobody loops | built |
+| 26 | [Start, watch has not yet connected to the sensor](#26-start-watch-has-not-yet-connected-to-the-sensor) | phone | built |
 
 ### 1. Start, phone near
 
@@ -482,6 +483,18 @@ itself has nothing to dose from, so it offers nothing and says so.
 - **Afterwards:** pod held by phone, in name only: nobody loops · time without looping: until the pod answers or is replaced · looper sees: watch: on screen "The pod didn't answer, so Sport Mode didn't start. Neither device is looping."
 - **Status:** built · **Code:** watch `+Start`, `+Seize`
 - **Why:** **Highly abnormal.** The phone at home and a dead or faulted pod (watch Bluetooth off has its own warnings; a pocket that blocks radio is not realistic). In tests: the emulator unplugged with the phone's radios off. Nobody can loop, so the looper needs to learn that the pod is the problem.
+
+### 26. Start, watch has not yet connected to the sensor
+
+- **Control state:** pod held by phone (resting state) · loan: none · took over on silence at: none · looper's latest tap: none: Start is not offered
+- **Where:** phone near or away, alive · watch on wrist, alive
+- **What changed:** the looper opens the watch's Start page after a sensor change, or on a newly set-up watch
+- **Phone sees:** believes it holds the pod · sensor: fresh · pod: holding, reads · heard from the watch: nothing
+- **Watch sees:** believes the phone holds the pod · sensor: set to read it, never authenticated with this one (no pairing code yet, or a code and no first connection) · pod: not touched · heard from the phone: its context
+- **Result:** query: none: the watch does not ask → action: in the place of Start the watch says what the sensor needs: without a code, to enter the sensor's pairing code in the phone's CGM settings; with one, a countdown to the sensor's next reading and to keep Loop on screen across it. A reminder is set for the reading if the wrist goes down. Start returns once the watch has authenticated with the sensor
+- **Afterwards:** pod held by phone · time without looping: none · looper sees: watch: the code request or the countdown, then "Sensor connected" above Start
+- **Status:** built · **Code:** watch `+Start`
+- **Why:** A watch that has never authenticated with the current sensor would take the pod with nothing of its own to loop on, and nothing would tell the looper for 20 minutes. First contact needs the looper anyway (the code is entered on the phone; the first connection is only known to work with the app on screen across a reading), so the Start is held, with what to do, before the pod moves. The test is "has authenticated with this sensor", not "has a recent reading": a known sensor reconnects in the background, and a gap in its readings during a loan is the not-looping warning's business. A watch not set to read the sensor is rows 1 and 2, unchanged.
 
 
 **Physically impossible (no behaviour, at most a log line):** the sensor away from the body; a device that can see
