@@ -53,8 +53,8 @@ final class WatchCGMHost {
         lastConnection = watchCGMLastConnection(cgmManager)
     }
 
-    /// The phone's context arrived. Builds a manager when its export names a different sensor or code,
-    /// and lets go of the sensor when the phone stopped sharing.
+    /// The phone's context arrived. When its export names a different sensor or code, the manager takes it
+    /// in place, or a new one is built if it can't; lets go of the sensor when the phone stopped sharing.
     func update(from context: WatchContext) {
         guard let raw = context.cgmConfiguration, let configuration = SharedDeviceConfiguration(rawValue: raw) else {
             if cgmManager != nil {
@@ -64,6 +64,17 @@ final class WatchCGMHost {
             return
         }
         if cgmManager != nil, let builtFrom, (builtFrom as NSDictionary).isEqual(to: configuration.state) {
+            return
+        }
+        // A new sensor or code, as the phone does it: the same manager, pointed at it. A second manager
+        // would claim the same Bluetooth restore identifier while the first still holds it; watchOS
+        // then gives the new one an unusable central until Loop is relaunched.
+        if let current = cgmManager as? DeviceConfigurationSharing, current.adoptConfiguration(configuration) {
+            log.default("CGM manager took the phone's new configuration in place (%{public}@)", configuration.managerIdentifier)
+            builtFrom = configuration.state
+            if let cgmManager { save(cgmManager) }
+            LoopDataManager.shared.directGlucoseDidEnd()
+            updateStatusNote()
             return
         }
         guard let manager = watchCGMManager(adopting: configuration, localState: nil) else {
