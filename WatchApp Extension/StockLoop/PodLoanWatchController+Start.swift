@@ -789,10 +789,20 @@ final class SensorWaitAlarm: NSObject, WKExtendedRuntimeSessionDelegate {
                                             didInvalidateWith reason: WKExtendedRuntimeSessionInvalidationReason,
                                             error: Error?) {
         Task { @MainActor in
-            if self.session === extendedRuntimeSession { self.session = nil; self.bookedFor = nil }
-            if reason == .error || error != nil {
-                SportLog.event("sensor", "wait: buzz session ended by the system: \(reason.rawValue) \(error.map { String(describing: $0) } ?? "")")
+            let ours = self.session === extendedRuntimeSession
+            if ours { self.session = nil; self.bookedFor = nil }
+            let why: String
+            switch reason {
+            case .none: why = "ended"
+            case .sessionInProgress: why = "another session in progress"
+            case .expired: why = "expired"
+            case .resignedFrontmost: why = "app left the front"
+            case .suppressedBySystem: why = "suppressed by the system"
+            case .error: why = "error"
+            @unknown default: why = "reason \(reason.rawValue)"
             }
+            SportLog.event("sensor", "wait: buzz session " + (ours ? "" : "(replaced) ") + "invalidated: " + why
+                + (error.map { " · " + String(describing: $0) } ?? ""))
         }
     }
 }
