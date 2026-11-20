@@ -199,11 +199,12 @@ final class FirstContactNoteTests: XCTestCase {
         XCTAssertEqual(wait(.sensorPairingCodeNeeded, after: 100), .pairingCodeNeeded)
         XCTAssertEqual(wait(.sensorPairingCodeRejected, after: 100), .pairingCodeRejected, "a refused code has nothing to count down to")
 
-        // The sensor advertises for a display for a while after a reading: wrist up through that tail.
-        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 10), .wristUp(readingAt: reading))
-        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 40), .wristUp(readingAt: reading))
-        // Then the count to 10 s before the next reading.
-        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 41), .waiting(raiseWristAt: reading.addingTimeInterval(290)))
+        // Wrist up only through the sensor's short burst after a reading.
+        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 5), .wristUp(readingAt: reading))
+        // Later than that, as when the phone's new code arrives just after its own reading: the count
+        // to 10 s before the next reading, not a wrist-up moment already gone.
+        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 6), .waiting(raiseWristAt: reading.addingTimeInterval(290)))
+        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 32), .waiting(raiseWristAt: reading.addingTimeInterval(290)))
         XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 289), .waiting(raiseWristAt: reading.addingTimeInterval(290)))
         XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 290), .wristUp(readingAt: reading.addingTimeInterval(300)))
         // A reading the phone missed does not stop the count: the sensor keeps its own five minutes.

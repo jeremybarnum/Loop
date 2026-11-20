@@ -672,9 +672,10 @@ enum SensorWait: Equatable {
     static let readingInterval: TimeInterval = 5 * 60
     /// The wrist comes up this long before the reading is due (Jeremy, 11-18: about 10 s early).
     static let wristUpLead: TimeInterval = 10
-    /// The sensor goes on advertising for a display for about 35 s after a reading; past this the
-    /// wait is for the next one.
-    static let lateAllowance: TimeInterval = 40
+    /// A first connection is only likely while the sensor's burst after a reading lasts: about 6 s,
+    /// until a display connects. A wait that starts later counts to the next reading instead of
+    /// showing a wrist-up moment that has already gone.
+    static let lateAllowance: TimeInterval = 5
     /// A phone reading older than this no longer says when the next one is due.
     static let oldestUsefulReading: TimeInterval = 60 * 60
     /// How long "Sensor connected" stays above the Start button.
