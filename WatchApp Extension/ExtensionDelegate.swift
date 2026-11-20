@@ -136,6 +136,12 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         }
     }
 
+    /// The system launched the app for the sensor wait's booked buzz.
+    func handle(_ extendedRuntimeSession: WKExtendedRuntimeSession) {
+        WatchLogFile.append("[app] launched for a booked session")
+        SensorWaitAlarm.shared.adoptLaunched(extendedRuntimeSession)
+    }
+
     func handle(_ backgroundTasks: Set<WKRefreshBackgroundTask>) {
         // watchOS can deliver a Bluetooth wake on CoreBluetooth's queue; everything below is main-only.
         guard Thread.isMainThread else {

@@ -701,23 +701,98 @@ enum SensorWait: Equatable {
     }
 }
 
-/// The reminder to bring the wrist back up for the sensor's reading: a notification scheduled when the
-/// Start page showing the countdown leaves the screen (the system's resign-active, which runs code), and
-/// delivered by the system, so it needs no run time. Withdrawn when the app is back on screen.
-enum SensorWaitReminder {
-    private static let identifier = "g7.sensorWait"
+/// The buzz before the sensor's reading, from a scheduled smart-alarm session: at its start time the
+/// system gives the app run time and the session buzzes the watch itself. A notification did not
+/// serve: the watch held its alert for up to 14 s while asking the phone whether to show it there
+/// instead, and the buzz came after the reading (11-19). The session also keeps the app running across
+/// the reading, so the search for the sensor is not left to a suspended app.
+@MainActor
+final class SensorWaitAlarm: NSObject, WKExtendedRuntimeSessionDelegate {
+    static let shared = SensorWaitAlarm()
 
-    /// One reminder at `raiseWristAt`. Nothing is set for a moment already here.
-    static func arm(raiseWristAt: Date, now: Date = Date()) {
+    /// How long the session stays up past the reading: the sensor's burst and the first connection.
+    static let runPastReading: TimeInterval = 30
+    /// The gap between taps. With Loop not on screen the system shows its alarm alert, and the taps go on
+    /// until the looper taps Stop there or opens Loop.
+    static let tapInterval: TimeInterval = 2
+
+    private var session: WKExtendedRuntimeSession?
+    private var bookedFor: Date?
+
+    /// One session at `raiseWristAt`; booking the same moment again changes nothing. Called while the wait
+    /// page is on screen, where a session may be scheduled.
+    func arm(raiseWristAt: Date, now: Date = Date()) {
         let delay = raiseWristAt.timeIntervalSince(now)
         guard delay > 2 else { return }
-        WristAlerts.arm(identifier, after: delay,
-                        title: NSLocalizedString("Raise Your Wrist", comment: "Watch reminder title: the sensor's reading is due and the watch still has to connect to the sensor"),
-                        body: NSLocalizedString("Open Loop to connect the sensor.", comment: "Watch reminder body: the sensor's reading is due and the watch still has to connect to the sensor"))
-        SportLog.event("sensor", String(format: "wait: reminder set for %.0f s from now", delay))
+        if session != nil, let bookedFor, abs(bookedFor.timeIntervalSince(raiseWristAt)) < 1 { return }
+        disarm()
+        let booked = WKExtendedRuntimeSession()
+        booked.delegate = self
+        booked.start(at: raiseWristAt)
+        session = booked
+        bookedFor = raiseWristAt
+        SportLog.event("sensor", String(format: "wait: buzz booked for %.0f s from now", delay))
     }
 
-    static func disarm() {
-        WristAlerts.disarm([identifier])
+    func disarm() {
+        guard let booked = session else { return }
+        session = nil
+        bookedFor = nil
+        booked.invalidate()
+    }
+
+    /// The system relaunched the app for a booked session (`ExtensionDelegate.handle(_:)`).
+    func adoptLaunched(_ launched: WKExtendedRuntimeSession) {
+        launched.delegate = self
+        session = launched
+        started(launched)
+    }
+
+    private func started(_ running: WKExtendedRuntimeSession) {
+        guard running === session else { return running.invalidate() }
+        // Loop on screen already taps as the wait turns to wrist up; a sensor read meanwhile needs nothing.
+        let onScreen = WKApplication.shared().applicationState == .active
+        let stillWaiting = watchCGMSensorNeed(WatchCGMHost.shared.cgmManager) == .firstContact
+        guard stillWaiting, !onScreen else {
+            SportLog.event("sensor", "wait: buzz session started, no buzz (" + (onScreen ? "Loop on screen" : "sensor no longer awaited") + ")")
+            return finish(running, after: stillWaiting ? SensorWait.wristUpLead + Self.runPastReading : 0)
+        }
+        SportLog.event("sensor", "wait: buzz session started; buzzing")
+        running.notifyUser(hapticType: .notification) { _ in Self.tapInterval }
+        finish(running, after: SensorWait.wristUpLead + Self.runPastReading)
+    }
+
+    /// Loop came on screen: the buzz has done its job. The system stops an alarm only when the app ends
+    /// the session while on screen, so this is where it ends. A booked session stays booked.
+    func silence() {
+        guard let running = session, running.state == .running else { return }
+        SportLog.event("sensor", "wait: Loop on screen; buzz stopped")
+        session = nil
+        bookedFor = nil
+        running.invalidate()
+    }
+
+    private func finish(_ running: WKExtendedRuntimeSession, after delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            if self?.session === running { self?.session = nil; self?.bookedFor = nil }
+            running.invalidate()
+        }
+    }
+
+    nonisolated func extendedRuntimeSessionDidStart(_ extendedRuntimeSession: WKExtendedRuntimeSession) {
+        Task { @MainActor in self.started(extendedRuntimeSession) }
+    }
+
+    nonisolated func extendedRuntimeSessionWillExpire(_ extendedRuntimeSession: WKExtendedRuntimeSession) {}
+
+    nonisolated func extendedRuntimeSession(_ extendedRuntimeSession: WKExtendedRuntimeSession,
+                                            didInvalidateWith reason: WKExtendedRuntimeSessionInvalidationReason,
+                                            error: Error?) {
+        Task { @MainActor in
+            if self.session === extendedRuntimeSession { self.session = nil; self.bookedFor = nil }
+            if reason == .error || error != nil {
+                SportLog.event("sensor", "wait: buzz session ended by the system: \(reason.rawValue) \(error.map { String(describing: $0) } ?? "")")
+            }
+        }
     }
 }

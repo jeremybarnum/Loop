@@ -36,6 +36,10 @@
 	<array>
 		<string>com.loopkit.Loop.AddCarbEntryOnWatch</string>
 	</array>
+	<key>WKBackgroundModes</key>
+	<array>
+		<string>alarm</string>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>

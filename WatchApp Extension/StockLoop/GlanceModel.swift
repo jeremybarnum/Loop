@@ -190,7 +190,7 @@ final class GlanceViewModel: ObservableObject {
     /// The observer must not ask for a rebuild: a rebuild republishes, which re-notifies without bound.
     func startRefreshing() {
         guard !isPreview else { return }
-        SensorWaitReminder.disarm()
+        SensorWaitAlarm.shared.silence()
         if let o = oneShotGlanceDataObserver { NotificationCenter.default.removeObserver(o); oneShotGlanceDataObserver = nil }
         if glanceDataObserver == nil {
             glanceDataObserver = NotificationCenter.default.addObserver(
@@ -251,8 +251,6 @@ final class GlanceViewModel: ObservableObject {
     func stopRefreshing() {
         timer?.invalidate()
         timer = nil
-        // The page promised a reminder: set it as the page leaves the screen, which is when this runs.
-        if case .waiting(let raiseWristAt)? = state.sensorWait { SensorWaitReminder.arm(raiseWristAt: raiseWristAt) }
     }
 
     /// The sensor wait for the resting page, with its taps and log lines. The watch connecting ends the
@@ -273,10 +271,17 @@ final class GlanceViewModel: ObservableObject {
             }
             lastSensorWait = wait
             sensorConnectedAt = nil
+            // The page promises a buzz before the reading: book it while the page is on screen.
+            switch wait {
+            case .waiting(let raiseWristAt): SensorWaitAlarm.shared.arm(raiseWristAt: raiseWristAt)
+            case .wristUp: break
+            default: SensorWaitAlarm.shared.disarm()
+            }
             return wait
         }
         if lastSensorWait != nil {
             lastSensorWait = nil
+            SensorWaitAlarm.shared.disarm()
             // No refusal because the sensor connected, not because the phone stopped sharing its CGM.
             if WatchCGMHost.shared.isReadingDirectly {
                 sensorConnectedAt = now
