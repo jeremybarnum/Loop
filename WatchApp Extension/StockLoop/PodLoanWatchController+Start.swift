@@ -665,6 +665,9 @@ enum SensorWait: Equatable {
     case wristUp(readingAt: Date)
     /// The code is here but the time of the phone's last reading is not known.
     case keepOpen
+    /// The watch has a link to the sensor and the sensor is checking the code: a first contact takes a few
+    /// seconds past the reading, and the page holds here until it ends in a reading or a refused code.
+    case connecting
     /// The watch authenticated with the sensor while this page was waiting for it.
     case connected
 
@@ -683,13 +686,14 @@ enum SensorWait: Equatable {
 
     /// The page for a refused Start, from the phone's last reading time; nil when the refusal is not
     /// about the sensor.
-    static func state(refusal: LoanControl.Tell?, phoneReadingAt: Date?, now: Date) -> SensorWait? {
+    static func state(refusal: LoanControl.Tell?, phoneReadingAt: Date?, checkingCode: Bool, now: Date) -> SensorWait? {
         switch refusal {
         case .sensorPairingCodeNeeded?: return .pairingCodeNeeded
         case .sensorPairingCodeRejected?: return .pairingCodeRejected
         case .sensorFirstContactNeeded?: break
         default: return nil
         }
+        if checkingCode { return .connecting }
         guard let anchor = phoneReadingAt else { return .keepOpen }
         let elapsed = now.timeIntervalSince(anchor)
         guard elapsed >= 0, elapsed <= oldestUsefulReading else { return .keepOpen }
@@ -752,7 +756,8 @@ final class SensorWaitAlarm: NSObject, WKExtendedRuntimeSessionDelegate {
         guard running === session else { return running.invalidate() }
         // Loop on screen already taps as the wait turns to wrist up; a sensor read meanwhile needs nothing.
         let onScreen = WKApplication.shared().applicationState == .active
-        let stillWaiting = watchCGMSensorNeed(WatchCGMHost.shared.cgmManager) == .firstContact
+        let cgm = WatchCGMHost.shared.cgmManager
+        let stillWaiting = watchCGMSensorNeed(cgm) == .firstContact && !watchCGMIsCheckingCode(cgm)
         guard stillWaiting, !onScreen else {
             SportLog.event("sensor", "wait: buzz session started, no buzz (" + (onScreen ? "Loop on screen" : "sensor no longer awaited") + ")")
             return finish(running, after: stillWaiting ? SensorWait.wristUpLead + Self.runPastReading : 0)

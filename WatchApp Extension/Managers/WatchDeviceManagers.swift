@@ -48,9 +48,14 @@ func watchCGMSensorNeed(_ manager: CGMManager?) -> LoanControl.WatchSensorNeed? 
     switch manager?.directReadNeed {
     case .pairingCode?: return .pairingCode
     case .pairingCodeRejected?: return .pairingCodeRejected
-    case .firstConnection?: return .firstContact
+    case .firstConnection?, .checkingCode?: return .firstContact
     case nil: return nil
     }
+}
+
+/// The watch has a link to its sensor and the sensor is checking the code: the first contact is under way.
+func watchCGMIsCheckingCode(_ manager: CGMManager?) -> Bool {
+    manager?.directReadNeed == .checkingCode
 }
 
 func watchCGMSensorName(_ manager: CGMManager?) -> String? {

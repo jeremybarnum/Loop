@@ -191,8 +191,8 @@ final class FirstContactNoteTests: XCTestCase {
     /// The page in the place of Start: the code, or a countdown built on the phone's last reading.
     func testTheSensorWaitCountsDownToTheNextReading() {
         let reading = Date(timeIntervalSince1970: 1_790_000_000)
-        func wait(_ refusal: LoanControl.Tell?, after: TimeInterval?) -> SensorWait? {
-            SensorWait.state(refusal: refusal, phoneReadingAt: after == nil ? nil : reading, now: reading.addingTimeInterval(after ?? 0))
+        func wait(_ refusal: LoanControl.Tell?, after: TimeInterval?, checkingCode: Bool = false) -> SensorWait? {
+            SensorWait.state(refusal: refusal, phoneReadingAt: after == nil ? nil : reading, checkingCode: checkingCode, now: reading.addingTimeInterval(after ?? 0))
         }
         XCTAssertNil(wait(nil, after: 100))
         XCTAssertNil(wait(.noResponseFromPhone, after: 100), "only the sensor's refusals have a page")
@@ -213,5 +213,10 @@ final class FirstContactNoteTests: XCTestCase {
         XCTAssertEqual(wait(.sensorFirstContactNeeded, after: nil), .keepOpen)
         XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 3601), .keepOpen)
         XCTAssertEqual(wait(.sensorFirstContactNeeded, after: -5), .keepOpen)
+        // A link up while the sensor checks the code holds the page, past the burst and with no reading time;
+        // a refused code still says so.
+        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: 8, checkingCode: true), .connecting)
+        XCTAssertEqual(wait(.sensorFirstContactNeeded, after: nil, checkingCode: true), .connecting)
+        XCTAssertEqual(wait(.sensorPairingCodeRejected, after: 8, checkingCode: true), .pairingCodeRejected)
     }
 }

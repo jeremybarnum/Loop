@@ -257,10 +257,17 @@ final class GlanceViewModel: ObservableObject {
     /// wait; "Sensor connected" then stays above Start for a few minutes.
     private func sensorWait(refusal: LoanControl.Tell?, now: Date) -> SensorWait? {
         let phoneReadingAt = ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext?.glucoseDate
-        if let wait = SensorWait.state(refusal: refusal, phoneReadingAt: phoneReadingAt, now: now) {
+        let checkingCode = watchCGMIsCheckingCode(WatchCGMHost.shared.cgmManager)
+        if let wait = SensorWait.state(refusal: refusal, phoneReadingAt: phoneReadingAt, checkingCode: checkingCode, now: now) {
             switch (lastSensorWait, wait) {
             case (nil, _):
                 SportLog.event("sensor", "wait: Start is held for the sensor (\(wait))")
+            case (.connecting?, .connecting):
+                break
+            case (_, .connecting):
+                SportLog.event("sensor", "wait: linked to the sensor; it is checking the code")
+            case (.connecting?, _):
+                SportLog.event("sensor", "wait: the link closed before a reading (\(wait))")
             case (.waiting?, .wristUp):
                 WKInterfaceDevice.current().play(.notification)
                 SportLog.event("sensor", "wait: reading due, wrist up")

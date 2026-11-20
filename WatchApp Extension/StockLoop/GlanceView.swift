@@ -257,6 +257,18 @@ struct GlanceView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .multilineTextAlignment(.center)
+        case .connecting:
+            VStack(spacing: 6) {
+                Text(NSLocalizedString("Connecting to the sensor", comment: "Glance, in the place of Start: the watch has a link to the sensor, which is checking the code"))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.glanceAttention)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(NSLocalizedString("Keep Loop on screen until it connects", comment: "Glance, in the place of Start: the app stays on screen across the sensor's reading"))
+                    .font(.system(size: 12))
+                    .foregroundColor(.glanceInk)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .multilineTextAlignment(.center)
         case .connected:
             EmptyView()
         }
