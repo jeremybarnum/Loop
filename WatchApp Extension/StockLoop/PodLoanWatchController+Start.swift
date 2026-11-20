@@ -722,6 +722,11 @@ final class SensorWaitAlarm: NSObject, WKExtendedRuntimeSessionDelegate {
 
     private var session: WKExtendedRuntimeSession?
     private var bookedFor: Date?
+    /// A session the app has ended that the system has not yet let go of: the system refuses a new
+    /// booking until it does (seen 11-20: still "in progress" 14 s after Loop stopped its buzz).
+    private var ending: WKExtendedRuntimeSession?
+    /// A moment the system refused to book: not tried again, so a refusal is not retried every refresh.
+    private var refusedFor: Date?
 
     /// One session at `raiseWristAt`; booking the same moment again changes nothing. Called while the wait
     /// page is on screen, where a session may be scheduled.
@@ -729,6 +734,11 @@ final class SensorWaitAlarm: NSObject, WKExtendedRuntimeSessionDelegate {
         let delay = raiseWristAt.timeIntervalSince(now)
         guard delay > 2 else { return }
         if session != nil, let bookedFor, abs(bookedFor.timeIntervalSince(raiseWristAt)) < 1 { return }
+        if let refusedFor, abs(refusedFor.timeIntervalSince(raiseWristAt)) < 1 { return }
+        if let ending {
+            guard ending.state == .invalid else { return }
+            self.ending = nil
+        }
         disarm()
         let booked = WKExtendedRuntimeSession()
         booked.delegate = self
@@ -774,12 +784,15 @@ final class SensorWaitAlarm: NSObject, WKExtendedRuntimeSessionDelegate {
         SportLog.event("sensor", "wait: Loop on screen; buzz stopped")
         session = nil
         bookedFor = nil
+        ending = running
         running.invalidate()
     }
 
     private func finish(_ running: WKExtendedRuntimeSession, after delay: TimeInterval) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            if self?.session === running { self?.session = nil; self?.bookedFor = nil }
+            guard let self, running.state != .invalid else { return }
+            if self.session === running { self.session = nil; self.bookedFor = nil }
+            self.ending = running
             running.invalidate()
         }
     }
@@ -795,7 +808,12 @@ final class SensorWaitAlarm: NSObject, WKExtendedRuntimeSessionDelegate {
                                             error: Error?) {
         Task { @MainActor in
             let ours = self.session === extendedRuntimeSession
-            if ours { self.session = nil; self.bookedFor = nil }
+            if ours {
+                if reason == .sessionInProgress { self.refusedFor = self.bookedFor }
+                self.session = nil
+                self.bookedFor = nil
+            }
+            if self.ending === extendedRuntimeSession { self.ending = nil }
             let why: String
             switch reason {
             case .none: why = "ended"
