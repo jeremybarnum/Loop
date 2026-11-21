@@ -34,6 +34,8 @@ extension PodLoanPhoneController {
     /// Holds anchors, not elapsed values, so a stale snapshot still renders the right time.
     struct UISnapshot: Equatable {
         var isLoanedOut = false
+        /// Standing aside for a loan only the pod shows; the watch has not answered (row 28).
+        var isWatchUnheard = false
         var isTakeoverInProgress = false
         var isSettlingOnly = false
         var takeBackStartedAt: Date?
@@ -51,6 +53,7 @@ extension PodLoanPhoneController {
 
         // A yield counts as loaned out.
         s.isLoanedOut = state != .owner || yieldingToInferredLoan
+        s.isWatchUnheard = state == .owner && yieldingToInferredLoan && persisted.yieldedUnheard
         s.isTakeoverInProgress = state == .grantOffered
         s.isSettlingOnly = state == .owner && reclaimStartedAt != nil && reclaimVerifiedAt == nil
         s.takeBackStartedAt = state == .reclaimPending ? takeBackStartedAt : nil
@@ -109,6 +112,7 @@ extension PodLoanPhoneController {
         return s.isSettlingOnly || s.takeBackStartedAt != nil
     }
     var isPodLoanedOutForUI: Bool { return uiState.isLoanedOut }
+    var isWatchUnheardForUI: Bool { return uiState.isWatchUnheard }
     var isPodTakeoverInProgressForUI: Bool { return uiState.isTakeoverInProgress }
     var lastRecordsAtForUI: Date? { return uiState.lastRecordsAt }
     var reclaimProgressForUI: ReclaimProgress? {
