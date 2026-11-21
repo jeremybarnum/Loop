@@ -755,10 +755,16 @@ final class SensorWaitAlarm: NSObject, WKExtendedRuntimeSessionDelegate {
         booked.invalidate()
     }
 
-    /// The system relaunched the app for a booked session (`ExtensionDelegate.handle(_:)`).
+    /// The system handed a relaunched app its booked session (`ExtensionDelegate.handle(_:)`). A relaunch
+    /// before the booked moment hands the session over still scheduled (seen 11-20: 2 min early, after the
+    /// app was restarted); it starts later, through the delegate.
     func adoptLaunched(_ launched: WKExtendedRuntimeSession) {
         launched.delegate = self
         session = launched
+        guard launched.state == .running else {
+            SportLog.event("sensor", "wait: booked buzz handed to the relaunched app, not started yet (state \(launched.state.rawValue))")
+            return
+        }
         started(launched)
     }
 

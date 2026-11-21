@@ -141,6 +141,8 @@ final class GlanceViewModel: ObservableObject {
 
     /// The sensor wait last shown, and when the sensor connected under it.
     private var lastSensorWait: SensorWait?
+    /// The phone's latest reading came from a sensor other than the watch's: the countdown waits for one from it.
+    private var phoneReadingFromAnotherSensor = false
     private var sensorConnectedAt: Date?
 
     private var appStateObservers: [NSObjectProtocol] = []
@@ -256,8 +258,18 @@ final class GlanceViewModel: ObservableObject {
     /// The sensor wait for the resting page, with its taps and log lines. The watch connecting ends the
     /// wait; "Sensor connected" then stays above Start for a few minutes.
     private func sensorWait(refusal: LoanControl.Tell?, now: Date) -> SensorWait? {
-        let phoneReadingAt = ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext?.glucoseDate
-        let checkingCode = watchCGMIsCheckingCode(WatchCGMHost.shared.cgmManager)
+        let cgm = WatchCGMHost.shared.cgmManager
+        let context = ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext
+        // A reading from the sensor the phone just left says nothing about when the new one reads.
+        let fromAnotherSensor = watchCGMReadingIsFromAnotherSensor(cgm, syncIdentifier: context?.glucoseSyncIdentifier)
+        let phoneReadingAt = fromAnotherSensor ? nil : context?.glucoseDate
+        if fromAnotherSensor != phoneReadingFromAnotherSensor {
+            phoneReadingFromAnotherSensor = fromAnotherSensor
+            SportLog.event("sensor", fromAnotherSensor
+                ? "wait: the phone's last reading is from its previous sensor; no countdown until it reads this one"
+                : "wait: the phone has a reading from this sensor")
+        }
+        let checkingCode = watchCGMIsCheckingCode(cgm)
         if let wait = SensorWait.state(refusal: refusal, phoneReadingAt: phoneReadingAt, checkingCode: checkingCode, now: now) {
             switch (lastSensorWait, wait) {
             case (nil, _):
@@ -266,6 +278,8 @@ final class GlanceViewModel: ObservableObject {
                 break
             case (_, .connecting):
                 SportLog.event("sensor", "wait: linked to the sensor; it is checking the code")
+            case (.connecting?, .pairingCodeRejected):
+                SportLog.event("sensor", "wait: the sensor refused the code")
             case (.connecting?, _):
                 SportLog.event("sensor", "wait: the link closed before a reading (\(wait))")
             case (.waiting?, .wristUp):

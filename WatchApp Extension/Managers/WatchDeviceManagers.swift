@@ -58,6 +58,13 @@ func watchCGMIsCheckingCode(_ manager: CGMManager?) -> Bool {
     manager?.directReadNeed == .checkingCode
 }
 
+/// Whether the phone's reading, by its sync identifier, is known to come from a sensor other than the one the
+/// watch's CGM reads: after the phone moves to a new sensor, its latest reading is still the old sensor's.
+func watchCGMReadingIsFromAnotherSensor(_ manager: CGMManager?, syncIdentifier: String?) -> Bool {
+    guard let manager, let syncIdentifier else { return false }
+    return manager.readIsFromThisSensor(syncIdentifier: syncIdentifier) == false
+}
+
 func watchCGMSensorName(_ manager: CGMManager?) -> String? {
     manager?.cgmManagerStatus.device?.name
 }
