@@ -29,7 +29,7 @@ final class WatchCGMHost {
     private var rawManager: [String: Any]?
 
     @ObservationIgnored
-    private(set) var cgmManager: CGMManager?
+    private(set) var cgmManager: WatchCGMManager?
     @ObservationIgnored
     private var builtFrom: [String: Any]?
 
@@ -64,7 +64,8 @@ final class WatchCGMHost {
     }
 
     /// The phone's context arrived. When its export names a different sensor or code, the manager takes it
-    /// in place, or a new one is built if it can't; lets go of the sensor when the phone stopped sharing.
+    /// in place; a manager is built when the watch has none, or has one for a different kind of CGM. Lets
+    /// go of the sensor when the phone stopped sharing.
     func update(from context: WatchContext) {
         guard let raw = context.cgmConfiguration, let configuration = SharedDeviceConfiguration(rawValue: raw) else {
             if cgmManager != nil {
@@ -79,10 +80,11 @@ final class WatchCGMHost {
         // A new sensor or code, as the phone does it: the same manager, pointed at it. A second manager
         // would claim the same Bluetooth restore identifier while the first still holds it; watchOS
         // then gives the new one an unusable central until Loop is relaunched.
-        if let current = cgmManager as? DeviceConfigurationSharing, current.adoptConfiguration(configuration) {
+        if let cgmManager, cgmManager.pluginIdentifier == configuration.managerIdentifier {
+            cgmManager.adoptConfiguration(configuration)
             log.default("CGM manager took the phone's new configuration in place (%{public}@)", configuration.managerIdentifier)
             builtFrom = configuration.state
-            if let cgmManager { save(cgmManager) }
+            save(cgmManager)
             LoopDataManager.shared.directGlucoseDidEnd()
             updateStatusNote()
             return
@@ -98,7 +100,7 @@ final class WatchCGMHost {
         save(manager)
     }
 
-    private func install(_ manager: CGMManager) {
+    private func install(_ manager: WatchCGMManager) {
         manager.cgmManagerDelegate = self
         manager.addStatusObserver(self, queue: .main)
         cgmManager = manager
