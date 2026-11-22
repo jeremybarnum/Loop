@@ -138,7 +138,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
 
     /// The system launched the app for the sensor wait's booked buzz.
     func handle(_ extendedRuntimeSession: WKExtendedRuntimeSession) {
-        WatchLogFile.append("[app] launched for a booked session")
+        SportLog.event("app", "launched for a booked session")
         SensorWaitAlarm.shared.adoptLaunched(extendedRuntimeSession)
     }
 
