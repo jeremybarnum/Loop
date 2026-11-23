@@ -13,13 +13,21 @@ import LoopCore
 import UserNotifications
 
 extension PodLoanPhoneController {
+    /// Testing: whether a standing copy (a large transfer) left for the watch shortly before the watch's
+    /// Start, which may slow the request on the same link.
+    func standingCopyNote(before sentAt: Date) -> String {
+        guard let last = lastDormantRefreshAt else { return "; no standing copy sent yet" }
+        return String(format: "; last standing copy %.1f s before the watch sent it", sentAt.timeIntervalSince(last))
+    }
+
     /// The watch is asking for the pod.
     func handleRequest(_ request: LoanRequest) {
         // Age first: an expired request has a sender that has moved on.
         if let sentAt = request.sentAt {
             let age = deps.now().timeIntervalSince(sentAt)
             if age > Self.requestTTL {
-                PhoneLog.event("loan", String(format: "ignored a Start request sent %.0f s ago, older than %.0f s", age, Self.requestTTL))
+                PhoneLog.event("loan", String(format: "ignored a Start request sent %.0f s ago, older than %.0f s", age, Self.requestTTL)
+                               + standingCopyNote(before: sentAt))
                 return
             }
         }
@@ -37,7 +45,8 @@ extension PodLoanPhoneController {
         // Tell the watch at once that its request is here, before the pod read and the grant.
         // Testing: how long the request took to arrive.
         if let sentAt = request.sentAt {
-            PhoneLog.event("loan", String(format: "Start request arrived %.1f s after the watch sent it", deps.now().timeIntervalSince(sentAt)))
+            PhoneLog.event("loan", String(format: "Start request arrived %.1f s after the watch sent it", deps.now().timeIntervalSince(sentAt))
+                           + standingCopyNote(before: sentAt))
         }
         sendMessage(.requestReceived(RequestReceived(requestID: request.requestID)))
 

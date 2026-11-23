@@ -166,7 +166,9 @@ extension PodLoanWatchController {
             self.lastIdleNote = nil
             self.withdrawSeizeOffer(reason: "a new Start request went out")
 
-            SportLog.event("loan", "loan requested from the phone, build \(watchBuild)")
+            // Testing: whether the live link to the phone was up at the tap, against how long the answer takes.
+            SportLog.event("loan", "loan requested from the phone, build \(watchBuild); live link to the phone "
+                           + (self.isPhoneReachable() ? "up" : "down"))
             let known = max(self.epoch ?? 0, self.journal.activeEpoch ?? 0, self.persisted.highWaterEpoch, self.lastRevokedEpoch ?? 0)
             self.sendMessage(.request(LoanRequest(watchBuild: watchBuild, sentAt: self.now(), knownEpoch: known)))
 
