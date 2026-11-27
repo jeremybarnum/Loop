@@ -128,6 +128,16 @@ screen, and the words. Stated once here:
   reach the phone's stores follow its loop within a cycle; a temp basal still running is stored once it ends. The
   banner says when the records last came. Out of reach, no records is what a loan looks like, and the phone says
   nothing more.
+- **The phone's Live Activity during a loan (proposed, not built).** The Live Activity is the phone's: the phone
+  updates it only while it runs, and the watch's Smart Stack shows a mirrored copy. Its ring colour comes from when
+  the loop last completed, worked out each time it is drawn, so with no updates it turns from green to red by
+  itself. During a loan the phone moves that time forward from the watch's records, so the ring stays green while
+  the watch is in reach and turns red out of reach, while the watch loops normally. A red ring then reads as a
+  failure that is not there. Proposed: at the grant, the phone shows "Watch looping since T" on the Live Activity in
+  place of the ring, and at the take-back or the End it returns to the normal ring. It says who loops, not that all
+  is well. Both moments are ones where the phone already runs, so nothing waits on a timer in a suspended phone. A
+  phone not using Sport Mode is unchanged. To check on the bench first: what the watch's mirrored copy shows once the
+  watch loses the phone entirely.
 
 ---
 
