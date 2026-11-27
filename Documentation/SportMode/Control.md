@@ -137,8 +137,9 @@ screen, and the words. Stated once here:
   place of the ring: a grey watch symbol, grey because the phone knows who holds the pod, not how the loop is
   going. At the take-back or the End it returns to the normal ring. It says who loops, not that all is well.
   Out of reach the glucose, insulin and carbs on it also stop at what the phone last heard, which the red ring used
-  to flag; so while the watch loops, the numbers turn grey once the newest reading is more than 15 minutes old. Like
-  the ring today, that is worked out each time it is drawn and needs no run time. Both moments are ones where the phone already runs, so nothing waits on a timer in a suspended phone. A
+  to flag; so while the watch loops, the numbers turn grey once the newest reading is more than 15 minutes old. The
+  phone sets the Live Activity's stale time to 15 minutes after that reading, and iOS redraws it when the time
+  passes, so the grey needs no run time on the phone. Both moments are ones where the phone already runs, so nothing waits on a timer in a suspended phone. A
   phone not using Sport Mode is unchanged. To check on the bench first: what the watch's mirrored copy shows once the
   watch loses the phone entirely.
 
