@@ -4344,7 +4344,7 @@
       "comment" : "Glance: the watch has just connected to the sensor for the first time"
     },
     "Sensor ready to pair" : {
-      "comment" : "Glance, in the place of Start: the new sensor is waiting for its Bluetooth pairing request to be accepted on the watch"
+      "comment" : "Glance, in the place of Start: the new sensor is waiting for its Bluetooth pairing request to be accepted on the watch\nWatch notification title: a new sensor is waiting for its Bluetooth pairing request to be accepted on the watch"
     },
     "Start Preset" : {
       "comment" : "Button text to confirm starting preset before using digital crown"
@@ -4360,6 +4360,9 @@
     },
     "Tap Pair when your watch asks." : {
       "comment" : "Glance, in the place of Start: accept the system's Bluetooth pairing request for the new sensor"
+    },
+    "Tap to open Loop, then tap Pair." : {
+      "comment" : "Watch notification body: how to accept a new sensor's Bluetooth pairing request"
     },
     "Total Carbs" : {
 
