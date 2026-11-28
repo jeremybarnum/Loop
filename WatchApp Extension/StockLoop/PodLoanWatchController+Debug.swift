@@ -76,7 +76,7 @@ extension PodLoanWatchController {
                 unackedCount: journal.unackedEvents().count,
                 lastIdleNote: lastIdleNote,
                 startedAt: attemptStartedAt,
-                handbackPending: handbackRequested,
+                handbackPending: handbackRequested || endWaitingForBolus != nil,
                 handbackStartedAt: handbackStartedAt,
                 phoneReachable: isPhoneReachable(),
                 handbackFailedAt: handbackFailure?.at,

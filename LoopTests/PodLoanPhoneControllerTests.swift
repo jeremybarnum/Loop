@@ -2612,6 +2612,68 @@ extension PodLoanPhoneControllerTests {
         XCTAssertFalse(controller.persisted.ledger.bookings.isEmpty)
     }
 
+    /// A take-back that finds less insulin than the phone counts says insulin on board is high until the
+    /// watch's records arrive. Streams one 1 U bolus the pod never gave, then dies.
+    private func takeBackWithInsulinOnBoardOverstated(_ controller: PodLoanPhoneController) throws -> (LoanGrant, LoanEvent) {
+        let grant = establishLoan(controller)
+        let streamed = makeEvent(seq: 1, units: 1.0, at: Date())
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: grant.epoch, events: [streamed], tombstones: [])).transportDictionary())
+        settle()
+        MockPumpManager.testOdometer = 10.0     // the pod gave nothing
+
+        controller.forceReclaimToOwner(reason: "test: watch dead")
+        waitForState(controller, .owner)
+        waitUntil(timeout: 5, "overstated verdict") { self.diagMatching("insulin warning after take-back: residual -") != nil }
+        waitUntil(timeout: 5, "remembered") { controller.persisted.ledger.overstated != nil }
+        XCTAssertTrue(urgentNotices.contains("Insulin On Board May Be Overstated"))
+        return (grant, streamed)
+    }
+
+    /// The returning watch's records, past what the phone held, correct insulin on board: the looper is
+    /// told it is exact again, on the normal channel, and the verdict is cleared.
+    func testTheWatchsLateRecordsSayInsulinOnBoardIsExactAgain() throws {
+        let controller = makeController()
+        let (grant, streamed) = try takeBackWithInsulinOnBoardOverstated(controller)
+
+        let rest = tempEvent(seq: 2, rate: 0.0, start: Date().addingTimeInterval(-.minutes(30)), durationMinutes: 30)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [streamed, rest], tombstones: [], recovered: true)).transportDictionary())
+
+        waitUntil(timeout: 5, "told") {
+            self.lock.lock(); defer { self.lock.unlock() }
+            return self.notices.contains("Watch Records Recovered")
+        }
+        lock.lock()
+        XCTAssertFalse(urgentNotices.contains("Watch Records Recovered"), "not time-sensitive")
+        lock.unlock()
+        waitUntil(timeout: 5, "cleared") { controller.persisted.ledger.overstated == nil }
+    }
+
+    /// A redelivered copy of records the phone already held completes nothing: no word, the verdict stands.
+    func testRedeliveredRecordsLeaveInsulinOnBoardOverstated() throws {
+        let controller = makeController()
+        let (grant, streamed) = try takeBackWithInsulinOnBoardOverstated(controller)
+
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [streamed], tombstones: [], recovered: true)).transportDictionary())
+        settle()
+
+        lock.lock(); let told = notices.contains("Watch Records Recovered"); lock.unlock()
+        XCTAssertFalse(told)
+        XCTAssertNotNil(controller.persisted.ledger.overstated)
+    }
+
+    /// The verdict survives a relaunch.
+    func testAnOverstatedVerdictIsSaved() {
+        var state = PodLoanPhoneState()
+        state.ledger.overstated = .init(units: 0.68, at: Date(timeIntervalSince1970: 1_000_000), window: DateInterval(start: Date(timeIntervalSince1970: 900_000), duration: 3600),
+                                        epoch: 111, cursor: 1)
+        XCTAssertEqual(PodLoanPhoneState(rawValue: state.rawValue)?.ledger.overstated, state.ledger.overstated)
+    }
+
     /// A launch retries the placeholder delete only when it failed after the watch's records
     /// committed (`deleteFailedAfterRecords`).
     func testPersistedGapDeleteRetriesOnFreshLaunch() throws {

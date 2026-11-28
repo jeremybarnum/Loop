@@ -22,49 +22,109 @@ extension PodLoanWatchController {
     func beginHandback(trigger: LoanControl.Trigger = .endTapped) {
         DispatchQueue.main.async {
             guard self.phase == .active, let pumpManager = self.pumpManager else { return }
-            guard !self.handbackRequested else { return }
-            // Nobody takes the pod while it is giving a bolus (transfer H): End again after it.
+            guard !self.handbackRequested, self.endWaitingForBolus == nil else { return }
+            self.endRefusedForSilence = nil
+            // Nobody takes the pod while it is giving a bolus (transfer H): a short automatic one is
+            // waited for; any other refuses the End, to be tapped again after it.
             if let bolus = self.bolusUnderWay(pumpManager) {
-                self.refuseEnd(bolus, at: "the tap")
+                if LoanControl.endWaits(for: bolus, automatic: self.bolusIsAutomatic(pumpManager), now: self.now()) {
+                    self.waitForBolusThenEnd(bolus, trigger: trigger)
+                } else {
+                    self.refuseEnd(bolus, at: "the tap")
+                }
                 return
             }
-            self.handbackRequested = true
-            self.handbackFailure = nil
-            self.handbackResendCount = 0
-            self.handbackSawUnreachable = false
-            self.handbackSawUrgentSendError = false
-            self.urgentSendWedged = false
+            self.startHandback(trigger: trigger)
+        }
+    }
 
-            // One budget for the give-up deadline and the pre-scheduled stuck alert.
-            let tappedAt = self.now()
-            self.handbackDeadline = tappedAt.addingTimeInterval(HandbackStuckAlert.interval)
-            self.handbackStartedAt = tappedAt
-            HandbackStuckAlert.arm()
-            SportLog.event("loan", "hand-back requested with \(self.journal.unackedEvents().count) record(s) to send; the watch doses until the phone answers")
-            // Rows 7, 8, 21, 26 and 27: the offer is the query; `LoanControl` decides what silence means.
-            self.handbackAckedAt = nil
-            self.sendHandbackOffer(recovered: false)
-            guard case .query(let wait, let onSilence, _) = LoanControl.decide(LoanControl.Situation(device: .watch, trigger: trigger)) else { return }
-            // A timer is safe here: it starts at the looper's End tap, with Loop in front, and a late
-            // firing re-checks whether the phone answered since the tap before refusing the End. It
-            // speaks only for its own End: one that was refused or answered meanwhile is over, and its
-            // wait must not judge the End tapped after it.
-            self.schedule(after: wait.seconds, label: "handback-answer") { [weak self] in
-                guard let self = self, self.phase == .active, self.handbackRequested,
-                      self.handbackStartedAt == tappedAt,
-                      self.handbackAckedAt.map({ $0 >= tappedAt }) != true else { return }
-                switch LoanControl.afterQuery(.silence, onSilence: onSilence) {
-                case .refuse:
-                    self.handbackTimedOut(unreachable: true)
-                case .tell(.podDeactivatedPhoneAway):
-                    self.handbackTimedOut(unreachable: true)
-                    // Queued: the phone ends Sport Mode when it hears (row 27).
-                    self.sendHoldsPodStatusReport(reason: "the pod is deactivated and the phone did not answer the End")
-                default:
-                    break
-                }
+    /// The End itself, with no bolus under way. Main queue.
+    private func startHandback(trigger: LoanControl.Trigger) {
+        self.handbackRequested = true
+        self.handbackFailure = nil
+        self.handbackResendCount = 0
+        self.handbackSawUnreachable = false
+        self.handbackSawUrgentSendError = false
+        self.urgentSendWedged = false
+
+        // One budget for the give-up deadline and the pre-scheduled stuck alert.
+        let tappedAt = self.now()
+        self.handbackDeadline = tappedAt.addingTimeInterval(HandbackStuckAlert.interval)
+        self.handbackStartedAt = tappedAt
+        HandbackStuckAlert.arm()
+        SportLog.event("loan", "hand-back requested with \(self.journal.unackedEvents().count) record(s) to send; the watch doses until the phone answers")
+        // Rows 7, 8, 21, 26 and 27: the offer is the query; `LoanControl` decides what silence means.
+        self.handbackAckedAt = nil
+        self.sendHandbackOffer(recovered: false)
+        guard case .query(let wait, let onSilence, _) = LoanControl.decide(LoanControl.Situation(device: .watch, trigger: trigger)) else { return }
+        // A timer is safe here: it starts at the looper's End tap, with Loop in front, and a late
+        // firing re-checks whether the phone answered since the tap before refusing the End. It
+        // speaks only for its own End: one that was refused or answered meanwhile is over, and its
+        // wait must not judge the End tapped after it.
+        self.schedule(after: wait.seconds, label: "handback-answer") { [weak self] in
+            guard let self = self, self.phase == .active, self.handbackRequested,
+                  self.handbackStartedAt == tappedAt,
+                  self.handbackAckedAt.map({ $0 >= tappedAt }) != true else { return }
+            switch LoanControl.afterQuery(.silence, onSilence: onSilence) {
+            case .refuse:
+                self.handbackTimedOut(unreachable: true)
+                if let epoch = self.epoch { self.endRefusedForSilence = (epoch, tappedAt) }
+            case .tell(.podDeactivatedPhoneAway):
+                self.handbackTimedOut(unreachable: true)
+                // Queued: the phone ends Sport Mode when it hears (row 27).
+                self.sendHoldsPodStatusReport(reason: "the pod is deactivated and the phone did not answer the End")
+            default:
+                break
             }
         }
+    }
+
+    /// Whether the bolus under way is the loop's own: no manual bolus sent from the watch, and the pod's
+    /// dose, once it has one, not marked manual.
+    func bolusIsAutomatic(_ pumpManager: PumpManager) -> Bool {
+        guard loopManager.manualBolusStartedAt == nil else { return false }
+        if case .inProgress(let dose) = pumpManager.status.bolusState { return dose.automatic != false }
+        return true
+    }
+
+    /// The End waits for an automatic bolus, then goes ahead. The watch app is in front after the tap, so
+    /// the checks can be timed: when the pod's clock ends the bolus, on the pod's own status changes, and
+    /// at the wait's limit, where a bolus still under way refuses the End as before.
+    private func waitForBolusThenEnd(_ bolus: LoanControl.BolusUnderWay, trigger: LoanControl.Trigger) {
+        endWaitingForBolus = (now(), trigger)
+        SportLog.event("loan", "End waits for the automatic bolus under way, then goes ahead")
+        notifyUI()
+        scheduleBolusCheck(bolus)
+        schedule(after: LoanControl.endWaitsForAutomaticBolus, label: "end-after-bolus") { [weak self] in
+            self?.checkEndWaitingForBolus(atLimit: true)
+        }
+    }
+
+    private func scheduleBolusCheck(_ bolus: LoanControl.BolusUnderWay) {
+        // One still being sent has no end yet: the pod taking it is a status change.
+        guard let endsAt = bolus.endsAt else { return }
+        schedule(after: max(0, endsAt.timeIntervalSince(now())) + 0.5, label: "end-after-bolus") { [weak self] in
+            self?.checkEndWaitingForBolus()
+        }
+    }
+
+    /// Main queue.
+    func checkEndWaitingForBolus(atLimit: Bool = false) {
+        guard let waiting = endWaitingForBolus else { return }
+        guard phase == .active, let pumpManager = pumpManager else {
+            endWaitingForBolus = nil
+            return
+        }
+        if let bolus = bolusUnderWay(pumpManager) {
+            guard atLimit else { return scheduleBolusCheck(bolus) }
+            endWaitingForBolus = nil
+            refuseEnd(bolus, at: "the end of the wait")
+            return
+        }
+        endWaitingForBolus = nil
+        SportLog.event("loan", String(format: "the bolus finished %.1f s after the End was tapped; the End goes ahead",
+                                      now().timeIntervalSince(waiting.since)))
+        startHandback(trigger: waiting.trigger)
     }
 
     /// The watch's bolus as the bolus rule sees it: the pump's own state, or a manual bolus the
@@ -95,7 +155,7 @@ extension PodLoanWatchController {
     /// Nobody starts a bolus while the pod is being handed back: with an End waiting, a bolus asked
     /// for on the watch is refused, and this says why. Nil when a bolus may go.
     func bolusRefusalWhileEnding() -> String? {
-        guard handbackRequested || phase == .handingBack else { return nil }
+        guard handbackRequested || endWaitingForBolus != nil || phase == .handingBack else { return nil }
         return NSLocalizedString("Sport Mode is ending. Bolus on the iPhone once it has the pod.", comment: "Watch: a bolus refused while an End is waiting for the phone")
     }
 
@@ -113,8 +173,9 @@ extension PodLoanWatchController {
     /// Cancellable until `finalizeHandback`.
     func cancelHandback() {
         DispatchQueue.main.async {
-            guard self.phase == .active, self.handbackRequested else { return }
+            guard self.phase == .active, self.handbackRequested || self.endWaitingForBolus != nil else { return }
             self.handbackRequested = false
+            self.endWaitingForBolus = nil
             self.resendWorkItem?.cancel()
             self.handbackDeadline = nil
             self.handbackStartedAt = nil
@@ -353,6 +414,16 @@ extension PodLoanWatchController {
             SportLog.event("loan", "the phone acknowledged up to \(ack.committedCursor), but this loan has \(journal.lastEventSeq) record(s): counted as \(journal.lastEventSeq)")
         }
         journal.applyAck(committedCursor: ack.committedCursor)
+        // An End refused for silence, answered late: the phone is there after all, so the End goes ahead.
+        if let refused = endRefusedForSilence, !handbackRequested, phase == .active {
+            endRefusedForSilence = nil
+            let late = now().timeIntervalSince(refused.tappedAt)
+            if refused.epoch == current, late <= LoanControl.lateAnswerStartsTheEnd {
+                SportLog.event("loan", String(format: "the phone answered %.1f s after the End was tapped, after the watch gave up; the End goes ahead", late))
+                beginHandback()
+                return
+            }
+        }
         guard journal.unackedEvents().isEmpty else { return }
 
         // Fully drained while the user is still waiting: that is what triggers finalize.
