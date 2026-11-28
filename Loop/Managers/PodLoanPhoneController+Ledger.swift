@@ -266,6 +266,7 @@ extension PodLoanPhoneController {
                 residual, Self.warnNegativeResidual))
 
             deps.issueUrgentNotice(Self.overstatedTitle, Self.overstatedBody(-residual))
+            noteOverstated(units: -residual, window: window, epoch: epoch)
         } else {
             handbackDiag(epoch, String(format:
                 "insulin after take-back is clean: residual %+.3f U within ±%.2f U", residual, Self.unexplainedInsulinBand))
@@ -291,6 +292,7 @@ extension PodLoanPhoneController {
             handbackDiag(epoch, String(format:
                 "insulin warning: this phone's records claim %.3f U more than the pod delivered over the last %.0f min", -residual, gapMinutes))
             deps.issueUrgentNotice(Self.overstatedTitle, Self.overstatedBody(-residual))
+            noteOverstated(units: -residual, window: window, epoch: epoch)
             completion()
         } else {
             completion()
@@ -299,9 +301,39 @@ extension PodLoanPhoneController {
 
     static let estimatedTitle = NSLocalizedString("Insulin Estimated After Sport Mode", comment: "Phone notice title: insulin the watch's missing records would explain is booked as an estimate")
     static let overstatedTitle = NSLocalizedString("Insulin On Board May Be Overstated", comment: "Phone notice title: the records claim more insulin than the pod delivered")
+    static let recordsRecoveredTitle = NSLocalizedString("Watch Records Recovered", comment: "Phone notice title: the watch's records arrived and replaced an estimate")
 
     static func overstatedBody(_ units: Double) -> String {
         String(format: NSLocalizedString("Insulin on board may be %.2f U high until the watch's records arrive. Loop will dose cautiously meanwhile.", comment: "Phone notice body: insulin on board may be high until the watch's records arrive (1: units)"), units)
+    }
+
+    // MARK: - Insulin on board overstated
+
+    /// Insulin on board is high until the watch's records over `window` arrive (the schedule stands in for
+    /// them): remembered, so their arrival can say it is exact again. The last record this phone holds,
+    /// saved or not, marks what is already counted.
+    func noteOverstated(units: Double, window: DateInterval, epoch: Int) {
+        let held = max(committedCursor, staged.values.map(\.seq).max() ?? 0)
+        let verdict = PodLoanPhoneState.Ledger.Overstated(units: units, at: deps.now(), window: window, epoch: epoch, cursor: held)
+        updateState { $0.ledger.overstated = verdict }
+    }
+
+    /// After records are saved: records past those held at the verdict, for its loan, complete the
+    /// window (the watch sends everything it holds in one offer), so insulin on board is exact again and
+    /// the looper is told, on the normal channel. Past insulin's action time the verdict no longer
+    /// matters and is dropped silently.
+    func settleOverstated(epoch: Int) {
+        guard let verdict = persisted.ledger.overstated else { return }
+        if deps.now().timeIntervalSince(verdict.at) >= InsulinMath.defaultInsulinActivityDuration {
+            updateState { $0.ledger.overstated = nil }
+            return
+        }
+        guard epoch == verdict.epoch, committedCursor > verdict.cursor else { return }
+        updateState { $0.ledger.overstated = nil }
+        handbackDiag(epoch, String(format: "insulin on board exact again: the watch's records up to %d replaced the schedule's %.2f U",
+                                   committedCursor, verdict.units))
+        deps.issueNotice(Self.recordsRecoveredTitle, NSLocalizedString("The watch's records arrived. Insulin on board is exact again.",
+                                                                      comment: "Notice: the watch's late records corrected an overstated insulin on board"))
     }
 
     // MARK: - Estimates
@@ -368,7 +400,7 @@ extension PodLoanPhoneController {
                             booking.units, doses.count, bolusUnits, rateCount, carbs))
 
                         self.rearmPlaceholderReminders()
-                        self.deps.issueNotice(NSLocalizedString("Watch Records Recovered", comment: "Phone notice title: the watch's records arrived and replaced an estimate"), carbs > 0
+                        self.deps.issueNotice(Self.recordsRecoveredTitle, carbs > 0
                             ? String(format: NSLocalizedString("The watch's records replaced the estimated %.2f U. Loop now doses with the watch's insulin and carbs.", comment: "Phone notice body: the watch's records, with carbs, replaced an estimate (1: units)"), booking.units)
                             : String(format: NSLocalizedString("The watch's records replaced the estimated %.2f U. Insulin on board is exact again.", comment: "Phone notice body: the watch's records replaced an estimate (1: units)"), booking.units))
                     } else {

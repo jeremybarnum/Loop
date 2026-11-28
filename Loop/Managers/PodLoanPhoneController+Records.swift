@@ -411,6 +411,7 @@ extension PodLoanPhoneController {
                 }
 
                 self.retireEstimates(coveredBy: sane, carbs: isStale ? 0 : outcome.carbs.count, epoch: offer.epoch)
+                if !isStale { self.settleOverstated(epoch: offer.epoch) }
                 self.drainAfterCommit()
             }
         }
