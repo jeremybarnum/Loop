@@ -199,23 +199,12 @@ extension PodLoanWatchController: DeviceManagerDelegate {
 }
 
 extension LoanGrant {
-    /// A dormant grant is issued expired; a seize re-stamps the epoch and lease.
+    /// A dormant grant is issued expired; a seize re-stamps the epoch and lease. Everything else is the
+    /// stored grant as the phone sent it: a copy, so a field added to the grant is never left behind.
     func withEpoch(_ newEpoch: Int, leaseUntil: Date) -> LoanGrant {
-        LoanGrant(epoch: newEpoch, expiresAt: leaseUntil, pumpConfiguration: pumpConfiguration,
-                  therapySettingsRaw: therapySettingsRaw,
-                  settingsTimeZoneID: settingsTimeZoneID, doseHistory: doseHistory,
-                  integralRetrospectiveCorrectionEnabled: integralRetrospectiveCorrectionEnabled,
-                  glucoseBasedApplicationFactorEnabled: glucoseBasedApplicationFactorEnabled,
-                  guardAndRunwayEnabled: guardAndRunwayEnabled,
-                  volatilityBaseline: volatilityBaseline,
-                  slowRetrospectiveCorrectionEnabled: slowRetrospectiveCorrectionEnabled,
-                  phoneClosedLoopEnabled: phoneClosedLoopEnabled, carbHistory: carbHistory,
-                  glucoseHistory: glucoseHistory,
-                  activeOverrideRaw: activeOverrideRaw,
-                  therapySettingsSupplementRaw: therapySettingsSupplementRaw,
-                  lastLoopCompleted: lastLoopCompleted,
-                  glucoseAlertSettings: glucoseAlertSettings,
-                  overrideHistoryRaw: overrideHistoryRaw,
-                  settingsHistory: settingsHistory)
+        var grant = self
+        grant.epoch = newEpoch
+        grant.expiresAt = leaseUntil
+        return grant
     }
 }

@@ -141,10 +141,11 @@ public struct DormantGrant: Codable, Equatable {
 
 /// The pump's configuration, the therapy settings, and enough history for the first cycle.
 public struct LoanGrant: Codable, Equatable {
-    /// Increases with every grant; both sides refuse any other epoch.
-    public let epoch: Int
+    /// Increases with every grant; both sides refuse any other epoch. Settable only so an offline start can
+    /// re-stamp a stored grant (`withEpoch`) without rebuilding it field by field.
+    public var epoch: Int
 
-    public let expiresAt: Date
+    public var expiresAt: Date
 
     /// The pump's `SharedDeviceConfiguration`, as a binary property list.
     public let pumpConfiguration: Data

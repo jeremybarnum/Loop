@@ -138,6 +138,20 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertEqual(rebuilt.settingsTimeZoneID, dormant.grant.settingsTimeZoneID)
     }
 
+    /// An offline start keeps every field of the stored grant except the epoch and the lease: the copy is
+    /// the grant itself, so a field added later cannot be left behind.
+    func testRebuildKeepsEveryFieldButTheEpochAndLease() throws {
+        let grant = fixtureDormant(issuedAt: Date().addingTimeInterval(-600), epoch: 3).grant
+
+        let rebuilt = grant.withEpoch(9, leaseUntil: Date().addingTimeInterval(PodLoanWatchController.seizeActivationLease))
+        XCTAssertEqual(rebuilt.epoch, 9)
+
+        var restored = rebuilt
+        restored.epoch = grant.epoch
+        restored.expiresAt = grant.expiresAt
+        XCTAssertEqual(restored, grant, "nothing but the epoch and the lease changes")
+    }
+
     // MARK: - The entry gate
 
     /// A seized loan's phase and reunion token are saved together: a kill right after the phase
