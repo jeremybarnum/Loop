@@ -154,6 +154,10 @@ extension PodLoanWatchController: PumpManagerStatusObserver {
         // As stock `DeviceDataManager.pumpManager(_:didUpdate:oldStatus:)`.
         loopManager.doseStore.device = status.device
         loopManager.bolusStateDidChange(to: status.bolusState, from: oldStatus.bolusState, pumpManager: pumpManager)
+        // An End waiting for the bolus: the pod taking it, or its end, is the moment to look again.
+        if endWaitingForBolus != nil, status.bolusState != oldStatus.bolusState {
+            DispatchQueue.main.async { self.checkEndWaitingForBolus() }
+        }
     }
 }
 

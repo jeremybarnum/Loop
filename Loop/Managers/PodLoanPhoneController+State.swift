@@ -73,6 +73,18 @@ struct PodLoanPhoneState: RawRepresentable {
             var deleteFailed = false
         }
         var bookings: [Booking] = []
+
+        /// A verdict that insulin on board is `units` high because the watch's records over `window` are
+        /// missing (the schedule stands in for them). Cleared when records past `cursor`, the last this
+        /// phone held at the verdict, land for loan `epoch`.
+        struct Overstated: Equatable {
+            let units: Double
+            let at: Date
+            let window: DateInterval
+            let epoch: Int
+            let cursor: Int
+        }
+        var overstated: Overstated?
     }
     var ledger = Ledger()
 
@@ -98,6 +110,7 @@ struct PodLoanPhoneState: RawRepresentable {
                 ledger.last = .init(units: units, at: at)
             }
             ledger.bookings = (l["bookings"] as? [[String: Any]] ?? []).compactMap(Self.booking(from:))
+            ledger.overstated = (l["overstated"] as? [String: Any]).flatMap(Self.overstated(from:))
         }
     }
 
@@ -122,6 +135,9 @@ struct PodLoanPhoneState: RawRepresentable {
         }]
         l["lastUnits"] = ledger.last?.units
         l["lastAt"] = ledger.last?.at
+        l["overstated"] = ledger.overstated.map { o -> [String: Any] in
+            ["units": o.units, "at": o.at, "from": o.window.start, "to": o.window.end, "epoch": o.epoch, "cursor": o.cursor]
+        }
         raw["ledger"] = l
         return raw
     }
@@ -131,6 +147,12 @@ struct PodLoanPhoneState: RawRepresentable {
         guard let e = d["epoch"] as? Int, let atStart = d["atStart"] as? Double, let from = d["from"] as? Date,
               let expected = d["expected"] as? Double, let minutes = d["loanMinutes"] as? Double else { return nil }
         return ForceAudit(epoch: e, deliveredAtStart: atStart, from: from, expected: expected, loanMinutes: minutes)
+    }
+
+    static func overstated(from d: [String: Any]) -> Ledger.Overstated? {
+        guard let units = d["units"] as? Double, let at = d["at"] as? Date, let from = d["from"] as? Date,
+              let to = d["to"] as? Date, to >= from, let epoch = d["epoch"] as? Int, let cursor = d["cursor"] as? Int else { return nil }
+        return Ledger.Overstated(units: units, at: at, window: DateInterval(start: from, end: to), epoch: epoch, cursor: cursor)
     }
 
     static func booking(from d: [String: Any]) -> Ledger.Booking? {

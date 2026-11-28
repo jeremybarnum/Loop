@@ -436,6 +436,24 @@ public enum LoanControl {
         public init(endsAt: Date?) { self.endsAt = endsAt }
     }
 
+    /// An End tapped during an automatic bolus waits this long at most for it to finish, then goes ahead:
+    /// an automatic bolus is small, seconds on the pod, and refusing the tap only made the looper tap again.
+    /// A manual bolus, or a longer one, refuses the End as before.
+    public static let endWaitsForAutomaticBolus: TimeInterval = 15
+
+    /// Whether an End tapped now waits for this bolus instead of being refused. One still being sent has no
+    /// end time yet; the wait's limit bounds it.
+    public static func endWaits(for bolus: BolusUnderWay, automatic: Bool, now: Date) -> Bool {
+        guard automatic else { return false }
+        guard let endsAt = bolus.endsAt else { return true }
+        return endsAt.timeIntervalSince(now) <= endWaitsForAutomaticBolus
+    }
+
+    /// An End refused because the phone did not answer within `Wait.onScreen`, whose answer then arrives
+    /// within this long of the tap, goes ahead on its own: the phone was there, only slow. Twice the
+    /// slowest one-way delivery seen, as `Wait.inBackground`.
+    public static let lateAnswerStartsTheEnd: TimeInterval = Wait.inBackground.seconds
+
     /// What the looper is told when the pod driver keeps the pod at a Start or an End because a command
     /// to it is unconfirmed (it refuses `releaseControl()`).
     public static let unconfirmedCommandRefusal = NSLocalizedString("The pod hasn't confirmed the last command yet. Try again in a minute.", comment: "Start or End refused: the pod driver keeps the pod while a command to it is unconfirmed")

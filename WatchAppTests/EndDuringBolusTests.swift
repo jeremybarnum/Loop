@@ -45,14 +45,14 @@ final class EndDuringBolusTests: XCTestCase {
                                       stateDirectory: dir)
     }
 
-    /// A DASH manager whose pod is giving a 2 U bolus started just now, or no bolus.
-    private func makePumpMidBolus(_ bolusing: Bool = true) throws -> OmniPumpManager {
+    /// A DASH manager whose pod is giving a bolus (2 U, manual) started just now, or no bolus.
+    private func makePumpMidBolus(_ bolusing: Bool = true, units: Double = 2.0, automatic: Bool = false) throws -> OmniPumpManager {
         var podState = PodState(address: 0x1f0b3557, firmwareVersion: "2.7.0", iFirmwareVersion: "2.7.0",
                                 lotNo: 1, lotSeq: 1, insulinType: .novolog, podType: dashType)
         podState.setupProgress = .completed
         if bolusing {
-            podState.unfinalizedBolus = UnfinalizedDose(doseId: nil, bolusAmount: 2.0, startTime: Date(),
-                                                        scheduledCertainty: .certain, insulinType: .novolog)
+            podState.unfinalizedBolus = UnfinalizedDose(doseId: nil, bolusAmount: units, startTime: Date(),
+                                                        scheduledCertainty: .certain, insulinType: .novolog, automatic: automatic)
         }
         let raw: [String: Any] = ["basalSchedule": ["entries": [["rate": 1.0, "startTime": 0.0]]],
                                   "controllerId": UInt32(0x1234_5678), "podId": UInt32(0x1234_5679),
@@ -89,6 +89,116 @@ final class EndDuringBolusTests: XCTestCase {
         let snapshot2 = await c.fencedSnapshot()
         XCTAssertTrue(snapshot2.handbackFailureText?.contains("bolus") == true,
                       "on screen: why, and when to try again")
+    }
+
+    /// A loan whose pod is giving an automatic bolus of `units`, the End about to be tapped. Timers are
+    /// held, not run.
+    private func loanMidAutomaticBolus(_ c: PodLoanWatchController, units: Double) async throws -> OmniPumpManager {
+        let pump = try makePumpMidBolus(units: units, automatic: true)
+        await c.onMain {
+            pump.pumpManagerDelegate = c
+            c.pumpManager = pump
+            c.loopManager.pumpManager = pump
+            c.phase = .active
+            c.epoch = 7
+            c.scheduler = { _, _, _ in }
+        }
+        return pump
+    }
+
+    private func finishBolus(_ pump: OmniPumpManager) {
+        pump.setState { state in
+            var pod = state.podState
+            pod?.unfinalizedBolus = nil
+            state.updatePodStateFromPodComms(pod)
+        }
+    }
+
+    private func offers(_ sent: [[String: Any]]) -> Int {
+        sent.filter { if case .handbackOffer? = try? LoanMessage.decode(fromTransport: $0) { return true } else { return false } }.count
+    }
+
+    /// End during a short automatic bolus: not refused. The End waits ("ending…", new boluses refused),
+    /// and goes ahead once the bolus is over.
+    func testEndDuringAShortAutomaticBolusWaitsThenGoesAhead() async throws {
+        let c = await makeController()
+        let pump = try await loanMidAutomaticBolus(c, units: 0.05)
+        var sent: [[String: Any]] = []
+        c.send = { sent.append($0) }
+        var refusalsFelt = 0
+        c.playRefusal = { refusalsFelt += 1 }
+
+        c.beginHandback()
+        await c.onMain { }
+        XCTAssertEqual(refusalsFelt, 0, "not refused")
+        XCTAssertEqual(offers(sent), 0, "no offer while the bolus is given")
+        let waiting = await c.fencedSnapshot()
+        XCTAssertTrue(waiting.handbackPending, "the screen says ending")
+        XCTAssertNotNil(c.bolusRefusalWhileEnding(), "no new bolus while the End waits")
+
+        finishBolus(pump)
+        await c.onMain { c.checkEndWaitingForBolus() }
+        XCTAssertEqual(offers(sent), 1, "the End goes ahead")
+        XCTAssertTrue(c.handbackRequested)
+        XCTAssertEqual(refusalsFelt, 0)
+    }
+
+    /// An automatic bolus still being given at the wait's limit refuses the End as before.
+    func testAnAutomaticBolusStillGoingAtTheLimitRefusesTheEnd() async throws {
+        let c = await makeController()
+        _ = try await loanMidAutomaticBolus(c, units: 0.3)   // 12 s on the pod
+        var sent: [[String: Any]] = []
+        c.send = { sent.append($0) }
+        var refusalsFelt = 0
+        c.playRefusal = { refusalsFelt += 1 }
+
+        c.beginHandback()
+        await c.onMain { }
+        await c.onMain { c.checkEndWaitingForBolus(atLimit: true) }
+
+        XCTAssertEqual(refusalsFelt, 1)
+        XCTAssertEqual(offers(sent), 0)
+        let snapshot = await c.fencedSnapshot()
+        XCTAssertFalse(snapshot.handbackPending)
+        XCTAssertTrue(snapshot.handbackFailureText?.contains("bolus") == true)
+        XCTAssertEqual(c.phase, .active, "the loan continues")
+    }
+
+    /// An automatic bolus that ends beyond the wait's limit refuses the End at the tap.
+    func testALongAutomaticBolusRefusesTheEndAtOnce() async throws {
+        let c = await makeController()
+        _ = try await loanMidAutomaticBolus(c, units: 1.0)   // 40 s on the pod
+        var sent: [[String: Any]] = []
+        c.send = { sent.append($0) }
+        var refusalsFelt = 0
+        c.playRefusal = { refusalsFelt += 1 }
+
+        c.beginHandback()
+        await c.onMain { }
+
+        XCTAssertEqual(refusalsFelt, 1)
+        XCTAssertEqual(offers(sent), 0)
+        let snapshot = await c.fencedSnapshot()
+        XCTAssertFalse(snapshot.handbackPending)
+    }
+
+    /// Cancel while the End waits for the bolus: nothing goes when the bolus ends.
+    func testAnEndWaitingForTheBolusCanBeCancelled() async throws {
+        let c = await makeController()
+        let pump = try await loanMidAutomaticBolus(c, units: 0.05)
+        var sent: [[String: Any]] = []
+        c.send = { sent.append($0) }
+
+        c.beginHandback()
+        await c.onMain { }
+        c.cancelHandback()
+        await c.onMain { }
+        finishBolus(pump)
+        await c.onMain { c.checkEndWaitingForBolus() }
+
+        XCTAssertEqual(offers(sent), 0)
+        let snapshot = await c.fencedSnapshot()
+        XCTAssertFalse(snapshot.handbackPending)
     }
 
     /// A loan with no bolus on the pod, the End about to be tapped.
