@@ -318,6 +318,60 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertNil(snapshot4.handbackFailureText, "the phone answered: not refused")
     }
 
+    /// The phone's answer lands after the watch gave up on it, within the late-answer window: the End
+    /// starts again on its own, without a second tap.
+    func testAnAnswerJustAfterTheWatchGaveUpStartsTheEndAgain() async throws {
+        let c = await relaunch(phase: .active, savedState: readablePumpState)
+        var answerWait: DispatchWorkItem?
+        c.scheduler = { _, label, work in if label == "handback-answer" { answerWait = work } }
+        var offers = 0
+        c.send = { dict in if case .handbackOffer? = try? LoanMessage.decode(fromTransport: dict) { offers += 1 } }
+        var clock = Date()
+        c.now = { clock }
+
+        c.beginHandback()
+        await c.onMain { }
+        clock = clock.addingTimeInterval(10)
+        await c.onMain { answerWait?.perform() }
+        let refused = await c.fencedSnapshot()
+        XCTAssertFalse(refused.handbackPending, "refused at the wait")
+
+        clock = clock.addingTimeInterval(3.5)   // 13.5 s after the tap
+        c.handleIncoming(userInfo: try LoanMessage.handbackAck(HandbackAck(epoch: 7, committedCursor: 0, released: false)).transportDictionary())
+        await c.onMain { }
+        await c.onMain { }
+
+        XCTAssertEqual(offers, 2, "a fresh offer: the End goes ahead")
+        let again = await c.fencedSnapshot()
+        XCTAssertTrue(again.handbackPending)
+        XCTAssertNil(again.handbackFailureText)
+    }
+
+    /// An answer long after the tap leaves the End refused: the looper has moved on.
+    func testAnAnswerLongAfterTheTapLeavesTheEndRefused() async throws {
+        let c = await relaunch(phase: .active, savedState: readablePumpState)
+        var answerWait: DispatchWorkItem?
+        c.scheduler = { _, label, work in if label == "handback-answer" { answerWait = work } }
+        var offers = 0
+        c.send = { dict in if case .handbackOffer? = try? LoanMessage.decode(fromTransport: dict) { offers += 1 } }
+        var clock = Date()
+        c.now = { clock }
+
+        c.beginHandback()
+        await c.onMain { }
+        clock = clock.addingTimeInterval(10)
+        await c.onMain { answerWait?.perform() }
+
+        clock = clock.addingTimeInterval(LoanControl.lateAnswerStartsTheEnd)
+        c.handleIncoming(userInfo: try LoanMessage.handbackAck(HandbackAck(epoch: 7, committedCursor: 0, released: false)).transportDictionary())
+        await c.onMain { }
+        await c.onMain { }
+
+        XCTAssertEqual(offers, 1)
+        let snapshot = await c.fencedSnapshot()
+        XCTAssertFalse(snapshot.handbackPending)
+    }
+
     func testEveryHandbackOfferGoesWhateverReachabilitySays() async {
         // Reachability chooses the fast path only: resends go whether or not the flag says the
         // phone's app can take a live message.
