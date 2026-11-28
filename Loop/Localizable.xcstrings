@@ -37448,6 +37448,9 @@
     "The watch is still looping. Try again." : {
       "comment" : "Phone notice body when a take-back found the pod out of reach"
     },
+    "The watch's records arrived. Insulin on board is exact again." : {
+      "comment" : "Notice: the watch's late records corrected an overstated insulin on board"
+    },
     "The watch's records replaced the estimated %.2f U. Insulin on board is exact again." : {
       "comment" : "Phone notice body: the watch's records replaced an estimate (1: units)"
     },

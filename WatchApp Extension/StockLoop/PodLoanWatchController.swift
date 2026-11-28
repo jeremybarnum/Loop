@@ -213,6 +213,14 @@ final class PodLoanWatchController {
     /// End asked for, still dosing, still cancellable.
     var handbackRequested = false
 
+    /// An End waiting for an automatic bolus to finish (`LoanControl.endWaits`): when it was tapped, and
+    /// what started it. Still cancellable; no offer has gone yet.
+    var endWaitingForBolus: (since: Date, trigger: LoanControl.Trigger)?
+
+    /// An End refused because the phone did not answer in time: its loan and tap. An answer within
+    /// `LoanControl.lateAnswerStartsTheEnd` of the tap starts the End again.
+    var endRefusedForSilence: (epoch: Int, tappedAt: Date)?
+
     /// Guards against a duplicate interim ack closing the loan early.
     var finalOfferSent = false
     /// What the watch confirmed it uploaded before releasing, per remote service; the released
