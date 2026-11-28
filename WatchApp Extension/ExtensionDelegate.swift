@@ -112,8 +112,6 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         WatchLogFile.append("[app] launched, pid \(ProcessInfo.processInfo.processIdentifier)")
         PowerLog.start()   // Testing: a power line every 10 seconds while the app runs
         MainThreadLog.start()   // Testing: a line when the main thread is held half a second or more
-        AddressHold.logLine = WatchLogFile.append   // Testing: the workaround's lines go to the watch's log file
-        AddressHold.shared.start()
         podLoanDidFinishLaunching()
         UNUserNotificationCenter.current().delegate = self
         if #available(watchOSApplicationExtension 5.0, *) {
@@ -171,7 +169,6 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         }
         WatchLogFile.append("[app] woken: " + backgroundTasks.map { String(describing: type(of: $0)) }.sorted().joined(separator: ", "))
         PowerLog.note("woken")   // Testing
-        AddressHold.shared.appWoken(refresh: backgroundTasks.contains { $0 is WKApplicationRefreshBackgroundTask })
         loopManager.requestGlucoseBackfillIfNecessary()
         finish(Array(backgroundTasks))
     }
@@ -181,13 +178,8 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     func finish(_ backgroundTasks: [WKRefreshBackgroundTask]) {
         for task in backgroundTasks {
             switch task {
-            case let task as WKApplicationRefreshBackgroundTask:
+            case is WKApplicationRefreshBackgroundTask:
                 log.default("Processing WKApplicationRefreshBackgroundTask")
-                // Keep the run time while the address-hold scan restart's 1 s scan runs (AddressHold.swift).
-                if Self.refreshTaskHold > 0 {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.refreshTaskHold) { task.setTaskCompletedWithSnapshot(false) }
-                    continue
-                }
             case let task as WKBluetoothAlertRefreshBackgroundTask:
                 // A connect the system held for the CGM relaunched or woke the app: keep it running
                 // through the reading rather than completing the task at once.
@@ -224,9 +216,6 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     }
 
     private var pendingConnectivityTasks: [WKWatchConnectivityRefreshBackgroundTask] = []
-
-    /// How long a refresh task is held before it is finished (AddressHold.swift); 0 in unit tests.
-    static var refreshTaskHold: TimeInterval = 2
 
     /// The one Bluetooth wake task held at a time, and every task completed, kept so a task handed over
     /// again (WatchKit does, even in a later wake) is never completed twice, which throws.
