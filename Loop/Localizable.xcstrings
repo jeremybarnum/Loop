@@ -23963,6 +23963,9 @@
     "iOS Permissions and Mute All App Sounds" : {
       "comment" : "Alert Permissions descriptive text"
     },
+    "iPhone Can't Reach the Pod" : {
+      "comment" : "Phone notice title: the phone has the pod again after Sport Mode and has not reached it for five minutes"
+    },
     "ISF" : {
 
     },
@@ -28429,6 +28432,9 @@
           }
         }
       }
+    },
+    "Nobody is looping. Start Sport Mode again to resume looping." : {
+      "comment" : "Phone notice body: the phone has the pod again after Sport Mode and has not reached it for five minutes"
     },
     "None" : {
       "comment" : "Indicates no favorite food is selected",
